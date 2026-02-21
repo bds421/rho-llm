@@ -32,7 +32,7 @@ func (l *LoggingClient) Complete(ctx context.Context, req Request) (*Response, e
 		model = l.inner.Model()
 	}
 
-	l.logger.Debug("complete request",
+	l.logger.Info("complete request",
 		"provider", l.inner.Provider(), "model", model,
 		"messages", len(req.Messages), "tools", len(req.Tools), "max_tokens", req.MaxTokens)
 
@@ -48,7 +48,7 @@ func (l *LoggingClient) Complete(ctx context.Context, req Request) (*Response, e
 	}
 
 	cost := EstimateCost(model, resp.InputTokens, resp.OutputTokens)
-	l.logger.Debug("complete done",
+	l.logger.Info("complete done",
 		"provider", l.inner.Provider(), "model", model,
 		"elapsed", elapsed.Round(time.Millisecond),
 		"tokens_in", resp.InputTokens, "tokens_out", resp.OutputTokens,
@@ -65,7 +65,7 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			model = l.inner.Model()
 		}
 
-		l.logger.Debug("stream request",
+		l.logger.Info("stream request",
 			"provider", l.inner.Provider(), "model", model,
 			"messages", len(req.Messages), "tools", len(req.Tools), "max_tokens", req.MaxTokens)
 
@@ -84,7 +84,7 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				return
 			}
 			cost := EstimateCost(model, lastInputTokens, lastOutputTokens)
-			l.logger.Debug("stream done",
+			l.logger.Info("stream done",
 				"provider", l.inner.Provider(), "model", model,
 				"elapsed", elapsed.Round(time.Millisecond),
 				"chunks", chunks, "tokens_in", lastInputTokens, "tokens_out", lastOutputTokens,

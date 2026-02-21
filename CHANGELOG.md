@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`GetDefaultModel("openai")` returned `claude-sonnet-4-6`** — No `"openai"` entry in the `defaultModels` map caused the function to fall through to the hardcoded Anthropic fallback. Now returns `gpt-5.2`.
 
+- **`LogRequests: true` produced no visible output** — `LoggingClient` logged request/response metadata at `slog.Debug` level, which is suppressed by the default `slog.Info` threshold. Users who explicitly opted in via `LogRequests: true` saw only the pool creation `Info` line, not the actual per-request metadata (provider, model, tokens, cost, elapsed). Changed success-path logs from `Debug` to `Info`.
+
 ## [0.1.6] - 2026-02-21
 
 ### Added
