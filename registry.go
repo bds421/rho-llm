@@ -36,9 +36,9 @@ var modelRegistry = map[string]ModelInfo{
 	"claude-3-haiku-20240307":    {ID: "claude-3-haiku-20240307", Provider: "anthropic", MaxTokens: 4096, ContextWindow: 200000, InputPricePer1M: 0.25, OutputPricePer1M: 1.25, SupportsThinking: false, Label: "Haiku 3 (legacy)"},
 
 	// xAI / Grok — from GET https://api.x.ai/v1/models (2026-02-19)
-	"grok-4-1-fast-reasoning":     {ID: "grok-4-1-fast-reasoning", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 4.1 R"},
+	"grok-4-1-fast-reasoning":     {ID: "grok-4-1-fast-reasoning", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Thinking: true, Label: "Grok 4.1 R"},
 	"grok-4-1-fast-non-reasoning": {ID: "grok-4-1-fast-non-reasoning", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 4.1"},
-	"grok-4-fast-reasoning":       {ID: "grok-4-fast-reasoning", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 4 R"},
+	"grok-4-fast-reasoning":       {ID: "grok-4-fast-reasoning", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Thinking: true, Label: "Grok 4 R"},
 	"grok-4-fast-non-reasoning":   {ID: "grok-4-fast-non-reasoning", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 4"},
 	"grok-4-0709":                 {ID: "grok-4-0709", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 4 (Jul)"},
 	"grok-code-fast-1":            {ID: "grok-code-fast-1", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok Code"},

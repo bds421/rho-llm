@@ -779,6 +779,42 @@ func TestModelInfoContextWindow(t *testing.T) {
 	}
 }
 
+// TestModelInfoThinkingFlags verifies reasoning flags are correctly set in the registry.
+func TestModelInfoThinkingFlags(t *testing.T) {
+	// 1. API-controlled (SupportsThinking)
+	apiControlled := []string{
+		"claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5",
+	}
+	for _, model := range apiControlled {
+		info, ok := llm.GetModelInfo(model)
+		if !ok || !info.SupportsThinking || info.Thinking {
+			t.Errorf("Model %s should support API-controlled thinking", model)
+		}
+	}
+
+	// 2. Intrinsic reasoning (Thinking)
+	intrinsic := []string{
+		"grok-4-1-fast-reasoning", "grok-4-fast-reasoning",
+	}
+	for _, model := range intrinsic {
+		info, ok := llm.GetModelInfo(model)
+		if !ok || !info.Thinking || info.SupportsThinking {
+			t.Errorf("Model %s should have intrinsic reasoning", model)
+		}
+	}
+
+	// 3. No reasoning
+	none := []string{
+		"gemini-2.5-flash", "claude-haiku-4-5-20251001", "grok-3-mini",
+	}
+	for _, model := range none {
+		info, ok := llm.GetModelInfo(model)
+		if !ok || info.Thinking || info.SupportsThinking {
+			t.Errorf("Model %s should not have any reasoning flags", model)
+		}
+	}
+}
+
 // =============================================================================
 // INTEGRATION TESTS (require API keys)
 // =============================================================================
