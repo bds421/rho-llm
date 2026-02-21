@@ -311,6 +311,26 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | `grok-code` | `grok-code-fast-1` |
 | `grok-mini` | `grok-3-mini` |
 
+### OpenAI aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `gpt`, `gpt5` | `gpt-5.2` |
+| `gpt5.1` | `gpt-5.1` |
+| `gpt5-mini` | `gpt-5-mini` |
+| `gpt5-nano` | `gpt-5-nano` |
+| `gpt4.1` | `gpt-4.1` |
+
+### Ollama aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `deepseek` | `deepseek-r1:14b` |
+| `mistral` | `mistral-small3.2:24b` |
+| `qwen` | `qwen3:8b` |
+| `qwen-code` | `qwen3-coder:30b` |
+| `gemma` | `gemma3:12b` |
+
 ### Gemini aliases
 
 | Alias | Resolves to |

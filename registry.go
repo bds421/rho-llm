@@ -54,6 +54,26 @@ var modelRegistry = map[string]ModelInfo{
 	"gemini-2.5-flash-lite":  {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.0, OutputPricePer1M: 0.0, Label: "Flash Lite"},
 	"gemini-2.0-flash":       {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
 
+	// OpenAI — GPT-5.x family (2026-02-21)
+	"gpt-5.2":              {ID: "gpt-5.2", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Thinking: true, Label: "GPT-5.2"},
+	"gpt-5.2-chat-latest":  {ID: "gpt-5.2-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Label: "GPT-5.2 Chat"},
+	"gpt-5.1":              {ID: "gpt-5.1", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "GPT-5.1"},
+	"gpt-5.1-chat-latest":  {ID: "gpt-5.1-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Label: "GPT-5.1 Chat"},
+	"gpt-5":                {ID: "gpt-5", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "GPT-5"},
+	"gpt-5-chat-latest":    {ID: "gpt-5-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Label: "GPT-5 Chat"},
+	"gpt-5-mini":           {ID: "gpt-5-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.25, OutputPricePer1M: 2.00, Thinking: true, Label: "GPT-5 Mini"},
+	"gpt-5-nano":           {ID: "gpt-5-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.05, OutputPricePer1M: 0.40, Thinking: true, Label: "GPT-5 Nano"},
+
+	// OpenAI — GPT-4.1 family (non-reasoning, 1M context)
+	"gpt-4.1":      {ID: "gpt-4.1", Provider: "openai", MaxTokens: 32768, ContextWindow: 1047576, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Label: "GPT-4.1"},
+	"gpt-4.1-mini": {ID: "gpt-4.1-mini", Provider: "openai", MaxTokens: 32768, ContextWindow: 1047576, InputPricePer1M: 0.40, OutputPricePer1M: 1.60, Label: "GPT-4.1 Mini"},
+	"gpt-4.1-nano": {ID: "gpt-4.1-nano", Provider: "openai", MaxTokens: 32768, ContextWindow: 1047576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "GPT-4.1 Nano"},
+
+	// OpenAI — O-series reasoning models
+	"o3":      {ID: "o3", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "O3"},
+	"o3-mini": {ID: "o3-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O3 Mini"},
+	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O4 Mini"},
+
 	// Ollama — popular local models (no pricing, context varies by quantization)
 	"deepseek-r1:14b":      {ID: "deepseek-r1:14b", Provider: "ollama", Thinking: true, NoToolSupport: true, Label: "DeepSeek R1 14B"},
 	"mistral-small3.2:24b": {ID: "mistral-small3.2:24b", Provider: "ollama", Label: "Mistral Small 3.2 24B"},
@@ -72,6 +92,8 @@ var defaultModels = map[string]string{
 	"grok":      "grok-4-fast-non-reasoning",
 	"gemini":    "gemini-2.5-flash-lite",
 	"google":    "gemini-2.5-flash-lite",
+	"openai":    "gpt-5.2",
+	"gpt":       "gpt-5.2",
 	"ollama":    "qwen3:8b",
 }
 
@@ -104,6 +126,22 @@ var availableModels = map[string][]string{
 		"gemini-2.5-flash",
 		"gemini-2.5-flash-lite",
 		"gemini-2.0-flash",
+	},
+	"openai": {
+		"gpt-5.2",
+		"gpt-5.2-chat-latest",
+		"gpt-5.1",
+		"gpt-5.1-chat-latest",
+		"gpt-5",
+		"gpt-5-chat-latest",
+		"gpt-5-mini",
+		"gpt-5-nano",
+		"gpt-4.1",
+		"gpt-4.1-mini",
+		"gpt-4.1-nano",
+		"o3",
+		"o3-mini",
+		"o4-mini",
 	},
 	"ollama": {
 		"deepseek-r1:14b",
@@ -142,6 +180,14 @@ var modelAliases = map[string]string{
 	"qwen":      "qwen3:8b",
 	"qwen-code": "qwen3-coder:30b",
 	"gemma":     "gemma3:12b",
+
+	// OpenAI aliases
+	"gpt":       "gpt-5.2",
+	"gpt5":      "gpt-5.2",
+	"gpt5.1":    "gpt-5.1",
+	"gpt5-mini": "gpt-5-mini",
+	"gpt5-nano": "gpt-5-nano",
+	"gpt4.1":    "gpt-4.1",
 
 	// Gemini aliases
 	"gemini":     "gemini-2.5-flash-lite",
