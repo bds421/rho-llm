@@ -118,6 +118,29 @@ func NewToolResultMessage(toolUseID, result string, isError bool) Message {
 	}
 }
 
+// NewAssistantMessage creates an assistant message from a Response, preserving
+// both text content and tool_use blocks. Use this instead of NewTextMessage
+// when the response contains tool calls — NewTextMessage would lose them.
+func NewAssistantMessage(resp *Response) Message {
+	msg := Message{Role: RoleAssistant}
+	if resp.Content != "" {
+		msg.Content = append(msg.Content, ContentPart{
+			Type: ContentText,
+			Text: resp.Content,
+		})
+	}
+	for _, tc := range resp.ToolCalls {
+		msg.Content = append(msg.Content, ContentPart{
+			Type:             ContentToolUse,
+			ToolUseID:        tc.ID,
+			ToolName:         tc.Name,
+			ToolInput:        tc.Input,
+			ThoughtSignature: tc.ThoughtSignature,
+		})
+	}
+	return msg
+}
+
 // =============================================================================
 // TOOL TYPES
 // =============================================================================

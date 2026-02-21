@@ -257,6 +257,20 @@ func (c *Client) buildRequest(req llm.Request, stream bool) anthropicRequest {
 
 	// Convert messages
 	for _, msg := range req.Messages {
+		if msg.Role == llm.RoleSystem {
+			// System messages go to the top-level "system" field, not the messages array.
+			// Anthropic rejects role="system" in the messages array.
+			for _, part := range msg.Content {
+				if part.Type == llm.ContentText {
+					if apiReq.System != "" {
+						apiReq.System += "\n"
+					}
+					apiReq.System += part.Text
+				}
+			}
+			continue
+		}
+
 		apiMsg := anthropicMessage{Role: string(msg.Role)}
 		for _, part := range msg.Content {
 			switch part.Type {

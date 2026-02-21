@@ -340,7 +340,7 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 
 	if len(apiResp.Candidates) > 0 {
 		candidate := apiResp.Candidates[0]
-		resp.StopReason = candidate.FinishReason
+		resp.StopReason = normalizeStopReason(candidate.FinishReason)
 
 		callIndex := 0
 		for _, part := range candidate.Content.Parts {
@@ -418,7 +418,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			if candidate.FinishReason != "" {
 				if !yield(llm.StreamEvent{
 					Type:         llm.EventDone,
-					StopReason:   candidate.FinishReason,
+					StopReason:   normalizeStopReason(candidate.FinishReason),
 					InputTokens:  event.UsageMetadata.PromptTokenCount,
 					OutputTokens: event.UsageMetadata.CandidatesTokenCount,
 				}, nil) {
@@ -430,6 +430,21 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 	if err := scanner.Err(); err != nil {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
+	}
+}
+
+// normalizeStopReason maps Gemini finish reasons to the unified set
+// (end_turn, tool_use, max_tokens) used by the library interface.
+func normalizeStopReason(reason string) string {
+	switch reason {
+	case "STOP":
+		return "end_turn"
+	case "FUNCTION_CALLING":
+		return "tool_use"
+	case "MAX_TOKENS":
+		return "max_tokens"
+	default:
+		return reason
 	}
 }
 

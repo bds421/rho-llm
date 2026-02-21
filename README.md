@@ -108,7 +108,7 @@ for event, err := range client.Stream(ctx, req) {
 | `EventContent` | `Text` | A chunk of generated text. Concatenate all chunks for the full response. |
 | `EventToolUse` | `ToolCall` (ID, Name, Input) | The model is invoking a tool. Handle it and continue the conversation with the result. |
 | `EventThinking` | `Thinking` | Extended thinking output (requires `ThinkingLevel` in config). |
-| `EventDone` | `StopReason`, `InputTokens`, `OutputTokens` | Stream completed. `StopReason` is `end_turn`, `tool_use`, or `max_tokens`. |
+| `EventDone` | `StopReason`, `InputTokens`, `OutputTokens` | Stream completed. `StopReason` is normalized across all providers: `end_turn`, `tool_use`, or `max_tokens`. |
 | `EventError` | `Error` | An error occurred mid-stream. |
 
 **Stream completion:** `EventDone` is emitted when the API sends a completion signal (finish reason + usage stats). If the connection drops or the API response is malformed, the iterator may exhaust without `EventDone`. Handle iterator exhaustion as the authoritative "stream ended" signal; treat `EventDone` as optional metadata.
@@ -116,6 +116,14 @@ for event, err := range client.Stream(ctx, req) {
 ## Tool Use
 
 Tool use (function calling) lets the model invoke functions you define. When a model wants to call a tool, `resp.StopReason` will be `"tool_use"`. You manage the conversation by executing the tool locally and feeding `llm.NewToolResultMessage` back into the message history.
+
+Use `llm.NewAssistantMessage(resp)` to append the assistant's response — it preserves both text and `tool_use` blocks. Using `NewTextMessage(RoleAssistant, resp.Content)` would drop tool call blocks, causing the next request to fail.
+
+```go
+// In the tool use loop:
+req.Messages = append(req.Messages, llm.NewAssistantMessage(resp))  // text + tool_use blocks
+req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, result, false))
+```
 
 **For a full working example of an agentic Tool Use loop, see [`examples/tool_use/main.go`](examples/tool_use/main.go).**
 
@@ -320,6 +328,28 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | `gpt5-mini` | `gpt-5-mini` |
 | `gpt5-nano` | `gpt-5-nano` |
 | `gpt4.1` | `gpt-4.1` |
+
+### Groq aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `groq` | `llama-3.3-70b-versatile` |
+| `llama`, `llama-70b` | `llama-3.3-70b-versatile` |
+| `llama-8b` | `llama-3.1-8b-instant` |
+| `gpt-oss` | `openai/gpt-oss-120b` |
+| `gpt-oss-20b` | `openai/gpt-oss-20b` |
+
+### Mistral aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `mistral-large` | `mistral-large-2512` |
+| `mistral-medium` | `mistral-medium-latest` |
+| `mistral-small` | `mistral-small-2506` |
+| `magistral` | `magistral-medium-2509` |
+| `codestral` | `codestral-2508` |
+| `devstral` | `devstral-small-2-25-12` |
+| `ministral` | `ministral-3-8b-25-12` |
 
 ### Ollama aliases
 

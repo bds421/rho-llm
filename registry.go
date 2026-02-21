@@ -74,6 +74,24 @@ var modelRegistry = map[string]ModelInfo{
 	"o3-mini": {ID: "o3-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O3 Mini"},
 	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O4 Mini"},
 
+	// Groq — cloud inference (2026-02-21)
+	"llama-3.3-70b-versatile":         {ID: "llama-3.3-70b-versatile", Provider: "groq", MaxTokens: 32768, ContextWindow: 128000, InputPricePer1M: 0.59, OutputPricePer1M: 0.79, Label: "Llama 3.3 70B"},
+	"llama-3.1-8b-instant":            {ID: "llama-3.1-8b-instant", Provider: "groq", MaxTokens: 8192, ContextWindow: 128000, InputPricePer1M: 0.05, OutputPricePer1M: 0.08, Label: "Llama 3.1 8B"},
+	"openai/gpt-oss-120b":             {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 3.00, OutputPricePer1M: 8.00, Label: "GPT-OSS 120B"},
+	"openai/gpt-oss-20b":              {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.30, OutputPricePer1M: 0.80, Label: "GPT-OSS 20B"},
+	"deepseek-r1-distill-llama-70b":   {ID: "deepseek-r1-distill-llama-70b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.75, OutputPricePer1M: 0.99, Thinking: true, Label: "DeepSeek R1 70B"},
+	"deepseek-r1-distill-qwen-32b":    {ID: "deepseek-r1-distill-qwen-32b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.69, OutputPricePer1M: 0.69, Thinking: true, Label: "DeepSeek R1 32B"},
+
+	// Mistral — cloud API (2026-02-21)
+	"mistral-large-2512":      {ID: "mistral-large-2512", Provider: "mistral", MaxTokens: 131072, ContextWindow: 131072, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Label: "Mistral Large"},
+	"mistral-medium-latest":   {ID: "mistral-medium-latest", Provider: "mistral", MaxTokens: 131072, ContextWindow: 131072, InputPricePer1M: 0.40, OutputPricePer1M: 2.00, Label: "Mistral Medium"},
+	"mistral-small-2506":      {ID: "mistral-small-2506", Provider: "mistral", MaxTokens: 32768, ContextWindow: 32768, InputPricePer1M: 0.10, OutputPricePer1M: 0.30, Label: "Mistral Small"},
+	"magistral-medium-2509":   {ID: "magistral-medium-2509", Provider: "mistral", MaxTokens: 40960, ContextWindow: 40960, InputPricePer1M: 0.40, OutputPricePer1M: 2.00, Thinking: true, Label: "Magistral Medium"},
+	"magistral-small-2509":    {ID: "magistral-small-2509", Provider: "mistral", MaxTokens: 32768, ContextWindow: 32768, InputPricePer1M: 0.10, OutputPricePer1M: 0.30, Thinking: true, Label: "Magistral Small"},
+	"codestral-2508":          {ID: "codestral-2508", Provider: "mistral", MaxTokens: 32768, ContextWindow: 256000, InputPricePer1M: 0.30, OutputPricePer1M: 0.90, Label: "Codestral"},
+	"devstral-small-2-25-12":  {ID: "devstral-small-2-25-12", Provider: "mistral", MaxTokens: 32768, ContextWindow: 131072, InputPricePer1M: 0.10, OutputPricePer1M: 0.30, Label: "Devstral Small"},
+	"ministral-3-8b-25-12":    {ID: "ministral-3-8b-25-12", Provider: "mistral", MaxTokens: 32768, ContextWindow: 131072, InputPricePer1M: 0.05, OutputPricePer1M: 0.10, Label: "Ministral 8B"},
+
 	// Ollama — popular local models (no pricing, context varies by quantization)
 	"deepseek-r1:14b":      {ID: "deepseek-r1:14b", Provider: "ollama", Thinking: true, NoToolSupport: true, Label: "DeepSeek R1 14B"},
 	"mistral-small3.2:24b": {ID: "mistral-small3.2:24b", Provider: "ollama", Label: "Mistral Small 3.2 24B"},
@@ -94,6 +112,8 @@ var defaultModels = map[string]string{
 	"google":    "gemini-2.5-flash-lite",
 	"openai":    "gpt-5.2",
 	"gpt":       "gpt-5.2",
+	"groq":      "llama-3.3-70b-versatile",
+	"mistral":   "mistral-small-2506",
 	"ollama":    "qwen3:8b",
 }
 
@@ -143,6 +163,24 @@ var availableModels = map[string][]string{
 		"o3-mini",
 		"o4-mini",
 	},
+	"groq": {
+		"llama-3.3-70b-versatile",
+		"llama-3.1-8b-instant",
+		"openai/gpt-oss-120b",
+		"openai/gpt-oss-20b",
+		"deepseek-r1-distill-llama-70b",
+		"deepseek-r1-distill-qwen-32b",
+	},
+	"mistral": {
+		"mistral-large-2512",
+		"mistral-medium-latest",
+		"mistral-small-2506",
+		"magistral-medium-2509",
+		"magistral-small-2509",
+		"codestral-2508",
+		"devstral-small-2-25-12",
+		"ministral-3-8b-25-12",
+	},
 	"ollama": {
 		"deepseek-r1:14b",
 		"mistral-small3.2:24b",
@@ -173,6 +211,23 @@ var modelAliases = map[string]string{
 	"grok-4.1-reasoning": "grok-4-1-fast-reasoning",
 	"grok-code":          "grok-code-fast-1",
 	"grok-mini":          "grok-3-mini",
+
+	// Groq aliases
+	"groq":        "llama-3.3-70b-versatile",
+	"llama":       "llama-3.3-70b-versatile",
+	"llama-70b":   "llama-3.3-70b-versatile",
+	"llama-8b":    "llama-3.1-8b-instant",
+	"gpt-oss":     "openai/gpt-oss-120b",
+	"gpt-oss-20b": "openai/gpt-oss-20b",
+
+	// Mistral aliases
+	"mistral-large":  "mistral-large-2512",
+	"mistral-medium": "mistral-medium-latest",
+	"mistral-small":  "mistral-small-2506",
+	"magistral":      "magistral-medium-2509",
+	"codestral":      "codestral-2508",
+	"devstral":       "devstral-small-2-25-12",
+	"ministral":      "ministral-3-8b-25-12",
 
 	// Ollama aliases
 	"deepseek":  "deepseek-r1:14b",

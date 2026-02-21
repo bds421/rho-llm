@@ -75,8 +75,8 @@ func main() {
 			results = append(results, llm.NewToolResultMessage(tc.ID, output, false))
 		}
 
-		// Append the assistant's intermediate thought process
-		req.Messages = append(req.Messages, llm.NewTextMessage(llm.RoleAssistant, resp.Content))
+		// Append the full assistant response (text + tool_use blocks)
+		req.Messages = append(req.Messages, llm.NewAssistantMessage(resp))
 
 		// Append the tool results we just generated
 		req.Messages = append(req.Messages, results...)

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-02-21
+
+### Added
+
+- **`NewAssistantMessage(resp)` constructor** — Creates an assistant message from a `Response`, preserving both text content and `tool_use` blocks (with `ThoughtSignature` for Gemini 3). Use this instead of `NewTextMessage(RoleAssistant, resp.Content)` in tool use loops — `NewTextMessage` drops tool call blocks, causing providers to reject the next request.
+
+- **Groq model registry** — Added 6 Groq models: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `deepseek-r1-distill-llama-70b`, `deepseek-r1-distill-qwen-32b`. Default: `llama-3.3-70b-versatile`. Aliases: `groq`, `llama`, `llama-70b`, `llama-8b`, `gpt-oss`.
+
+- **Mistral model registry** — Added 8 Mistral models: `mistral-large-2512`, `mistral-medium-latest`, `mistral-small-2506`, `magistral-medium-2509`, `magistral-small-2509`, `codestral-2508`, `devstral-small-2-25-12`, `ministral-3-8b-25-12`. Default: `mistral-small-2506`. Aliases: `mistral-large`, `mistral-medium`, `mistral-small`, `magistral`, `codestral`, `devstral`, `ministral`.
+
+### Fixed
+
+- **Anthropic rejected `RoleSystem` messages** — The Anthropic adapter passed `role: "system"` messages in the `messages` array, which the API rejects. System messages are now extracted into the top-level `system` field (same pattern as the Gemini adapter).
+
+- **StopReason values differed across providers** — Gemini returned `"STOP"` / `"FUNCTION_CALLING"` / `"MAX_TOKENS"`, OpenAI-compatible returned `"stop"` / `"tool_calls"` / `"length"`. Now all providers normalize to `"end_turn"` / `"tool_use"` / `"max_tokens"`. Anthropic already uses the normalized values natively.
+
 ## [0.1.7] - 2026-02-21
 
 ### Added

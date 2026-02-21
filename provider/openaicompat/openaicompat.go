@@ -226,6 +226,21 @@ type openaiResponse struct {
 	} `json:"usage"`
 }
 
+// normalizeStopReason maps OpenAI finish reasons to the unified set
+// (end_turn, tool_use, max_tokens) used by the library interface.
+func normalizeStopReason(reason string) string {
+	switch reason {
+	case "stop":
+		return "end_turn"
+	case "tool_calls":
+		return "tool_use"
+	case "length":
+		return "max_tokens"
+	default:
+		return reason
+	}
+}
+
 func (c *Client) buildRequest(req llm.Request, stream bool) openaiRequest {
 	apiReq := openaiRequest{
 		Model:       req.Model,
@@ -359,7 +374,7 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 
 	if len(apiResp.Choices) > 0 {
 		choice := apiResp.Choices[0]
-		resp.StopReason = choice.FinishReason
+		resp.StopReason = normalizeStopReason(choice.FinishReason)
 
 		// Extract content
 		if content, ok := choice.Message.Content.(string); ok {
@@ -481,7 +496,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 			// Capture finish reason (usage may arrive in next chunk)
 			if choice.FinishReason != "" {
-				finishReason = choice.FinishReason
+				finishReason = normalizeStopReason(choice.FinishReason)
 				if currentToolCall != nil {
 					var input any
 					raw := inputBuffer.String()
