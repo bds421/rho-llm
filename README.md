@@ -31,49 +31,29 @@ go get gitlab2024.bds421-cloud.com/bds421/rho/llm
 This example demonstrates a complete request using Google Gemini, but the code is identical for all 11 providers.
 
 ```go
-package main
+import _ "gitlab2024.bds421-cloud.com/bds421/rho/llm/provider" // required: register adapters
 
-import (
-	"context"
-	"fmt"
-	"os"
-	"gitlab2024.bds421-cloud.com/bds421/rho/llm"
-	_ "gitlab2024.bds421-cloud.com/bds421/rho/llm/provider" // register all provider adapters
-	"time"
-)
-
-func main() {
-	ctx := context.Background()
-
-	// 1. Configure for your provider
-	cfg := llm.Config{
-		Provider: "gemini",
-		Model:    "flash", // resolves to gemini-2.5-flash
-		APIKey:   os.Getenv("GEMINI_API_KEY"),
-		Timeout:  30 * time.Second,
-	}
-
-	// 2. Initialize client
-	client, err := llm.NewClient(cfg)
-	if err != nil {
-		panic(err)
-	}
-	defer client.Close()
-
-	// 3. Send a message
-	resp, err := client.Complete(ctx, llm.Request{
-		Messages: []llm.Message{
-			llm.NewTextMessage(llm.RoleUser, "Explain quantum entanglement in one sentence."),
-		},
-	})
-
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		return
-	}
-
-	fmt.Println(resp.Content)
+// 1. Configure and initialize
+cfg := llm.Config{
+    Provider: "gemini",
+    Model:    "flash", // resolves to gemini-2.5-flash
+    APIKey:   os.Getenv("GEMINI_API_KEY"),
 }
+client, err := llm.NewClient(cfg)
+if err != nil {
+    panic(err)
+}
+defer client.Close()
+
+// 2. Send a message
+req := llm.Request{
+    Messages: []llm.Message{
+        llm.NewTextMessage(llm.RoleUser, "Explain quantum entanglement in one sentence."),
+    },
+}
+resp, err := client.Complete(context.Background(), req)
+
+fmt.Println(resp.Content)
 ```
 
 ### Provider Recipes
@@ -112,7 +92,7 @@ for event, err := range client.Stream(ctx, req) {
         // Model wants to call a tool (see Tool Use below)
         fmt.Printf("Tool call: %s(%v)\n", event.ToolCall.Name, event.ToolCall.Input)
     case llm.EventThinking:
-        fmt.Print(event.ThinkingText)   // Extended thinking (Anthropic with ThinkingLevel set)
+        fmt.Print(event.Thinking)       // Extended thinking (Anthropic with ThinkingLevel set)
     case llm.EventDone:
         // Final metadata — stop reason and token usage
         fmt.Printf("\nDone: %s (in=%d, out=%d)\n",
@@ -127,7 +107,7 @@ for event, err := range client.Stream(ctx, req) {
 |-------|--------|-------------|
 | `EventContent` | `Text` | A chunk of generated text. Concatenate all chunks for the full response. |
 | `EventToolUse` | `ToolCall` (ID, Name, Input) | The model is invoking a tool. Handle it and continue the conversation with the result. |
-| `EventThinking` | `ThinkingText` | Extended thinking output (requires `ThinkingLevel` in config). |
+| `EventThinking` | `Thinking` | Extended thinking output (requires `ThinkingLevel` in config). |
 | `EventDone` | `StopReason`, `InputTokens`, `OutputTokens` | Stream completed. `StopReason` is `end_turn`, `tool_use`, or `max_tokens`. |
 | `EventError` | `Error` | An error occurred mid-stream. |
 
@@ -135,74 +115,43 @@ for event, err := range client.Stream(ctx, req) {
 
 ## Tool Use
 
-Tool use (function calling) lets the model invoke functions you define. The typical pattern is an agentic loop: send a request with tool definitions, check if the model wants to call a tool, execute it locally, feed the result back, and repeat until the model produces a final text response.
+Tool use (function calling) lets the model invoke functions you define. When a model wants to call a tool, `resp.StopReason` will be `"tool_use"`. You manage the conversation by executing the tool locally and feeding `llm.NewToolResultMessage` back into the message history.
 
-### 1. Define tools and send the request
+**For a full working example of an agentic Tool Use loop, see [`examples/tool_use/main.go`](examples/tool_use/main.go).**
 
-Tools are defined with a name, description, and a JSON Schema for their input. The description matters — it's how the model decides when to use the tool.
-
+If a tool execution fails, you can pass `isError: true` so the model knows the call failed and can attempt to recover:
 ```go
-req := llm.Request{
-    Messages: []llm.Message{
-        llm.NewTextMessage(llm.RoleUser, "What's the weather in Berlin?"),
-    },
-    Tools: []llm.Tool{{
-        Name:        "get_weather",
-        Description: "Get the current weather for a city",
-        InputSchema: map[string]interface{}{
-            "type": "object",
-            "properties": map[string]interface{}{
-                "location": map[string]interface{}{
-                    "type":        "string",
-                    "description": "City name, e.g. 'Berlin'",
-                },
-            },
-            "required": []string{"location"},
-        },
-    }},
-}
-
-resp, err := client.Complete(ctx, req)
+req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, "location not found", true))
 ```
 
-### 2. Handle tool calls in a loop
+## Thinking & Reasoning
 
-When the model wants to call a tool, `resp.StopReason` is `"tool_use"` and `resp.ToolCalls` contains the invocations. Execute each tool locally, then send the results back as the next message.
+Many modern models support reasoning (chain-of-thought) capabilities where they expose their internal thought processes before outputting the final answer. 
+
+You can check if a given model natively supports extended thinking by checking the registry. If you pass thinking options to a client targeting a non-reasoning model, they are silently ignored at the adapter level.
 
 ```go
-for resp.StopReason == "tool_use" {
-    // Build tool result messages for each call
-    var results []llm.Message
-    for _, tc := range resp.ToolCalls {
-        // Execute the tool (your application logic)
-        output := executeMyTool(tc.Name, tc.Input)
+info, ok := llm.GetModelInfo("claude-opus-4-6")
 
-        // Wrap the result — the tool use ID links it back to the request
-        results = append(results, llm.NewToolResultMessage(tc.ID, output, false))
-    }
-
-    // Append the assistant's response and tool results, then continue
-    req.Messages = append(req.Messages,
-        llm.NewTextMessage(llm.RoleAssistant, resp.Content))
-    req.Messages = append(req.Messages, results...)
-
-    resp, err = client.Complete(ctx, req)
-    if err != nil {
-        break
+// 1. API-controlled thinking budgets (e.g. Anthropic)
+if ok && info.SupportsThinking {
+    fmt.Println("Model supports extended thinking budgets")
+    
+    // Opt-in via config
+    cfg := llm.Config{
+        Provider:      "anthropic",
+        Model:         "claude-opus-4-6",
+        ThinkingLevel: llm.ThinkingLow, // or llm.ThinkingMedium / llm.ThinkingHigh
     }
 }
 
-// resp.Content now has the final text answer
-fmt.Println(resp.Content)
+// 2. Intrinsic reasoning models (e.g. DeepSeek-R1, Grok 4 R)
+if ok && info.Thinking {
+    fmt.Println("Model uses intrinsic reasoning natively")
+}
 ```
 
-### 3. Error results
-
-If a tool execution fails, pass `isError: true` so the model knows the call failed and can recover:
-
-```go
-llm.NewToolResultMessage(tc.ID, "location not found", true)
-```
+If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
 
 ## Automatic Retry & Auth Pool Rotation
 

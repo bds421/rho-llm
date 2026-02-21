@@ -362,11 +362,23 @@ type ModelInfo struct {
     ContextWindow    int     // Max input tokens
     InputPricePer1M  float64 // USD pricing
     OutputPricePer1M float64
-    SupportsThinking bool    // Anthropic extended thinking
+    SupportsThinking bool    // API-controlled thinking budgets (Anthropic)
     ThoughtSignature bool    // Gemini 3: must echo thought_signature in tool results
+    Thinking         bool    // Intrinsic reasoning models (DeepSeek, Grok)
+    NoToolSupport    bool    // Model lacks function calling capabilities
     Label            string  // Short display name
 }
 ```
+
+### Thinking & Reasoning (Semantic Capabilities)
+
+Different LLM providers implement chain-of-thought reasoning in fundamentally different ways. The registry abstracts these semantic capabilities:
+
+1. **API-Controlled Budgets (`SupportsThinking: true`)**
+   Models like Anthropic's Claude 4 series require the client to explicitly allocate a "thinking budget" in the API request payload. The config `ThinkingLevel` is mapped into this budget. If `ThinkingLevel` is passed to a model where `SupportsThinking == false`, the adapter silently strips it from the HTTP payload to prevent API errors.
+
+2. **Intrinsic Reasoning (`Thinking: true`)**
+   Models like DeepSeek-R1 and Grok 4 Reasoning emit chain-of-thought intrinsically inside their standard output streams. They do not require specific API flags to enable this, but the registry flags them so your application knows they will consume output tokens for reasoning before answering.
 
 **Registered providers:**
 
