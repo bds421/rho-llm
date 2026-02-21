@@ -143,6 +143,11 @@ type anthropicResponse struct {
 }
 
 func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*llm.Response, error) {
+	// Fall back to config-level ThinkingLevel if not set on the request
+	if req.ThinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
+		req.ThinkingLevel = c.config.ThinkingLevel
+	}
+
 	apiReq := c.buildRequest(req, stream)
 
 	body, err := json.Marshal(apiReq)
@@ -187,6 +192,11 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 }
 
 func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield func(llm.StreamEvent, error) bool) {
+	// Fall back to config-level ThinkingLevel if not set on the request
+	if req.ThinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
+		req.ThinkingLevel = c.config.ThinkingLevel
+	}
+
 	apiReq := c.buildRequest(req, true)
 
 	body, err := json.Marshal(apiReq)

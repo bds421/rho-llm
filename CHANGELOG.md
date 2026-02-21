@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`LogRequests: true` produced no visible output** — `LoggingClient` logged request/response metadata at `slog.Debug` level, which is suppressed by the default `slog.Info` threshold. Users who explicitly opted in via `LogRequests: true` saw only the pool creation `Info` line, not the actual per-request metadata (provider, model, tokens, cost, elapsed). Changed success-path logs from `Debug` to `Info`.
 
+- **`Config.ThinkingLevel` had no effect** — The Anthropic adapter only read `Request.ThinkingLevel`, ignoring the config-level setting documented in the README. Now `doRequest` and `doStreamRequest` fall back to `c.config.ThinkingLevel` when the per-request field is empty.
+
 ## [0.1.6] - 2026-02-21
 
 ### Added
