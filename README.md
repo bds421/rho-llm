@@ -97,7 +97,7 @@ cfg := llm.Config{
 
 ## Streaming
 
-Uses Go 1.23 iterators — `break` to abort cleanly:
+`client.Stream()` returns a Go 1.23 iterator (`iter.Seq2[StreamEvent, error]`) that yields events as the model generates tokens. This lets you display partial output in real time rather than waiting for the full response. Use `break` to abort early — the iterator cleans up the underlying HTTP connection automatically.
 
 ```go
 for event, err := range client.Stream(ctx, req) {
@@ -107,36 +107,101 @@ for event, err := range client.Stream(ctx, req) {
     }
     switch event.Type {
     case llm.EventContent:
-        fmt.Print(event.Text)
+        fmt.Print(event.Text)           // Partial text token
     case llm.EventToolUse:
-        fmt.Printf("Tool '%s': %v\n", event.ToolCall.Name, event.ToolCall.Input)
+        // Model wants to call a tool (see Tool Use below)
+        fmt.Printf("Tool call: %s(%v)\n", event.ToolCall.Name, event.ToolCall.Input)
     case llm.EventThinking:
-        // Extended thinking content (Anthropic)
+        fmt.Print(event.ThinkingText)   // Extended thinking (Anthropic with ThinkingLevel set)
     case llm.EventDone:
-        fmt.Printf("Stop: %s tokens: in=%d, out=%d\n", event.StopReason, event.InputTokens, event.OutputTokens)
+        // Final metadata — stop reason and token usage
+        fmt.Printf("\nDone: %s (in=%d, out=%d)\n",
+            event.StopReason, event.InputTokens, event.OutputTokens)
     }
 }
 ```
+
+### Event types
+
+| Event | Fields | Description |
+|-------|--------|-------------|
+| `EventContent` | `Text` | A chunk of generated text. Concatenate all chunks for the full response. |
+| `EventToolUse` | `ToolCall` (ID, Name, Input) | The model is invoking a tool. Handle it and continue the conversation with the result. |
+| `EventThinking` | `ThinkingText` | Extended thinking output (requires `ThinkingLevel` in config). |
+| `EventDone` | `StopReason`, `InputTokens`, `OutputTokens` | Stream completed. `StopReason` is `end_turn`, `tool_use`, or `max_tokens`. |
+| `EventError` | `Error` | An error occurred mid-stream. |
 
 **Stream completion:** `EventDone` is emitted when the API sends a completion signal (finish reason + usage stats). If the connection drops or the API response is malformed, the iterator may exhaust without `EventDone`. Handle iterator exhaustion as the authoritative "stream ended" signal; treat `EventDone` as optional metadata.
 
 ## Tool Use
 
+Tool use (function calling) lets the model invoke functions you define. The typical pattern is an agentic loop: send a request with tool definitions, check if the model wants to call a tool, execute it locally, feed the result back, and repeat until the model produces a final text response.
+
+### 1. Define tools and send the request
+
+Tools are defined with a name, description, and a JSON Schema for their input. The description matters — it's how the model decides when to use the tool.
+
 ```go
 req := llm.Request{
-    Messages: messages,
+    Messages: []llm.Message{
+        llm.NewTextMessage(llm.RoleUser, "What's the weather in Berlin?"),
+    },
     Tools: []llm.Tool{{
         Name:        "get_weather",
-        Description: "Get weather for a location",
+        Description: "Get the current weather for a city",
         InputSchema: map[string]interface{}{
             "type": "object",
             "properties": map[string]interface{}{
-                "location": map[string]interface{}{"type": "string"},
+                "location": map[string]interface{}{
+                    "type":        "string",
+                    "description": "City name, e.g. 'Berlin'",
+                },
             },
             "required": []string{"location"},
         },
     }},
 }
+
+resp, err := client.Complete(ctx, req)
+```
+
+### 2. Handle tool calls in a loop
+
+When the model wants to call a tool, `resp.StopReason` is `"tool_use"` and `resp.ToolCalls` contains the invocations. Execute each tool locally, then send the results back as the next message.
+
+```go
+for resp.StopReason == "tool_use" {
+    // Build tool result messages for each call
+    var results []llm.Message
+    for _, tc := range resp.ToolCalls {
+        // Execute the tool (your application logic)
+        output := executeMyTool(tc.Name, tc.Input)
+
+        // Wrap the result — the tool use ID links it back to the request
+        results = append(results, llm.NewToolResultMessage(tc.ID, output, false))
+    }
+
+    // Append the assistant's response and tool results, then continue
+    req.Messages = append(req.Messages,
+        llm.NewTextMessage(llm.RoleAssistant, resp.Content))
+    req.Messages = append(req.Messages, results...)
+
+    resp, err = client.Complete(ctx, req)
+    if err != nil {
+        break
+    }
+}
+
+// resp.Content now has the final text answer
+fmt.Println(resp.Content)
+```
+
+### 3. Error results
+
+If a tool execution fails, pass `isError: true` so the model knows the call failed and can recover:
+
+```go
+llm.NewToolResultMessage(tc.ID, "location not found", true)
 ```
 
 ## Automatic Retry & Auth Pool Rotation
