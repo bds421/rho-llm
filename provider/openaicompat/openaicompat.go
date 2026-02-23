@@ -59,7 +59,7 @@ func New(cfg llm.Config) (*Client, error) {
 
 	return &Client{
 		config:       cfg,
-		httpClient:   &http.Client{Timeout: cfg.Timeout},
+		httpClient:   llm.SafeHTTPClient(cfg.Timeout),
 		baseURL:      baseURL,
 		authHeader:   authHeader,
 		providerName: providerName,
@@ -108,7 +108,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
 		}
@@ -116,7 +116,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	}
 
 	var apiResp openaiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, llm.MaxResponseBodyBytes)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -154,7 +154,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, readErr := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
 			if readErr != nil {
 				slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
 			}
@@ -401,7 +401,7 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(nil, 1024*1024) // 1MB max for long streaming responses
+	scanner.Buffer(nil, llm.MaxSSELineBytes)
 
 	var currentToolCall *llm.ToolCall
 	var inputBuffer strings.Builder
@@ -411,11 +411,11 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	//   Chunk 2: choices = [], usage = {prompt_tokens: N, completion_tokens: M}
 	// We must track state across chunks to emit a complete EventDone.
 	//
-	// Token counts initialize to -1 ("not reported"). If the stream ends without
+	// Token counts initialize to "not reported". If the stream ends without
 	// a usage chunk (connection dropped, provider doesn't support it), callers
-	// can distinguish "not reported" (-1) from "zero tokens" (0).
+	// can distinguish "not reported" from "zero tokens" (0).
 	var finishReason string
-	var inputTokens, outputTokens = -1, -1
+	var inputTokens, outputTokens = llm.TokensNotReported, llm.TokensNotReported
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -446,7 +446,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			slog.Warn("failed to parse SSE event", "provider", c.providerName, "error", err)
+			if !yield(llm.StreamEvent{}, fmt.Errorf("malformed SSE event from %s: %w", c.providerName, err)) {
+				return
+			}
 			continue
 		}
 
@@ -490,6 +492,12 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					inputBuffer.Reset()
 				}
 				if tc.Function.Arguments != "" {
+					if inputBuffer.Len()+len(tc.Function.Arguments) > llm.MaxToolInputBytes {
+						if !yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes)) {
+							return
+						}
+						continue
+					}
 					inputBuffer.WriteString(tc.Function.Arguments)
 				}
 			}

@@ -15,7 +15,7 @@ go get gitlab2024.bds421-cloud.com/bds421/rho/llm
 | Provider | Protocol | Auth | Default BaseURL |
 |----------|----------|------|-----------------|
 | Anthropic/Claude | Native | x-api-key | api.anthropic.com |
-| Google Gemini | Native | query param | generativelanguage.googleapis.com |
+| Google Gemini | Native | x-goog-api-key | generativelanguage.googleapis.com |
 | OpenAI | OpenAI-compat | Bearer | api.openai.com/v1 |
 | xAI/Grok | OpenAI-compat | Bearer | api.x.ai/v1 |
 | Groq | OpenAI-compat | Bearer | api.groq.com/openai/v1 |
@@ -111,7 +111,9 @@ for event, err := range client.Stream(ctx, req) {
 | `EventDone` | `StopReason`, `InputTokens`, `OutputTokens` | Stream completed. `StopReason` is normalized across all providers: `end_turn`, `tool_use`, or `max_tokens`. |
 | `EventError` | `Error` | An error occurred mid-stream. |
 
-**Stream completion:** `EventDone` is emitted when the API sends a completion signal (finish reason + usage stats). If the connection drops or the API response is malformed, the iterator may exhaust without `EventDone`. Handle iterator exhaustion as the authoritative "stream ended" signal; treat `EventDone` as optional metadata.
+**Stream completion:** `EventDone` is emitted when the API sends a completion signal (finish reason + usage stats). If the connection drops or the API response is malformed, the iterator may exhaust without `EventDone`. Handle iterator exhaustion as the authoritative "stream ended" signal; treat `EventDone` as optional metadata. Token counts use the sentinel `llm.TokensNotReported` (-1) when the provider did not report usage; compare against this constant to distinguish "not reported" from "zero tokens" (0).
+
+**Malformed events:** If a provider sends an SSE event with invalid JSON, the iterator yields an error for that event and continues parsing subsequent events. Callers should check `err` on every iteration and decide whether to `break` or continue. This ensures data corruption is never silent.
 
 ## Tool Use
 
@@ -158,6 +160,18 @@ if ok && info.Thinking {
     fmt.Println("Model uses intrinsic reasoning natively")
 }
 ```
+
+You can override the default token budget for a specific request using `ThinkingBudget`:
+
+```go
+req := llm.Request{
+    Messages:       messages,
+    ThinkingLevel:  llm.ThinkingMedium,
+    ThinkingBudget: 8192, // overrides ThinkingMedium's default of 4096
+}
+```
+
+**Note:** Anthropic's API requires `temperature = 1.0` when extended thinking is enabled. The adapter enforces this automatically. A debug-level log is emitted when a temperature override occurs.
 
 If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
 

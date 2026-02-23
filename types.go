@@ -54,6 +54,11 @@ const (
 	ThinkingHigh   ThinkingLevel = "high"
 )
 
+// TokensNotReported is the sentinel value for token counts when the provider
+// did not report usage (e.g. stream ended before usage chunk arrived).
+// Callers can distinguish "not reported" (-1) from "zero tokens" (0).
+const TokensNotReported = -1
+
 // =============================================================================
 // MESSAGE TYPES
 // =============================================================================
@@ -172,8 +177,9 @@ type Request struct {
 	MaxTokens     int           `json:"max_tokens"`
 	Temperature   float64       `json:"temperature"`
 	Tools         []Tool        `json:"tools,omitempty"`
-	ThinkingLevel ThinkingLevel `json:"thinking_level,omitempty"` // low, medium, high (zero value = none)
-	StopSequences []string      `json:"stop_sequences,omitempty"`
+	ThinkingLevel  ThinkingLevel `json:"thinking_level,omitempty"`  // low, medium, high (zero value = none)
+	ThinkingBudget int           `json:"thinking_budget,omitempty"` // custom token budget; overrides ThinkingLevel default when > 0
+	StopSequences  []string      `json:"stop_sequences,omitempty"`
 }
 
 // Response represents an LLM completion response.

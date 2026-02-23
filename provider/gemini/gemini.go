@@ -55,11 +55,9 @@ func New(cfg llm.Config) (*Client, error) {
 	}
 
 	return &Client{
-		config:  cfg,
-		baseURL: base,
-		httpClient: &http.Client{
-			Timeout: cfg.Timeout,
-		},
+		config:       cfg,
+		baseURL:      base,
+		httpClient:   llm.SafeHTTPClient(cfg.Timeout),
 		providerName: providerName,
 	}, nil
 }
@@ -81,10 +79,11 @@ func (c *Client) Close() error {
 
 // Complete generates a non-streaming completion.
 func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", c.baseURL, req.Model, c.config.APIKey)
-	if req.Model == "" {
-		url = fmt.Sprintf("%s/%s:generateContent?key=%s", c.baseURL, c.config.Model, c.config.APIKey)
+	model := req.Model
+	if model == "" {
+		model = c.config.Model
 	}
+	url := fmt.Sprintf("%s/%s:generateContent", c.baseURL, model)
 
 	apiReq := c.buildRequest(req)
 
@@ -99,6 +98,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", c.config.APIKey)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -107,7 +107,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", "gemini", "error", readErr)
 		}
@@ -115,7 +115,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	}
 
 	var apiResp geminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, llm.MaxResponseBodyBytes)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -125,10 +125,11 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 // Stream returns an iterator of streaming events.
 func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
-		url := fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse&key=%s", c.baseURL, req.Model, c.config.APIKey)
-		if req.Model == "" {
-			url = fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse&key=%s", c.baseURL, c.config.Model, c.config.APIKey)
+		model := req.Model
+		if model == "" {
+			model = c.config.Model
 		}
+		url := fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse", c.baseURL, model)
 
 		apiReq := c.buildRequest(req)
 
@@ -145,6 +146,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		}
 
 		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-goog-api-key", c.config.APIKey)
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -154,7 +156,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, readErr := io.ReadAll(resp.Body)
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
 			if readErr != nil {
 				slog.Warn("failed to read error response body", "provider", "gemini", "error", readErr)
 			}
@@ -368,7 +370,7 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(nil, 1024*1024) // 1MB max for long streaming responses
+	scanner.Buffer(nil, llm.MaxSSELineBytes)
 
 	callIndex := 0
 	for scanner.Scan() {
@@ -382,7 +384,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 		var event geminiResponse
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			slog.Warn("failed to parse SSE event", "provider", "gemini", "error", err)
+			if !yield(llm.StreamEvent{}, fmt.Errorf("malformed SSE event from gemini: %w", err)) {
+				return
+			}
 			continue
 		}
 

@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-02-23
+
+### Added
+
+- **`TokensNotReported` constant** — Named sentinel (`-1`) for token counts when the provider did not report usage. Replaces magic `-1` literals in Anthropic and OpenAI-compatible stream parsers. Callers can compare `event.InputTokens == llm.TokensNotReported` instead of checking against a raw `-1`.
+
+- **`Request.ThinkingBudget` field** — Custom token budget that overrides `ThinkingLevel` defaults when > 0. Allows per-request control over thinking budget without changing `ThinkingLevel` presets (e.g., `ThinkingBudget: 8192` with `ThinkingLevel: ThinkingMedium`).
+
+- **Type-based network error detection in `IsRetryable`** — Now checks `net.Error`, `io.EOF`, `io.ErrUnexpectedEOF`, `syscall.ECONNRESET`, and `syscall.ECONNREFUSED` via `errors.As`/`errors.Is` before falling back to string matching. Strictly additive — all existing string-based detection preserved for backward compatibility.
+
+- **3 new context-length error patterns** — `isContextLengthMessage` now matches `context_length` (underscore variant, Groq/OpenAI error codes), `input too long` (Gemini), and `request too large` (generic).
+
+### Changed
+
+- **Temperature override logging** — Anthropic adapter now emits a `slog.Debug` log when extended thinking forces `temperature = 1.0`, including the originally requested temperature. Previously silent.
+
+## [0.1.9] - 2026-02-22
+
+### Security
+
+- **Gemini API key moved from URL to header** — Previously sent as `?key=` query parameter, leaking into server logs, proxy logs, and HTTP referer headers. Now sent via `x-goog-api-key` header, matching other adapters' auth patterns.
+
+- **Bounded error response reads** — All three adapters (`io.ReadAll` on error bodies) now use `io.LimitReader` capped at 1 MB. A malicious or broken endpoint returning a multi-GB error body previously caused OOM.
+
+- **Error messages truncated at 4 KB** — `APIError.Message` is now capped to prevent unbounded strings from propagating through error chains, log systems, and serialization.
+
+- **Redirect auth header stripping** — All HTTP clients now use `CheckRedirect` to strip sensitive headers (`Authorization`, `x-api-key`, `x-goog-api-key`) on cross-domain redirects. Previously, Anthropic's `x-api-key` and OpenAI's `Bearer` token would leak to a redirect target on a different host.
+
+- **Smaller SSE scanner buffer** — Reduced from 1 MB to 256 KB per stream. Limits per-stream memory pressure from malicious endpoints sending oversized SSE lines.
+
+- **Bounded success response body decoding** — `json.NewDecoder` on success response bodies now wraps `resp.Body` with `io.LimitReader` capped at 32 MB. Previously, a malicious endpoint returning a multi-GB JSON response caused OOM via unbounded `json.Decoder` allocation.
+
+- **Bounded tool input accumulation in streams** — `inputBuffer` (Anthropic `input_json_delta`, OpenAI `function.arguments`) now capped at 1 MB. A malicious stream sending thousands of small fragments could previously accumulate without bound.
+
+- **Malformed SSE events yield errors to callers** — Previously, `json.Unmarshal` failures on SSE events were silently logged and skipped (`continue`), causing data loss without the caller's knowledge. Now yielded as errors via the iterator, letting callers decide whether to continue or abort.
+
+### Added
+
+- **Security test suite** (`security_test.go`) — 15 tests verifying: Gemini header auth (Complete + Stream), error body truncation, bounded error reads, redirect header stripping (Gemini/Anthropic/OpenAI), bounded success body decoding (Gemini/Anthropic/OpenAI), bounded tool input accumulation (Anthropic/OpenAI), malformed SSE error propagation (Gemini/Anthropic/OpenAI).
+
+- **`SafeHTTPClient(timeout)`** — Shared HTTP client constructor with redirect-safe auth header handling. Used by all three adapters.
+
+- **`MaxErrorBodyBytes`** / **`MaxSSELineBytes`** / **`MaxResponseBodyBytes`** / **`MaxToolInputBytes`** constants — Centralized size limits for error reads (1 MB), SSE line parsing (256 KB), success response decoding (32 MB), and tool input accumulation (1 MB).
+
 ## [0.1.8] - 2026-02-21
 
 ### Added

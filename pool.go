@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -203,11 +204,45 @@ func (p *AuthPool) Status() string {
 	return strings.Join(parts, ", ")
 }
 
+// refCountedClient wraps a Client with atomic reference counting.
+// Born with refs=1 (the pool's own reference). Each in-flight request
+// calls Acquire/Release. When the count drops to zero, Close fires
+// exactly once via sync.Once.
+type refCountedClient struct {
+	client Client
+	refs   atomic.Int64
+	once   sync.Once
+}
+
+func newRefCountedClient(client Client) *refCountedClient {
+	rc := &refCountedClient{client: client}
+	rc.refs.Store(1)
+	return rc
+}
+
+// Acquire increments the reference count. Must be called inside pc.mu.RLock().
+func (rc *refCountedClient) Acquire() {
+	rc.refs.Add(1)
+}
+
+// Release decrements the reference count. When it reaches zero, the
+// underlying client is closed exactly once. Close errors are logged
+// because there is no caller to return them to.
+func (rc *refCountedClient) Release() {
+	if rc.refs.Add(-1) == 0 {
+		rc.once.Do(func() {
+			if err := rc.client.Close(); err != nil {
+				slog.Warn("ref-counted client close error", "error", err)
+			}
+		})
+	}
+}
+
 // PooledClient wraps a Client with auth profile rotation.
 type PooledClient struct {
 	pool       *AuthPool
 	clientFunc func(profile AuthProfile) (Client, error)
-	client     Client
+	rc         *refCountedClient
 	activeName string // Name of the profile currently active
 	cfg        Config
 	mu         sync.RWMutex
@@ -238,7 +273,7 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 	return &PooledClient{
 		pool:       pool,
 		clientFunc: clientFunc,
-		client:     client,
+		rc:         newRefCountedClient(client),
 		activeName: profile.Name,
 		cfg:        cfg,
 	}, nil
@@ -254,11 +289,13 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
 		pc.mu.RLock()
-		client := pc.client
+		rc := pc.rc
 		usedName := pc.activeName
+		rc.Acquire()
 		pc.mu.RUnlock()
 
-		resp, err := client.Complete(ctx, req)
+		resp, err := rc.client.Complete(ctx, req)
+		rc.Release()
 		if err == nil {
 			pc.pool.MarkSuccessByName(usedName)
 			return resp, nil
@@ -326,14 +363,15 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 		var lastErr error
 		for attempt := 0; attempt < maxRetries; attempt++ {
 			pc.mu.RLock()
-			client := pc.client
+			rc := pc.rc
 			usedName := pc.activeName
+			rc.Acquire()
 			pc.mu.RUnlock()
 
 			firstEvent := true
 			retryable := false
 
-			for event, err := range client.Stream(ctx, req) {
+			for event, err := range rc.client.Stream(ctx, req) {
 				if err != nil {
 					if firstEvent && (IsRetryable(err) || IsAuthError(err)) {
 						// Connection failed before any data — safe to retry
@@ -345,15 +383,19 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 					if IsRetryable(err) || IsAuthError(err) {
 						pc.pool.MarkFailedByName(usedName, err)
 					}
+					rc.Release()
 					yield(StreamEvent{}, err)
 					return
 				}
 				firstEvent = false
 				if !yield(event, nil) {
 					pc.pool.MarkSuccessByName(usedName)
+					rc.Release()
 					return
 				}
 			}
+
+			rc.Release()
 
 			if !retryable {
 				// Stream completed normally
@@ -401,18 +443,15 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 	}
 }
 
-// RH/bds421 - special care here!!
 // rotateClient creates a new client with the next available profile.
 //
-// Uses !double-checked locking! to prevent thundering herd: rotateMu serializes
+// Uses double-checked locking to prevent thundering herd: rotateMu serializes
 // rotation attempts, and the name check inside ensures only one goroutine
 // actually rotates while others short-circuit to use the new client.
 //
-// The old client is NOT closed here. Closing it would race with in-flight
-// requests that grabbed a reference before rotation. Current adapters'
-// Close() is a no-op, so this is safe. If adapters ever need real cleanup
-// (persistent connections, buffers), implement proper reference counting.
-// For now, orphaned clients are garbage collected.
+// The old client's reference is released after the swap. If in-flight
+// requests still hold references, the actual Close is deferred until
+// the last one finishes (via refCountedClient).
 func (pc *PooledClient) rotateClient(failedName string) error {
 	pc.rotateMu.Lock()
 	defer pc.rotateMu.Unlock()
@@ -439,9 +478,12 @@ func (pc *PooledClient) rotateClient(failedName string) error {
 	}
 
 	pc.mu.Lock()
-	pc.client = newClient
+	old := pc.rc
+	pc.rc = newRefCountedClient(newClient)
 	pc.activeName = profile.Name
 	pc.mu.Unlock()
+
+	old.Release() // outside lock — avoids holding mu during potential I/O
 
 	return nil
 }
@@ -450,22 +492,27 @@ func (pc *PooledClient) rotateClient(failedName string) error {
 func (pc *PooledClient) Provider() string {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
-	return pc.client.Provider()
+	return pc.rc.client.Provider()
 }
 
 // Model implements Client.Model.
 func (pc *PooledClient) Model() string {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
-	return pc.client.Model()
+	return pc.rc.client.Model()
 }
 
 // Close implements Client.Close.
+// Returns nil immediately; actual client Close may fire later when the
+// last in-flight request finishes. Calling Complete/Stream after Close
+// is a programming error (matches Go conventions: sql.DB, http.Server).
 func (pc *PooledClient) Close() error {
 	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	if pc.client != nil {
-		return pc.client.Close()
+	rc := pc.rc
+	pc.rc = nil
+	pc.mu.Unlock()
+	if rc != nil {
+		rc.Release()
 	}
 	return nil
 }

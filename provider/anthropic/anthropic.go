@@ -53,11 +53,9 @@ func New(cfg llm.Config) (*Client, error) {
 	}
 
 	return &Client{
-		config:   cfg,
-		endpoint: base + "/messages",
-		httpClient: &http.Client{
-			Timeout: cfg.Timeout,
-		},
+		config:       cfg,
+		endpoint:     base + "/messages",
+		httpClient:   llm.SafeHTTPClient(cfg.Timeout),
 		providerName: providerName,
 	}, nil
 }
@@ -176,7 +174,7 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", "anthropic", "error", readErr)
 		}
@@ -184,7 +182,7 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 	}
 
 	var apiResp anthropicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, llm.MaxResponseBodyBytes)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -228,7 +226,7 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", "anthropic", "error", readErr)
 		}
@@ -318,11 +316,18 @@ func (c *Client) buildRequest(req llm.Request, stream bool) anthropicRequest {
 		case llm.ThinkingHigh:
 			budget = 16384
 		}
+		if req.ThinkingBudget > 0 {
+			budget = req.ThinkingBudget
+		}
 		apiReq.Thinking = &anthropicThinking{
 			Type:         "enabled",
 			BudgetTokens: budget,
 		}
-		// Thinking requires temperature = 1
+		// Anthropic requires temperature = 1.0 when extended thinking is enabled
+		if req.Temperature != 1.0 {
+			slog.Debug("overriding temperature to 1.0 (required by Anthropic extended thinking)",
+				"requested_temperature", req.Temperature)
+		}
 		apiReq.Temperature = 1.0
 	}
 
@@ -358,14 +363,14 @@ func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(nil, 1024*1024) // 1MB max for long streaming responses
+	scanner.Buffer(nil, llm.MaxSSELineBytes)
 
 	var currentToolCall *llm.ToolCall
 	var inputBuffer strings.Builder
-	// Token counts initialize to -1 ("not reported"). If the stream ends before
+	// Token counts initialize to "not reported". If the stream ends before
 	// message_start/message_delta events, callers can distinguish "not reported"
-	// (-1) from "zero tokens" (0).
-	var inputTokens = -1
+	// from "zero tokens" (0).
+	var inputTokens = llm.TokensNotReported
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -409,7 +414,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			slog.Warn("failed to parse SSE event", "provider", "anthropic", "error", err)
+			if !yield(llm.StreamEvent{}, fmt.Errorf("malformed SSE event from anthropic: %w", err)) {
+				return
+			}
 			continue
 		}
 
@@ -434,6 +441,12 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					return
 				}
 			case "input_json_delta":
+				if inputBuffer.Len()+len(event.Delta.PartialJSON) > llm.MaxToolInputBytes {
+					if !yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes)) {
+						return
+					}
+					continue
+				}
 				inputBuffer.WriteString(event.Delta.PartialJSON)
 			}
 

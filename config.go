@@ -1,6 +1,66 @@
 package llm
 
-import "time"
+import (
+	"net/http"
+	"net/url"
+	"time"
+)
+
+const (
+	// MaxErrorBodyBytes caps the number of bytes read from an error response body.
+	// Prevents OOM from malicious or broken endpoints returning enormous error messages.
+	MaxErrorBodyBytes = 1 << 20 // 1 MB
+
+	// MaxSSELineBytes caps the per-line buffer for SSE stream parsing.
+	// Limits per-stream memory usage from malicious endpoints.
+	MaxSSELineBytes = 256 * 1024 // 256 KB
+
+	// MaxResponseBodyBytes caps the number of bytes read from a success response
+	// body before JSON decoding. Prevents OOM from malicious endpoints returning
+	// enormous JSON payloads. 32 MB is generous for any real LLM response.
+	MaxResponseBodyBytes = 32 << 20 // 32 MB
+
+	// MaxToolInputBytes caps accumulated tool input JSON during streaming.
+	// Prevents OOM from malicious endpoints sending thousands of input_json_delta
+	// or argument chunks that accumulate without bound.
+	MaxToolInputBytes = 1 << 20 // 1 MB
+)
+
+// sensitiveHeaders are stripped on cross-domain redirects to prevent key leakage.
+var sensitiveHeaders = []string{
+	"Authorization",
+	"x-api-key",
+	"x-goog-api-key",
+}
+
+// SafeHTTPClient returns an http.Client with the given timeout that strips
+// sensitive authentication headers on cross-domain redirects. Without this,
+// a redirect to a different host leaks API keys (especially custom headers
+// like x-api-key that Go's stdlib doesn't recognize as auth headers).
+func SafeHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return http.ErrUseLastResponse
+			}
+			if len(via) > 0 {
+				prev := via[len(via)-1]
+				if !sameHost(prev.URL, req.URL) {
+					for _, h := range sensitiveHeaders {
+						req.Header.Del(h)
+					}
+				}
+			}
+			return nil
+		},
+	}
+}
+
+// sameHost returns true if two URLs have the same host (including port).
+func sameHost(a, b *url.URL) bool {
+	return a.Host == b.Host
+}
 
 // Config holds LLM client configuration. Self-contained replacement for
 // temporal-agent's config.LLMConfig, designed for direct use by all services.

@@ -3,7 +3,10 @@ package llm
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
+	"syscall"
 )
 
 // APIError represents a structured error from an LLM provider API.
@@ -60,8 +63,22 @@ func NewContextLengthError(provider, message string) *APIError {
 	}
 }
 
+// maxErrorMessageLen caps the length of error messages stored in APIError.Message.
+// Without this, a malicious or broken endpoint could return a multi-GB error body
+// that propagates through error chains and log systems.
+const maxErrorMessageLen = 4096
+
+// truncateErrorBody caps s at maxErrorMessageLen, appending a truncation marker if cut.
+func truncateErrorBody(s string) string {
+	if len(s) <= maxErrorMessageLen {
+		return s
+	}
+	return s[:maxErrorMessageLen] + "... [truncated]"
+}
+
 // NewAPIErrorFromStatus constructs the appropriate APIError from an HTTP status code and body.
 func NewAPIErrorFromStatus(provider string, status int, body string) *APIError {
+	body = truncateErrorBody(body)
 	switch {
 	case status == 429:
 		return NewRateLimitError(provider, body)
@@ -111,6 +128,19 @@ func IsRetryable(err error) bool {
 		return apiErr.Retryable
 	}
 
+	// Type-based: properly-typed stdlib network errors
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+
+	// String fallback: errors where type info was lost (fmt.Errorf without %w)
 	errMsg := strings.ToLower(err.Error())
 	return strings.Contains(errMsg, "request failed") ||
 		strings.Contains(errMsg, "connection refused") ||
@@ -142,8 +172,11 @@ func IsContextLength(err error) bool {
 func isContextLengthMessage(body string) bool {
 	lower := strings.ToLower(body)
 	return strings.Contains(lower, "context length") ||
+		strings.Contains(lower, "context_length") ||
 		strings.Contains(lower, "token limit") ||
 		strings.Contains(lower, "too many tokens") ||
 		strings.Contains(lower, "maximum context") ||
-		strings.Contains(lower, "prompt is too long")
+		strings.Contains(lower, "prompt is too long") ||
+		strings.Contains(lower, "input too long") ||
+		strings.Contains(lower, "request too large")
 }

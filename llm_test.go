@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
+	"net"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -521,6 +524,9 @@ func TestAPIErrorFromStatus(t *testing.T) {
 		{401, "invalid api key", false, true, false},
 		{403, "forbidden", false, true, false},
 		{400, "maximum context length exceeded", false, false, true},
+		{400, "context_length_exceeded: max 8192 tokens", false, false, true},
+		{400, "input too long for model", false, false, true},
+		{400, "request too large", false, false, true},
 		{400, "bad request", false, false, false},
 		{500, "internal server error", true, false, false},
 	}
@@ -1837,6 +1843,52 @@ func TestIsRetryableNetworkErrors(t *testing.T) {
 				t.Errorf("IsRetryable(%q) = %v, want %v", tc.errMsg, got, tc.expected)
 			}
 		})
+	}
+}
+
+// TestIsRetryableTypedErrors verifies type-based network error detection in IsRetryable.
+func TestIsRetryableTypedErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"net.DNSError", &net.DNSError{Err: "no such host", Name: "example.com"}, true},
+		{"io.EOF", io.EOF, true},
+		{"wrapped io.EOF", fmt.Errorf("stream failed: %w", io.EOF), true},
+		{"io.ErrUnexpectedEOF", io.ErrUnexpectedEOF, true},
+		{"wrapped syscall.ECONNRESET", fmt.Errorf("write: %w", syscall.ECONNRESET), true},
+		{"wrapped syscall.ECONNREFUSED", fmt.Errorf("dial: %w", syscall.ECONNREFUSED), true},
+		{"non-retryable plain error", errors.New("permission denied"), false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := llm.IsRetryable(tc.err)
+			if got != tc.expected {
+				t.Errorf("IsRetryable(%v) = %v, want %v", tc.err, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestTokensNotReported verifies the sentinel constant value and StreamEvent usage.
+func TestTokensNotReported(t *testing.T) {
+	if llm.TokensNotReported != -1 {
+		t.Errorf("TokensNotReported = %d, want -1", llm.TokensNotReported)
+	}
+
+	// Verify sentinel is distinguishable from zero in StreamEvent
+	event := llm.StreamEvent{
+		Type:         llm.EventDone,
+		InputTokens:  llm.TokensNotReported,
+		OutputTokens: llm.TokensNotReported,
+	}
+	if event.InputTokens == 0 {
+		t.Error("TokensNotReported should not equal 0")
+	}
+	if event.OutputTokens == 0 {
+		t.Error("TokensNotReported should not equal 0")
 	}
 }
 
