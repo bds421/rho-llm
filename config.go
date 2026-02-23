@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"time"
@@ -119,4 +120,16 @@ func DefaultConfig() Config {
 		Timeout:       120 * time.Second,
 		AuthHeader:    "Bearer",
 	}
+}
+
+// MarshalJSON implements json.Marshaler. Redacts APIKey to prevent accidental
+// secret leakage when Config is serialized for logging or debugging.
+// Use the APIKey field directly when you need the actual value.
+func (c Config) MarshalJSON() ([]byte, error) {
+	type configAlias Config // break recursion
+	tmp := configAlias(c)
+	if tmp.APIKey != "" {
+		tmp.APIKey = "REDACTED"
+	}
+	return json.Marshal(tmp)
 }

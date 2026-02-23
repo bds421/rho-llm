@@ -6,6 +6,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"iter"
 	"time"
 )
@@ -294,4 +295,15 @@ func (p *AuthProfile) MarkHealthy() {
 	p.IsHealthy = true
 	p.LastError = ""
 	p.Cooldown = time.Time{}
+}
+
+// MarshalJSON implements json.Marshaler. Redacts APIKey to prevent accidental
+// secret leakage when AuthProfile is serialized for logging or debugging.
+func (p AuthProfile) MarshalJSON() ([]byte, error) {
+	type profileAlias AuthProfile // break recursion
+	tmp := profileAlias(p)
+	if tmp.APIKey != "" {
+		tmp.APIKey = "REDACTED"
+	}
+	return json.Marshal(tmp)
 }

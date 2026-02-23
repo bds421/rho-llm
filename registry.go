@@ -230,11 +230,11 @@ var modelAliases = map[string]string{
 	"ministral":      "ministral-3-8b-25-12",
 
 	// Ollama aliases
-	"deepseek":  "deepseek-r1:14b",
-	"mistral":   "mistral-small3.2:24b",
-	"qwen":      "qwen3:8b",
-	"qwen-code": "qwen3-coder:30b",
-	"gemma":     "gemma3:12b",
+	"deepseek":       "deepseek-r1:14b",
+	"mistral-local":  "mistral-small3.2:24b",
+	"qwen":           "qwen3:8b",
+	"qwen-code":      "qwen3-coder:30b",
+	"gemma":          "gemma3:12b",
 
 	// OpenAI aliases
 	"gpt":       "gpt-5.2",

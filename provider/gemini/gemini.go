@@ -174,6 +174,11 @@ type geminiRequest struct {
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 	Tools             []geminiTool            `json:"tools,omitempty"`
+	ThinkingConfig    *geminiThinkingConfig   `json:"thinkingConfig,omitempty"`
+}
+
+type geminiThinkingConfig struct {
+	ThinkingBudget int `json:"thinkingBudget,omitempty"`
 }
 
 type geminiContent struct {
@@ -309,6 +314,34 @@ func (c *Client) buildRequest(req llm.Request) geminiRequest {
 
 		if len(content.Parts) > 0 {
 			apiReq.Contents = append(apiReq.Contents, content)
+		}
+	}
+
+	// Configure stop sequences
+	if len(req.StopSequences) > 0 {
+		apiReq.GenerationConfig.StopSequences = req.StopSequences
+	}
+
+	// Configure thinking budget
+	thinkingLevel := req.ThinkingLevel
+	if thinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
+		thinkingLevel = c.config.ThinkingLevel
+	}
+	if thinkingLevel != llm.ThinkingNone {
+		budget := 4096
+		switch thinkingLevel {
+		case llm.ThinkingLow:
+			budget = 4096
+		case llm.ThinkingMedium:
+			budget = 16384
+		case llm.ThinkingHigh:
+			budget = 65536
+		}
+		if req.ThinkingBudget > 0 {
+			budget = req.ThinkingBudget
+		}
+		apiReq.ThinkingConfig = &geminiThinkingConfig{
+			ThinkingBudget: budget,
 		}
 	}
 

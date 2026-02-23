@@ -178,6 +178,7 @@ type openaiRequest struct {
 	Stream        bool                 `json:"stream,omitempty"`
 	StreamOptions *openaiStreamOptions `json:"stream_options,omitempty"`
 	Tools         []openaiTool         `json:"tools,omitempty"`
+	Stop          []string             `json:"stop,omitempty"`
 }
 
 type openaiStreamOptions struct {
@@ -345,20 +346,31 @@ func (c *Client) buildRequest(req llm.Request, stream bool) openaiRequest {
 		apiReq.Messages = append(apiReq.Messages, oaiMsg)
 	}
 
-	// Convert tools
-	for _, tool := range req.Tools {
-		apiReq.Tools = append(apiReq.Tools, openaiTool{
-			Type: "function",
-			Function: struct {
-				Name        string                 `json:"name"`
-				Description string                 `json:"description"`
-				Parameters  map[string]interface{} `json:"parameters"`
-			}{
-				Name:        tool.Name,
-				Description: tool.Description,
-				Parameters:  tool.InputSchema,
-			},
-		})
+	// Configure stop sequences
+	if len(req.StopSequences) > 0 {
+		apiReq.Stop = req.StopSequences
+	}
+
+	// Convert tools (skip if model doesn't support tool calling)
+	if len(req.Tools) > 0 {
+		model := apiReq.Model
+		info, _ := llm.GetModelInfo(model)
+		if !info.NoToolSupport {
+			for _, tool := range req.Tools {
+				apiReq.Tools = append(apiReq.Tools, openaiTool{
+					Type: "function",
+					Function: struct {
+						Name        string                 `json:"name"`
+						Description string                 `json:"description"`
+						Parameters  map[string]interface{} `json:"parameters"`
+					}{
+						Name:        tool.Name,
+						Description: tool.Description,
+						Parameters:  tool.InputSchema,
+					},
+				})
+			}
+		}
 	}
 
 	return apiReq

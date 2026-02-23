@@ -93,14 +93,15 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 
 // anthropicRequest is the Anthropic API request format.
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	Messages    []anthropicMessage `json:"messages"`
-	System      string             `json:"system,omitempty"`
-	MaxTokens   int                `json:"max_tokens"`
-	Temperature float64            `json:"temperature"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
-	Stream      bool               `json:"stream,omitempty"`
-	Thinking    *anthropicThinking `json:"thinking,omitempty"`
+	Model         string             `json:"model"`
+	Messages      []anthropicMessage `json:"messages"`
+	System        string             `json:"system,omitempty"`
+	MaxTokens     int                `json:"max_tokens"`
+	Temperature   float64            `json:"temperature"`
+	Tools         []anthropicTool    `json:"tools,omitempty"`
+	Stream        bool               `json:"stream,omitempty"`
+	Thinking      *anthropicThinking `json:"thinking,omitempty"`
+	StopSequences []string           `json:"stop_sequences,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -162,7 +163,9 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 	httpReq.Header.Set("x-api-key", c.config.APIKey)
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 
-	// Enable extended thinking if supported
+	// Extended thinking requires a beta feature flag. This header will become
+	// unnecessary when Anthropic promotes interleaved thinking to GA.
+	// Track: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
 	if req.ThinkingLevel != llm.ThinkingNone {
 		httpReq.Header.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
 	}
@@ -214,6 +217,7 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
+	// Extended thinking requires a beta feature flag (see doRequest for details).
 	if req.ThinkingLevel != llm.ThinkingNone {
 		httpReq.Header.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
 	}
@@ -305,16 +309,21 @@ func (c *Client) buildRequest(req llm.Request, stream bool) anthropicRequest {
 		})
 	}
 
+	// Configure stop sequences
+	if len(req.StopSequences) > 0 {
+		apiReq.StopSequences = req.StopSequences
+	}
+
 	// Configure thinking
 	if req.ThinkingLevel != llm.ThinkingNone {
-		budget := 1024 // Default
+		budget := 4096 // Default
 		switch req.ThinkingLevel {
 		case llm.ThinkingLow:
-			budget = 1024
-		case llm.ThinkingMedium:
 			budget = 4096
-		case llm.ThinkingHigh:
+		case llm.ThinkingMedium:
 			budget = 16384
+		case llm.ThinkingHigh:
+			budget = 65536
 		}
 		if req.ThinkingBudget > 0 {
 			budget = req.ThinkingBudget

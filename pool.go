@@ -491,15 +491,23 @@ func (pc *PooledClient) rotateClient(failedName string) error {
 // Provider implements Client.Provider.
 func (pc *PooledClient) Provider() string {
 	pc.mu.RLock()
-	defer pc.mu.RUnlock()
-	return pc.rc.client.Provider()
+	rc := pc.rc
+	pc.mu.RUnlock()
+	if rc == nil {
+		return pc.cfg.Provider
+	}
+	return rc.client.Provider()
 }
 
 // Model implements Client.Model.
 func (pc *PooledClient) Model() string {
 	pc.mu.RLock()
-	defer pc.mu.RUnlock()
-	return pc.rc.client.Model()
+	rc := pc.rc
+	pc.mu.RUnlock()
+	if rc == nil {
+		return pc.cfg.Model
+	}
+	return rc.client.Model()
 }
 
 // Close implements Client.Close.
