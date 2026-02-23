@@ -50,19 +50,12 @@ func PresetFor(provider string) (ProviderPreset, bool) {
 }
 
 // ResolveProtocol determines the wire protocol for a Config.
-// Priority: explicit BaseURL with no matching preset -> openai_compat,
-// then preset lookup, then fallback to openai_compat.
+// Known providers use their preset protocol; unknown providers default
+// to openai_compat (the most common wire format).
 func ResolveProtocol(cfg Config) string {
 	if preset, ok := presets[cfg.Provider]; ok {
 		return preset.Protocol
 	}
-
-	// Unknown provider with a custom BaseURL -> assume OpenAI-compatible
-	if cfg.BaseURL != "" {
-		return "openai_compat"
-	}
-
-	// Fallback
 	return "openai_compat"
 }
 

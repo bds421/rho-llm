@@ -401,6 +401,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	scanner.Buffer(nil, llm.MaxSSELineBytes)
 
 	callIndex := 0
+	doneEmitted := false
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -448,6 +449,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 
 			if candidate.FinishReason != "" {
+				doneEmitted = true
 				if !yield(llm.StreamEvent{
 					Type:         llm.EventDone,
 					StopReason:   normalizeStopReason(candidate.FinishReason),
@@ -460,7 +462,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	// Only report scanner errors if the stream did not already complete
+	// successfully. A trailing read error after EventDone is noise.
+	if err := scanner.Err(); err != nil && !doneEmitted {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
 	}
 }

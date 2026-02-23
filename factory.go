@@ -8,6 +8,11 @@ import (
 // NewClient creates an LLM client based on the provider configuration.
 // If cfg.APIKey is set, the client gets automatic retry with exponential backoff
 // on transient errors (429, 503, 502). Use NewClientWithKeys for multi-key rotation.
+//
+// Note: when APIKey is empty (local providers like Ollama, vLLM, LM Studio),
+// the returned client has no retry/backoff protection. For retry on local
+// providers, pass the key explicitly via NewClientWithKeys (even as a
+// single-element list with an empty string).
 func NewClient(cfg Config) (Client, error) {
 	if cfg.APIKey != "" {
 		return NewClientWithKeys(cfg, []string{cfg.APIKey})

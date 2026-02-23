@@ -304,7 +304,9 @@ func (p *AuthProfile) MarkUsed() {
 
 // MarkFailed marks the profile as failed with cooldown.
 func (p *AuthProfile) MarkFailed(err error, cooldownDuration time.Duration) {
-	p.LastError = err.Error()
+	if err != nil {
+		p.LastError = err.Error()
+	}
 	p.Cooldown = time.Now().Add(cooldownDuration)
 }
 
