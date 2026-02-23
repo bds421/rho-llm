@@ -40,7 +40,7 @@ func Backoff(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
 	// Jitter: 75%-125% of calculated delay
 	quarter := delay / 4
 	if quarter > 0 {
-		jitter := time.Duration(rand.Int64N(int64(2*quarter))) - quarter
+		jitter := time.Duration(rand.Int64N(int64(2*quarter))) - quarter // #nosec G404 -- backoff jitter does not need crypto randomness
 		delay += jitter
 	}
 

@@ -2,7 +2,7 @@
 
 Multi-provider LLM client for Go. Streaming, tool use, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
 
-**Requires Go 1.23+** (`go 1.23.4` in `go.mod`).
+**Requires Go 1.26+** (`go 1.26.0` in `go.mod`).
 
 ## Install
 

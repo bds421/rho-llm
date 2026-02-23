@@ -657,3 +657,151 @@ func TestMalformedSSEEventYieldsError(t *testing.T) {
 		}
 	})
 }
+
+// =============================================================================
+// ROUND 3: JSON Redaction & Scheme Validation
+// =============================================================================
+
+// TestConfigMarshalJSONRedactsAPIKey verifies that Config.MarshalJSON replaces
+// the APIKey with "REDACTED" so secrets don't leak into logs or debug output.
+func TestConfigMarshalJSONRedactsAPIKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		apiKey   string
+		wantKey  string
+	}{
+		{"non-empty key is redacted", "sk-secret-12345", "REDACTED"},
+		{"empty key stays empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := llm.DefaultConfig()
+			cfg.APIKey = tt.apiKey
+
+			data, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatalf("Marshal error: %v", err)
+			}
+
+			var decoded map[string]interface{}
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("Unmarshal error: %v", err)
+			}
+
+			got, _ := decoded["api_key"].(string)
+			if got != tt.wantKey {
+				t.Errorf("api_key = %q, want %q", got, tt.wantKey)
+			}
+
+			// The raw JSON must never contain the original secret
+			if tt.apiKey != "" && strings.Contains(string(data), tt.apiKey) {
+				t.Errorf("serialized JSON contains the raw API key")
+			}
+		})
+	}
+}
+
+// TestAuthProfileMarshalJSONRedactsAPIKey verifies that AuthProfile.MarshalJSON
+// replaces the APIKey with "REDACTED".
+func TestAuthProfileMarshalJSONRedactsAPIKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		apiKey  string
+		wantKey string
+	}{
+		{"non-empty key is redacted", "sk-auth-profile-secret", "REDACTED"},
+		{"empty key stays empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profile := llm.AuthProfile{
+				Name:      "test-profile",
+				APIKey:    tt.apiKey,
+				IsHealthy: true,
+			}
+
+			data, err := json.Marshal(profile)
+			if err != nil {
+				t.Fatalf("Marshal error: %v", err)
+			}
+
+			var decoded map[string]interface{}
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("Unmarshal error: %v", err)
+			}
+
+			got, _ := decoded["api_key"].(string)
+			if got != tt.wantKey {
+				t.Errorf("api_key = %q, want %q", got, tt.wantKey)
+			}
+
+			if tt.apiKey != "" && strings.Contains(string(data), tt.apiKey) {
+				t.Errorf("serialized JSON contains the raw API key")
+			}
+		})
+	}
+}
+
+// TestBaseURLSchemeValidation verifies that the library produces clear errors
+// for non-HTTP(S) URL schemes. This is a defense-in-depth check — the library
+// is developer-facing, but catching protocol misuse (file://, javascript:) is
+// cheap and prevents accidental SSRF-adjacent mistakes.
+//
+// Uses the openaicompat adapter directly (not llm.NewClient) to avoid the
+// PooledClient retry loop, which would add ~30s per subtest in cooldown waits.
+func TestBaseURLSchemeValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseURL   string
+		wantError bool
+	}{
+		{"https scheme works", "https://api.example.com", false},
+		{"http scheme works", "http://localhost:8080", false},
+		{"file scheme rejected", "file:///etc/passwd", true},
+		{"javascript scheme rejected", "javascript:alert(1)", true},
+		{"ftp scheme rejected", "ftp://example.com", true},
+		{"data scheme rejected", "data:text/html,<h1>hi</h1>", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := llm.Config{
+				Provider:  "openai",
+				Model:     "gpt-4",
+				APIKey:    "test-key",
+				BaseURL:   tt.baseURL,
+				MaxTokens: 100,
+				Timeout:   2 * time.Second,
+			}
+
+			client, err := openaicompat.New(cfg)
+			if err != nil {
+				// Construction error is fine for invalid schemes
+				if tt.wantError {
+					return
+				}
+				t.Fatalf("New() unexpected error: %v", err)
+			}
+
+			// Try a request — invalid schemes should fail at request creation
+			_, err = client.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			})
+
+			if tt.wantError && err == nil {
+				t.Error("expected error for invalid URL scheme, got nil")
+			}
+			if !tt.wantError && err != nil {
+				// Connection errors are expected (no real server) — that's fine.
+				// We only care that http/https don't produce *scheme* errors.
+				errStr := err.Error()
+				if strings.Contains(errStr, "unsupported protocol") ||
+					strings.Contains(errStr, "invalid scheme") {
+					t.Errorf("unexpected scheme error for valid URL: %v", err)
+				}
+			}
+		})
+	}
+}

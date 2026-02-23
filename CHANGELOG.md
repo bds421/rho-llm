@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-02-23
+
+### Security
+
+- **TLS 1.2+ minimum enforced** — `SafeHTTPClient` now sets `TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}` on the HTTP transport. Defense-in-depth against TLS downgrade attacks, explicit rather than relying on Go runtime defaults.
+
+- **`gosec` static analysis added to CI** — New `security` Makefile target runs `gosec -exclude=G117,G704 ./...`. G117 (secret field pattern) and G704 (SSRF taint) are excluded with documented justifications — both are inherent to an HTTP client library with `MarshalJSON` redaction. G404 (weak RNG) suppressed via `#nosec` on backoff jitter where crypto randomness is unnecessary.
+
+- **`govulncheck` added to CI** — New `vulncheck` Makefile target runs `govulncheck ./...`. Both `security` and `vulncheck` targets are now part of `make ci`.
+
+- **Config JSON redaction tests** — `TestConfigMarshalJSONRedactsAPIKey` and `TestAuthProfileMarshalJSONRedactsAPIKey` verify that `MarshalJSON` replaces API keys with "REDACTED" and that raw keys never appear in serialized output.
+
+- **BaseURL scheme validation test** — `TestBaseURLSchemeValidation` verifies that `http://` and `https://` schemes work while `file://`, `javascript:`, `ftp://`, and `data:` schemes produce clear errors. Defense-in-depth against SSRF-adjacent misuse.
+
+### Changed
+
+- **Go 1.26 minimum** — `go.mod` upgraded from `go 1.23.4` to `go 1.26.0`. Resolves 15 known stdlib CVEs in crypto/tls, crypto/x509, net/http, and related packages that affected Go 1.23.x.
+
+### Fixed
+
+- **`fmt.Errorf` non-constant format string** — `llm_test.go:1840` used `fmt.Errorf(tc.errMsg)` which Go 1.26's stricter vet rejects. Changed to `fmt.Errorf("%s", tc.errMsg)`.
+
 ## [0.1.10] - 2026-02-23
 
 ### Added

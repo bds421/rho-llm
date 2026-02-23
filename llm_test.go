@@ -1837,7 +1837,7 @@ func TestIsRetryableNetworkErrors(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.errMsg, func(t *testing.T) {
-			err := fmt.Errorf(tc.errMsg)
+			err := fmt.Errorf("%s", tc.errMsg)
 			got := llm.IsRetryable(err)
 			if got != tc.expected {
 				t.Errorf("IsRetryable(%q) = %v, want %v", tc.errMsg, got, tc.expected)

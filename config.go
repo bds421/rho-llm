@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -41,6 +42,9 @@ var sensitiveHeaders = []string{
 func SafeHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return http.ErrUseLastResponse
