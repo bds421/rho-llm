@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Temperature override logging** — Anthropic adapter now emits a `slog.Debug` log when extended thinking forces `temperature = 1.0`, including the originally requested temperature. Previously silent.
 
+### Fixed
+
+- **Documentation: thinking budget values** — README and ARCHITECTURE.md listed stale ThinkingLevel budgets (Low→1024, Medium→4096, High→16384). Corrected to match code: Low→4096, Medium→16384, High→65536.
+- **Documentation: Gemini auth method** — ARCHITECTURE.md still described Gemini auth as `?key=` query parameter. Corrected to `x-goog-api-key` header (changed in v0.1.9).
+- **Documentation: Ollama `mistral` alias** — README listed `mistral` as an Ollama alias but the actual alias is `mistral-local` (avoids collision with the Mistral provider name).
+
 ## [0.1.9] - 2026-02-22
 
 ### Security

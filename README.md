@@ -167,7 +167,7 @@ You can override the default token budget for a specific request using `Thinking
 req := llm.Request{
     Messages:       messages,
     ThinkingLevel:  llm.ThinkingMedium,
-    ThinkingBudget: 8192, // overrides ThinkingMedium's default of 4096
+    ThinkingBudget: 8192, // overrides ThinkingMedium's default of 16384
 }
 ```
 
@@ -370,7 +370,7 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | Alias | Resolves to |
 |-------|-------------|
 | `deepseek` | `deepseek-r1:14b` |
-| `mistral` | `mistral-small3.2:24b` |
+| `mistral-local` | `mistral-small3.2:24b` |
 | `qwen` | `qwen3:8b` |
 | `qwen-code` | `qwen3-coder:30b` |
 | `gemma` | `gemma3:12b` |

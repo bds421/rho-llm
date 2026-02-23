@@ -164,7 +164,7 @@ Three wire protocols are supported:
 | Protocol | Adapters | Notes |
 |---|---|---|
 | `anthropic` | `AnthropicClient` | Native SSE streaming, `x-api-key` header |
-| `gemini` | `GeminiClient` | Native REST + SSE, API key as query param |
+| `gemini` | `GeminiClient` | Native REST + SSE, `x-goog-api-key` header |
 | `openai_compat` | `OpenAICompatClient` | Standard `/chat/completions` with SSE streaming |
 
 Protocol selection happens in `factory.newSingleClient()` via `ResolveProtocol(cfg)`:
@@ -428,13 +428,13 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Endpoint: `https://api.anthropic.com/v1/messages`
 - Auth: `x-api-key: <key>` + `anthropic-version: 2023-06-01`
 - Streaming: SSE with `event: content_block_delta` / `event: message_delta`
-- Extended thinking: enabled via `thinking: {type: enabled, budget_tokens: N}` — budget mapped from ThinkingLevel (`ThinkingNone`→disabled, `ThinkingLow`→1024, `ThinkingMedium`→4096, `ThinkingHigh`→16384)
+- Extended thinking: enabled via `thinking: {type: enabled, budget_tokens: N}` — budget mapped from ThinkingLevel (`ThinkingNone`→disabled, `ThinkingLow`→4096, `ThinkingMedium`→16384, `ThinkingHigh`→65536)
 - Tool use: native anthropic format with `type: tool_use` content blocks
 
 ### Gemini (`provider/gemini/`)
 
 - Endpoint: `https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent`
-- Auth: `?key=<apikey>` query parameter
+- Auth: `x-goog-api-key` header (moved from URL query parameter in v0.1.9 to prevent key leakage)
 - Streaming: SSE with JSON chunks
 - `ThoughtSignature`: when a model has `ThoughtSignature: true` in the registry, function call responses include a `thought_signature` field that must be preserved and echoed in subsequent `tool_result` parts
 - System prompt: mapped to `systemInstruction.parts[0].text`
