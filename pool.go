@@ -185,6 +185,21 @@ func (p *AuthPool) Count() int {
 	return len(p.profiles)
 }
 
+// HealthyCount returns the number of profiles that have not been
+// permanently disabled (e.g. by auth errors). Profiles in temporary
+// cooldown are still counted as healthy.
+func (p *AuthPool) HealthyCount() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	n := 0
+	for _, prof := range p.profiles {
+		if prof.IsHealthy {
+			n++
+		}
+	}
+	return n
+}
+
 // Status returns a status string for all profiles.
 func (p *AuthPool) Status() string {
 	p.mu.RLock()
@@ -284,7 +299,7 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 
 // Complete implements Client.Complete with retry/rotation and exponential backoff.
 func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, error) {
-	maxRetries := pc.pool.Count()
+	maxRetries := pc.pool.HealthyCount()
 	if maxRetries < 3 {
 		maxRetries = 3 // Minimum 3 retries for single-key resilience
 	}
@@ -362,7 +377,7 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 // mid-stream errors are passed through immediately.
 func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
-		maxRetries := pc.pool.Count()
+		maxRetries := pc.pool.HealthyCount()
 		if maxRetries < 3 {
 			maxRetries = 3 // Minimum 3 retries for single-key resilience
 		}

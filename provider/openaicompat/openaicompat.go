@@ -570,6 +570,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}, nil) {
 			return
 		}
+	} else if scanner.Err() == nil {
+		// Stream ended cleanly but server never sent a finish_reason —
+		// protocol violation by the provider. Log so operators can investigate.
+		slog.Warn("stream ended without finish_reason", "provider", c.providerName)
 	}
 
 	if err := scanner.Err(); err != nil {

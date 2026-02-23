@@ -55,6 +55,24 @@ const (
 	ThinkingHigh   ThinkingLevel = "high"
 )
 
+// ThinkingBudgetTokens returns the default token budget for a thinking level.
+// If customBudget > 0, it overrides the level default.
+func ThinkingBudgetTokens(level ThinkingLevel, customBudget int) int {
+	if customBudget > 0 {
+		return customBudget
+	}
+	switch level {
+	case ThinkingLow:
+		return 4096
+	case ThinkingMedium:
+		return 16384
+	case ThinkingHigh:
+		return 65536
+	default:
+		return 4096
+	}
+}
+
 // TokensNotReported is the sentinel value for token counts when the provider
 // did not report usage (e.g. stream ended before usage chunk arrived).
 // Callers can distinguish "not reported" (-1) from "zero tokens" (0).

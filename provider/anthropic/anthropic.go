@@ -325,18 +325,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 
 	// Configure thinking
 	if req.ThinkingLevel != llm.ThinkingNone {
-		budget := 4096 // Default
-		switch req.ThinkingLevel {
-		case llm.ThinkingLow:
-			budget = 4096
-		case llm.ThinkingMedium:
-			budget = 16384
-		case llm.ThinkingHigh:
-			budget = 65536
-		}
-		if req.ThinkingBudget > 0 {
-			budget = req.ThinkingBudget
-		}
+		budget := llm.ThinkingBudgetTokens(req.ThinkingLevel, req.ThinkingBudget)
 		apiReq.Thinking = &anthropicThinking{
 			Type:         "enabled",
 			BudgetTokens: budget,

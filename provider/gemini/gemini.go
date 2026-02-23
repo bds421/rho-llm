@@ -334,18 +334,7 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		thinkingLevel = c.config.ThinkingLevel
 	}
 	if thinkingLevel != llm.ThinkingNone {
-		budget := 4096
-		switch thinkingLevel {
-		case llm.ThinkingLow:
-			budget = 4096
-		case llm.ThinkingMedium:
-			budget = 16384
-		case llm.ThinkingHigh:
-			budget = 65536
-		}
-		if req.ThinkingBudget > 0 {
-			budget = req.ThinkingBudget
-		}
+		budget := llm.ThinkingBudgetTokens(thinkingLevel, req.ThinkingBudget)
 		apiReq.ThinkingConfig = &geminiThinkingConfig{
 			ThinkingBudget: budget,
 		}

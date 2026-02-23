@@ -71,7 +71,7 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 
 		start := time.Now()
 		var chunks int
-		var lastInputTokens, lastOutputTokens int
+		lastInputTokens, lastOutputTokens := TokensNotReported, TokensNotReported
 		var lastStopReason string
 		var streamErr error
 

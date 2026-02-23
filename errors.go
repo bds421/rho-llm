@@ -140,13 +140,14 @@ func IsRetryable(err error) bool {
 		return true
 	}
 
-	// String fallback: errors where type info was lost (fmt.Errorf without %w)
+	// String fallback: errors where type info was lost (fmt.Errorf without %w).
+	// Patterns use suffix/phrase matching to avoid false positives on substrings.
 	errMsg := strings.ToLower(err.Error())
 	return strings.Contains(errMsg, "request failed") ||
 		strings.Contains(errMsg, "connection refused") ||
 		strings.Contains(errMsg, "no such host") ||
-		strings.Contains(errMsg, "timeout") ||
-		strings.Contains(errMsg, "eof") ||
+		strings.HasSuffix(errMsg, "timeout") || strings.Contains(errMsg, "timeout ") || strings.Contains(errMsg, "timed out") ||
+		strings.HasSuffix(errMsg, "eof") || strings.Contains(errMsg, "eof:") ||
 		strings.Contains(errMsg, "connection reset")
 }
 
