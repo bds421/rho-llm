@@ -2818,3 +2818,115 @@ func TestNewPooledClientGetAvailableError(t *testing.T) {
 		t.Fatal("NewPooledClient should error with no keys")
 	}
 }
+
+// TestContentImageErrorAnthropic verifies that sending ContentImage to the
+// Anthropic adapter returns an error rather than silently dropping the content.
+func TestContentImageErrorAnthropic(t *testing.T) {
+	cfg := llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key",
+		BaseURL:  "http://localhost:1", // won't be reached
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		Messages: []llm.Message{{
+			Role: llm.RoleUser,
+			Content: []llm.ContentPart{
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+			},
+		}},
+	}
+
+	_, err = client.Complete(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for ContentImage, got nil")
+	}
+	if !strings.Contains(err.Error(), "image content not yet supported") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestContentImageErrorGemini verifies ContentImage error for gemini adapter.
+func TestContentImageErrorGemini(t *testing.T) {
+	cfg := llm.Config{
+		Provider: "gemini",
+		Model:    "gemini-2.5-flash",
+		APIKey:   "test-key",
+		BaseURL:  "http://localhost:1",
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		Messages: []llm.Message{{
+			Role: llm.RoleUser,
+			Content: []llm.ContentPart{
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+			},
+		}},
+	}
+
+	_, err = client.Complete(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for ContentImage, got nil")
+	}
+	if !strings.Contains(err.Error(), "image content not yet supported") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestContentImageErrorOpenAI verifies ContentImage error for openai adapter.
+func TestContentImageErrorOpenAI(t *testing.T) {
+	cfg := llm.Config{
+		Provider: "openai",
+		Model:    "gpt-4",
+		APIKey:   "test-key",
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		Messages: []llm.Message{{
+			Role: llm.RoleUser,
+			Content: []llm.ContentPart{
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+			},
+		}},
+	}
+
+	_, err = client.Complete(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for ContentImage, got nil")
+	}
+	if !strings.Contains(err.Error(), "image content not yet supported") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestNewClientEmptyModel verifies that creating a client without a model
+// returns a clear error.
+func TestNewClientEmptyModel(t *testing.T) {
+	cfg := llm.Config{
+		Provider: "anthropic",
+		APIKey:   "test-key",
+	}
+	_, err := llm.NewClient(cfg)
+	if err == nil {
+		t.Fatal("expected error for empty model, got nil")
+	}
+	if !strings.Contains(err.Error(), "model is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

@@ -17,6 +17,7 @@ func NewClient(cfg Config) (Client, error) {
 
 // NewClientWithKeys creates an LLM client with optional multiple API keys for rotation.
 // Even single-key clients go through PooledClient to get retry/backoff on transient errors.
+// Keys may use the format "apikey|baseurl" to override the base URL per key.
 func NewClientWithKeys(cfg Config, keys []string) (Client, error) {
 	if len(keys) >= 1 {
 		return newPooledClient(cfg, keys)
@@ -30,6 +31,10 @@ func NewClientWithKeys(cfg Config, keys []string) (Client, error) {
 func newSingleClient(cfg Config) (Client, error) {
 	// Resolve model alias to its full identifier
 	cfg.Model = ResolveModelAlias(cfg.Model)
+
+	if cfg.Model == "" {
+		return nil, fmt.Errorf("model is required")
+	}
 
 	protocol := ResolveProtocol(cfg)
 

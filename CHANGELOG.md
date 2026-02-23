@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`Request.ThinkingBudget` field** — Custom token budget that overrides `ThinkingLevel` defaults when > 0. Allows per-request control over thinking budget without changing `ThinkingLevel` presets (e.g., `ThinkingBudget: 8192` with `ThinkingLevel: ThinkingMedium`).
 
+- **`ErrClientClosed` sentinel error** — Returned by `PooledClient.Complete()` and `Stream()` when called after `Close()`. Replaces nil-pointer panic.
+
 - **Type-based network error detection in `IsRetryable`** — Now checks `net.Error`, `io.EOF`, `io.ErrUnexpectedEOF`, `syscall.ECONNRESET`, and `syscall.ECONNREFUSED` via `errors.As`/`errors.Is` before falling back to string matching. Strictly additive — all existing string-based detection preserved for backward compatibility.
 
 - **3 new context-length error patterns** — `isContextLengthMessage` now matches `context_length` (underscore variant, Groq/OpenAI error codes), `input too long` (Gemini), and `request too large` (generic).
@@ -23,9 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **BLOCKER: `t.Context()` broke Go 1.23 compilation** — `security_test.go` used `t.Context()` (Go 1.24+) in all 14 test call sites. Replaced with `context.Background()` to restore Go 1.23 compatibility.
+- **BLOCKER: `ContentImage` silently dropped** — All three adapters silently ignored `ContentImage` parts in messages, causing data loss. Now returns a clear error: `"image content not yet supported by <provider> adapter"`.
+- **Gemini hardcoded default model** — `gemini.New()` silently defaulted to `"gemini-2.0-flash"` when no model was provided, bypassing the factory's `ResolveModelAlias()` and inconsistent with anthropic/openaicompat. Removed; callers must set the model explicitly.
+- **Panic on `Complete`/`Stream` after `Close`** — `PooledClient.Complete()` and `Stream()` would panic with nil pointer dereference if called after `Close()`. Now returns `ErrClientClosed`.
+- **Missing model validation** — `newSingleClient()` accepted empty model strings, passing them to provider APIs which returned opaque errors. Now validates early: `"model is required"`.
+- **OpenAI streaming missed zero-token usage** — Usage detection checked `PromptTokens > 0 || CompletionTokens > 0`, missing legitimate zero-token responses. Changed `Usage` to a pointer type — nil means absent, non-nil trusts the values including zero.
+- **`Backoff()` returned zero on `delay=0`** — Guard only checked `delay < 0`; a zero delay (possible with very small base values) passed through. Changed to `delay <= 0`.
 - **Documentation: thinking budget values** — README and ARCHITECTURE.md listed stale ThinkingLevel budgets (Low→1024, Medium→4096, High→16384). Corrected to match code: Low→4096, Medium→16384, High→65536.
 - **Documentation: Gemini auth method** — ARCHITECTURE.md still described Gemini auth as `?key=` query parameter. Corrected to `x-goog-api-key` header (changed in v0.1.9).
 - **Documentation: Ollama `mistral` alias** — README listed `mistral` as an Ollama alias but the actual alias is `mistral-local` (avoids collision with the Mistral provider name).
+- **Internal codenames in comments** — Removed `RH/bds421` and `clawdbot/openclaw` references from `types.go` comments.
 
 ## [0.1.9] - 2026-02-22
 

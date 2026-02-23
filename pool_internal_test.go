@@ -227,3 +227,41 @@ func TestPooledClientInFlightPreventsClose(t *testing.T) {
 		t.Error("old client not closed after in-flight request completed")
 	}
 }
+
+func TestPooledClientCompleteAfterClose(t *testing.T) {
+	pc, err := NewPooledClient(DefaultConfig(), []string{"key-a"}, func(profile AuthProfile) (Client, error) {
+		return &closeSpy{provider: "test", model: "m"}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+
+	pc.Close()
+
+	_, err = pc.Complete(context.Background(), Request{})
+	if err != ErrClientClosed {
+		t.Fatalf("Complete after Close: got %v, want ErrClientClosed", err)
+	}
+}
+
+func TestPooledClientStreamAfterClose(t *testing.T) {
+	pc, err := NewPooledClient(DefaultConfig(), []string{"key-a"}, func(profile AuthProfile) (Client, error) {
+		return &closeSpy{provider: "test", model: "m"}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+
+	pc.Close()
+
+	var gotErr error
+	for _, err := range pc.Stream(context.Background(), Request{}) {
+		if err != nil {
+			gotErr = err
+			break
+		}
+	}
+	if gotErr != ErrClientClosed {
+		t.Fatalf("Stream after Close: got %v, want ErrClientClosed", gotErr)
+	}
+}

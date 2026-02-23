@@ -40,10 +40,6 @@ func New(cfg llm.Config) (*Client, error) {
 		return nil, fmt.Errorf("Gemini API key is required")
 	}
 
-	if cfg.Model == "" {
-		cfg.Model = "gemini-2.0-flash" // Default to Gemini 2.0 Flash
-	}
-
 	base := llm.ResolveBaseURL(cfg)
 	if base == "" {
 		base = defaultGeminiBase
@@ -85,7 +81,10 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	}
 	url := fmt.Sprintf("%s/%s:generateContent", c.baseURL, model)
 
-	apiReq := c.buildRequest(req)
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(apiReq)
 	if err != nil {
@@ -131,7 +130,11 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		}
 		url := fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse", c.baseURL, model)
 
-		apiReq := c.buildRequest(req)
+		apiReq, err := c.buildRequest(req)
+		if err != nil {
+			yield(llm.StreamEvent{}, err)
+			return
+		}
 
 		body, err := json.Marshal(apiReq)
 		if err != nil {
@@ -236,7 +239,7 @@ type geminiResponse struct {
 	ModelVersion string `json:"modelVersion"`
 }
 
-func (c *Client) buildRequest(req llm.Request) geminiRequest {
+func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	apiReq := geminiRequest{
 		GenerationConfig: &geminiGenerationConfig{
 			Temperature:     req.Temperature,
@@ -285,6 +288,9 @@ func (c *Client) buildRequest(req llm.Request) geminiRequest {
 			switch part.Type {
 			case llm.ContentText:
 				content.Parts = append(content.Parts, geminiPart{Text: part.Text})
+
+			case llm.ContentImage:
+				return geminiRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
 
 			case llm.ContentToolUse:
 				gp := geminiPart{
@@ -358,7 +364,7 @@ func (c *Client) buildRequest(req llm.Request) geminiRequest {
 		apiReq.Tools = []geminiTool{tool}
 	}
 
-	return apiReq
+	return apiReq, nil
 }
 
 func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *llm.Response {

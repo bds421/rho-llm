@@ -15,6 +15,9 @@ import (
 // ErrNoAvailableProfiles is returned when all profiles are in cooldown.
 var ErrNoAvailableProfiles = errors.New("no available auth profiles (all in cooldown)")
 
+// ErrClientClosed is returned when Complete or Stream is called after Close.
+var ErrClientClosed = errors.New("llm: client is closed")
+
 // CooldownError indicates all profiles are in cooldown and provides the wait time.
 type CooldownError struct {
 	Wait time.Duration
@@ -291,6 +294,10 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 		pc.mu.RLock()
 		rc := pc.rc
 		usedName := pc.activeName
+		if rc == nil {
+			pc.mu.RUnlock()
+			return nil, ErrClientClosed
+		}
 		rc.Acquire()
 		pc.mu.RUnlock()
 
@@ -365,6 +372,11 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			pc.mu.RLock()
 			rc := pc.rc
 			usedName := pc.activeName
+			if rc == nil {
+				pc.mu.RUnlock()
+				yield(StreamEvent{}, ErrClientClosed)
+				return
+			}
 			rc.Acquire()
 			pc.mu.RUnlock()
 

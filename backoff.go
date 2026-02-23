@@ -48,7 +48,7 @@ func Backoff(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
 	if delay > maxDelay {
 		delay = maxDelay
 	}
-	if delay < 0 {
+	if delay <= 0 {
 		delay = baseDelay
 	}
 

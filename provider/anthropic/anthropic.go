@@ -147,7 +147,10 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 		req.ThinkingLevel = c.config.ThinkingLevel
 	}
 
-	apiReq := c.buildRequest(req, stream)
+	apiReq, err := c.buildRequest(req, stream)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(apiReq)
 	if err != nil {
@@ -198,7 +201,11 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 		req.ThinkingLevel = c.config.ThinkingLevel
 	}
 
-	apiReq := c.buildRequest(req, true)
+	apiReq, err := c.buildRequest(req, true)
+	if err != nil {
+		yield(llm.StreamEvent{}, err)
+		return
+	}
 
 	body, err := json.Marshal(apiReq)
 	if err != nil {
@@ -241,7 +248,7 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 	c.parseStream(resp.Body, yield)
 }
 
-func (c *Client) buildRequest(req llm.Request, stream bool) anthropicRequest {
+func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, error) {
 	apiReq := anthropicRequest{
 		Model:       req.Model,
 		System:      req.System,
@@ -281,6 +288,8 @@ func (c *Client) buildRequest(req llm.Request, stream bool) anthropicRequest {
 					"type": "text",
 					"text": part.Text,
 				})
+			case llm.ContentImage:
+				return anthropicRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
 			case llm.ContentToolUse:
 				apiMsg.Content = append(apiMsg.Content, map[string]interface{}{
 					"type":  "tool_use",
@@ -340,7 +349,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) anthropicRequest {
 		apiReq.Temperature = 1.0
 	}
 
-	return apiReq
+	return apiReq, nil
 }
 
 func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {

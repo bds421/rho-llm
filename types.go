@@ -232,7 +232,7 @@ type Client interface {
 	// Complete generates a completion (non-streaming).
 	Complete(ctx context.Context, req Request) (*Response, error)
 
-	// RH/bds421 requires go 1.23 for iter.Seq2
+	// Requires Go 1.23+ for iter.Seq2
 	// Stream returns an iterator of streaming events.
 	// The caller controls the stream via for-range; breaking stops iteration
 	// and cleans up the underlying HTTP connection.
@@ -254,7 +254,7 @@ type Client interface {
 }
 
 // =============================================================================
-// AUTH PROFILE (clawdbot/openclaw pattern for failover)
+// AUTH PROFILE (failover pattern)
 // =============================================================================
 
 // AuthProfile represents an authentication profile for rotation.
@@ -263,7 +263,7 @@ type AuthProfile struct {
 	APIKey    string    `json:"api_key"`
 	BaseURL   string    `json:"base_url,omitempty"`
 	IsHealthy bool      `json:"is_healthy"`
-	LastUsed  time.Time `json:"last_used"`
+	LastUsed  time.Time `json:"last_used"` // Last time this profile was attempted (not necessarily successful)
 	LastError string    `json:"last_error,omitempty"`
 	Cooldown  time.Time `json:"cooldown_until,omitempty"`
 }

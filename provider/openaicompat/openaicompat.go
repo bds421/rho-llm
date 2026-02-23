@@ -83,7 +83,10 @@ func (c *Client) Close() error {
 
 // Complete generates a non-streaming completion.
 func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
-	apiReq := c.buildRequest(req, false)
+	apiReq, err := c.buildRequest(req, false)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(apiReq)
 	if err != nil {
@@ -126,7 +129,11 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 // Stream returns an iterator of streaming events.
 func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
-		apiReq := c.buildRequest(req, true)
+		apiReq, err := c.buildRequest(req, true)
+		if err != nil {
+			yield(llm.StreamEvent{}, err)
+			return
+		}
 
 		body, err := json.Marshal(apiReq)
 		if err != nil {
@@ -242,7 +249,7 @@ func normalizeStopReason(reason string) string {
 	}
 }
 
-func (c *Client) buildRequest(req llm.Request, stream bool) openaiRequest {
+func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, error) {
 	apiReq := openaiRequest{
 		Model:       req.Model,
 		MaxTokens:   req.MaxTokens,
@@ -290,6 +297,8 @@ func (c *Client) buildRequest(req llm.Request, stream bool) openaiRequest {
 					})
 				case llm.ContentText:
 					textParts = append(textParts, part.Text)
+				case llm.ContentImage:
+					return openaiRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
 				}
 			}
 
@@ -373,7 +382,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) openaiRequest {
 		}
 	}
 
-	return apiReq
+	return apiReq, nil
 }
 
 func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
@@ -451,7 +460,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
-			Usage struct {
+			Usage *struct {
 				PromptTokens     int `json:"prompt_tokens"`
 				CompletionTokens int `json:"completion_tokens"`
 			} `json:"usage"`
@@ -464,8 +473,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			continue
 		}
 
-		// Capture usage if present (may arrive in a separate chunk with empty choices)
-		if event.Usage.PromptTokens > 0 || event.Usage.CompletionTokens > 0 {
+		// Capture usage if present (may arrive in a separate chunk with empty choices).
+		// Usage is a pointer so we can distinguish "field absent" (nil) from "zero tokens".
+		if event.Usage != nil {
 			inputTokens = event.Usage.PromptTokens
 			outputTokens = event.Usage.CompletionTokens
 		}

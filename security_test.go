@@ -1,6 +1,7 @@
 package llm_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +79,7 @@ func TestGeminiAPIKeyNotInURL(t *testing.T) {
 		t.Fatalf("gemini.New() error: %v", err)
 	}
 
-	resp, err := client.Complete(t.Context(), llm.Request{
+	resp, err := client.Complete(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	})
 	if err != nil {
@@ -124,7 +125,7 @@ func TestGeminiStreamAPIKeyNotInURL(t *testing.T) {
 		t.Fatalf("gemini.New() error: %v", err)
 	}
 
-	for event, err := range client.Stream(t.Context(), llm.Request{
+	for event, err := range client.Stream(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	}) {
 		if err != nil {
@@ -179,7 +180,7 @@ func TestErrorBodyReadBounded(t *testing.T) {
 		t.Fatalf("gemini.New() error: %v", err)
 	}
 
-	_, err = client.Complete(t.Context(), llm.Request{
+	_, err = client.Complete(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	})
 	if err == nil {
@@ -233,7 +234,7 @@ func TestRedirectDoesNotLeakAuthHeaders(t *testing.T) {
 
 	// The request may succeed or fail depending on redirect policy —
 	// what matters is that the attacker didn't get our auth headers.
-	_, _ = client.Complete(t.Context(), llm.Request{
+	_, _ = client.Complete(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	})
 
@@ -280,7 +281,7 @@ func TestRedirectDoesNotLeakAnthropicKey(t *testing.T) {
 	}
 	defer client.Close()
 
-	_, _ = client.Complete(t.Context(), llm.Request{
+	_, _ = client.Complete(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	})
 
@@ -324,7 +325,7 @@ func TestRedirectDoesNotLeakOpenAIKey(t *testing.T) {
 	}
 	defer client.Close()
 
-	_, _ = client.Complete(t.Context(), llm.Request{
+	_, _ = client.Complete(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	})
 
@@ -372,7 +373,7 @@ func TestSuccessResponseBodyBounded(t *testing.T) {
 			t.Fatalf("New() error: %v", err)
 		}
 
-		_, err = client.Complete(t.Context(), llm.Request{
+		_, err = client.Complete(context.Background(), llm.Request{
 			Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 		})
 		// Should get a decode error because the reader was truncated, not OOM
@@ -409,7 +410,7 @@ func TestSuccessResponseBodyBounded(t *testing.T) {
 			t.Fatalf("New() error: %v", err)
 		}
 
-		_, err = client.Complete(t.Context(), llm.Request{
+		_, err = client.Complete(context.Background(), llm.Request{
 			Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 		})
 		if err == nil {
@@ -444,7 +445,7 @@ func TestSuccessResponseBodyBounded(t *testing.T) {
 			t.Fatalf("New() error: %v", err)
 		}
 
-		_, err = client.Complete(t.Context(), llm.Request{
+		_, err = client.Complete(context.Background(), llm.Request{
 			Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 		})
 		if err == nil {
@@ -488,7 +489,7 @@ func TestStreamInputBufferBounded(t *testing.T) {
 		}
 
 		var gotError bool
-		for _, err := range client.Stream(t.Context(), llm.Request{
+		for _, err := range client.Stream(context.Background(), llm.Request{
 			Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 		}) {
 			if err != nil {
@@ -530,7 +531,7 @@ func TestStreamInputBufferBounded(t *testing.T) {
 		}
 
 		var gotError bool
-		for _, err := range client.Stream(t.Context(), llm.Request{
+		for _, err := range client.Stream(context.Background(), llm.Request{
 			Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 		}) {
 			if err != nil {
@@ -572,7 +573,7 @@ func TestMalformedSSEEventYieldsError(t *testing.T) {
 		}
 
 		var gotError bool
-		for _, err := range client.Stream(t.Context(), llm.Request{
+		for _, err := range client.Stream(context.Background(), llm.Request{
 			Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 		}) {
 			if err != nil {
@@ -607,7 +608,7 @@ func TestMalformedSSEEventYieldsError(t *testing.T) {
 		}
 
 		var gotError bool
-		for _, err := range client.Stream(t.Context(), llm.Request{
+		for _, err := range client.Stream(context.Background(), llm.Request{
 			Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 		}) {
 			if err != nil {
@@ -643,7 +644,7 @@ func TestMalformedSSEEventYieldsError(t *testing.T) {
 		}
 
 		var gotError bool
-		for _, err := range client.Stream(t.Context(), llm.Request{
+		for _, err := range client.Stream(context.Background(), llm.Request{
 			Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 		}) {
 			if err != nil {
