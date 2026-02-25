@@ -58,17 +58,16 @@ Provider implementations register themselves via `init()` using `llm.RegisterPro
                                       ▼
                       ┌────────────────────────────────┐
                       │         factory.go             │
-                      │  newSingleClient() /           │
-                      │  newPooledClient()             │
-                      └──────┬────────────────┬────────┘
-               1 key         │                │  >1 keys
-                             ▼                ▼
-              ┌──────────────────┐   ┌──────────────────────┐
-              │  Single Client   │   │   PooledClient       │
-              │  (direct)        │   │  (auth rotation)     │
-              └────────┬─────────┘   └──────────┬───────────┘
-                       │                        │ wraps N SingleClients
-                       ▼                        ▼
+                      │  → always newPooledClient()    │
+                      └──────────────┬─────────────────┘
+                                     │
+                                     ▼
+                      ┌──────────────────────┐
+                      │   PooledClient       │
+                      │  (retry + rotation)  │
+                      └──────────┬───────────┘
+                                 │ wraps N SingleClients (1 per key)
+                                 ▼
          ┌─────────────────────────────────────────────────┐
          │               Protocol Adapters                 │
          │  ┌──────────────┐ ┌──────────┐ ┌─────────────┐  │
@@ -198,18 +197,19 @@ type ProviderPreset struct {
 
 ```
 NewClient(cfg)
-    └── NewClientWithKeys(cfg, nil)
-            ├── len(keys) >= 1 → newPooledClient(cfg, keys)  // Even single-key gets retry/backoff
-            └── else           → newSingleClient(cfg)        // Only when no keys provided
-                                    ├── ResolveProtocol(cfg)
-                                    ├── getProviderFactory(protocol)
-                                    │     "anthropic"    → anthropic.New(cfg)
-                                    │     "gemini"       → gemini.New(cfg)
-                                    │     "openai_compat"→ openaicompat.New(cfg)
-                                    └── cfg.LogRequests? → WithLogging(client)
+    └── NewClientWithKeys(cfg, []string{cfg.APIKey})
+            └── newPooledClient(cfg, keys)  // All clients get retry/backoff
+                    ├── AuthPool (1 profile, even if APIKey is empty)
+                    └── clientFunc:
+                          ├── ResolveProtocol(cfg)
+                          ├── getProviderFactory(protocol)
+                          │     "anthropic"    → anthropic.New(cfg)
+                          │     "gemini"       → gemini.New(cfg)
+                          │     "openai_compat"→ openaicompat.New(cfg)
+                          └── cfg.LogRequests? → WithLogging(client)
 ```
 
-Single-key clients now go through `PooledClient` to get exponential backoff on transient errors (429, 503, 502). Previously, single-key clients bypassed the pool entirely and had zero retry logic.
+All clients — including keyless local providers (Ollama, vLLM, LM Studio) — go through `PooledClient` to get exponential backoff on transient errors (429, 503, 502). `NewClient` always delegates to `NewClientWithKeys`, ensuring uniform retry/backoff protection.
 
 ---
 
@@ -246,7 +246,7 @@ Cooldown durations are error-type-dependent:
 
 ### PooledClient
 
-`PooledClient` wraps N single-provider clients (one per API key), all sharing the same `AuthPool`. Even single-key pools get retry/backoff for transient errors. On failure:
+`PooledClient` wraps N single-provider clients (one per API key), all sharing the same `AuthPool`. All clients — including keyless local providers — go through `PooledClient` for retry/backoff on transient errors. On failure:
 
 ```
 Complete():
@@ -281,7 +281,7 @@ Stream():
 
 **Pre-data vs mid-stream retry:** A stream that fails on the initial HTTP connection (429/503 before any SSE events) is functionally identical to a failed `Complete` — no data has reached the caller, so retry with rotation is safe. Once any event has been yielded via `for-range`, retrying would replay content from scratch with no way for the caller to detect duplication, so mid-stream errors pass through immediately.
 
-`rotateClient()` does NOT close the replaced client — doing so would race with in-flight requests still holding a reference. Orphaned clients are garbage collected. If adapters ever need real cleanup (persistent connections), proper reference counting would be required.
+`rotateClient()` does NOT close the replaced client — doing so would race with in-flight requests still holding a reference. Orphaned clients are garbage collected; their `Close()` method (which drains idle HTTP connections via `CloseIdleConnections()`) is called by the `refCountedClient` mechanism when the last reference is released.
 
 **Thundering herd prevention:** When 50 goroutines hit a 429 simultaneously, naive single-checked locking would let all 50 create new clients. `PooledClient` uses double-checked locking with a dedicated `rotateMu` mutex:
 

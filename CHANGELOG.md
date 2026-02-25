@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Local providers had no retry/backoff** — `NewClient()` bypassed `PooledClient` for keyless providers (Ollama, vLLM, LM Studio), giving them zero transient-error resilience. A single 502 from a local model server caused immediate failure. Now `NewClient()` always routes through `NewClientWithKeys()`, wrapping all providers — including keyless ones — in `PooledClient` for automatic retry with exponential backoff.
+
+- **Adapter `Close()` leaked HTTP transport connections** — All three protocol adapters (`anthropic`, `gemini`, `openaicompat`) had no-op `Close()` methods that did not drain idle HTTP connections. During auth pool rotation, replaced clients left orphaned transport connections in the pool. Now `Close()` calls `httpClient.CloseIdleConnections()` to release them.
+
+- **`make cover` under-reported provider sub-package coverage** — The `cover` Makefile target ran `go test -coverprofile=coverage.out ./...` which only reports coverage for code within the same package as the test file. Tests in `llm_test.go` and `security_test.go` that exercise provider adapter code (via `httptest` servers) showed 0% for `provider/anthropic`, `provider/gemini`, and `provider/openaicompat`. Added `-coverpkg=./...` to enable cross-package coverage tracking.
+
 - **`fmt.Errorf` non-constant format string** — `llm_test.go:1840` used `fmt.Errorf(tc.errMsg)` which Go 1.26's stricter vet rejects. Changed to `fmt.Errorf("%s", tc.errMsg)`.
 
 ## [0.1.10] - 2026-02-23

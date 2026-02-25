@@ -70,8 +70,10 @@ func (c *Client) Model() string {
 	return c.config.Model
 }
 
-// Close releases resources.
+// Close releases resources. Drains idle connections from the HTTP transport
+// to prevent connection pool leakage during auth pool rotation.
 func (c *Client) Close() error {
+	c.httpClient.CloseIdleConnections()
 	return nil
 }
 

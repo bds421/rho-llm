@@ -22,7 +22,7 @@ test-race:
 
 # Run tests with coverage report
 cover:
-	go test -short -count=1 -coverprofile=coverage.out ./...
+	go test -short -count=1 -coverpkg=./... -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 

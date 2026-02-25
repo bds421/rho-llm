@@ -177,7 +177,7 @@ If extended thinking is enabled, you can read it synchronously via `resp.Thinkin
 
 ## Automatic Retry & Auth Pool Rotation
 
-All clients with an API key get automatic retry with exponential backoff (1s→2s→4s, capped at 30s). A solo developer hitting a transient 502 or 429 gets the same resilience as an enterprise with 10 keys. 
+All clients get automatic retry with exponential backoff (1s→2s→4s, capped at 30s) — including keyless local providers like Ollama and vLLM. A solo developer hitting a transient 502 or 429 gets the same resilience as an enterprise with 10 keys.
 
 The rotation engine is thread-safe. During concurrent rate-limit events, rotation is synchronized to prevent redundant HTTP client allocations, ensuring all in-flight requests seamlessly fail over to the next available endpoint.
 

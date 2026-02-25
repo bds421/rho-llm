@@ -7,6 +7,8 @@ import (
 	"io"
 	"iter"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -2928,5 +2930,83 @@ func TestNewClientEmptyModel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "model is required") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestLocalProviderRetryProtection verifies that local providers (Ollama, vLLM,
+// LM Studio) created via NewClient get retry/backoff protection on transient
+// errors, even though they have no API key.
+func TestLocalProviderRetryProtection(t *testing.T) {
+	providers := []string{"ollama", "vllm", "lmstudio"}
+
+	for _, provider := range providers {
+		t.Run(provider, func(t *testing.T) {
+			cfg := llm.Config{
+				Provider:  provider,
+				Model:     "test-model",
+				MaxTokens: 100,
+				Timeout:   5 * time.Second,
+			}
+
+			client, err := llm.NewClient(cfg)
+			if err != nil {
+				t.Fatalf("NewClient error: %v", err)
+			}
+			defer client.Close()
+
+			// PooledClient exposes PoolStatus(); a bare single client does not.
+			// This proves NewClient wraps local providers in PooledClient for retry.
+			type poolStatusReporter interface {
+				PoolStatus() string
+			}
+			if _, ok := client.(poolStatusReporter); !ok {
+				t.Errorf("NewClient(%s) returned %T, want *PooledClient (no retry protection)", provider, client)
+			}
+		})
+	}
+}
+
+// TestLocalProviderRetryActualTransient verifies that a local provider client
+// actually retries on transient HTTP errors (not just that it's wrapped).
+func TestLocalProviderRetryActualTransient(t *testing.T) {
+	// Server: fail once with 502 (retryable), then succeed
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, `{"error":"bad gateway"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"chatcmpl-1","object":"chat.completion","model":"llama3","choices":[{"index":0,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}`)
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider:  "ollama",
+		Model:     "llama3",
+		BaseURL:   srv.URL,
+		MaxTokens: 100,
+		Timeout:   5 * time.Second,
+	}
+
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+	defer client.Close()
+
+	resp, err := client.Complete(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	})
+	if err != nil {
+		t.Fatalf("Complete should succeed after retry, got: %v", err)
+	}
+	if resp.Content != "Hello" {
+		t.Errorf("Content = %q, want Hello", resp.Content)
+	}
+	if attempts < 2 {
+		t.Errorf("attempts = %d, want >= 2 (1 failure + 1 success)", attempts)
 	}
 }
