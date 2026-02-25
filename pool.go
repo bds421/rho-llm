@@ -117,7 +117,7 @@ func (p *AuthPool) GetAvailable() (AuthProfile, error) {
 	}
 
 	if soonestTime.IsZero() {
-		return AuthProfile{}, fmt.Errorf("no healthy auth profiles available")
+		return AuthProfile{}, fmt.Errorf("%w: all keys permanently disabled", ErrNoAvailableProfiles)
 	}
 
 	waitTime := time.Until(soonestTime)

@@ -45,3 +45,21 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 		}
 	}
 }
+
+// TestThoughtSignatureFlags ensures ThoughtSignature is set correctly across the registry.
+// Gemini 3.x models require thought_signature in function call responses; older models do not.
+func TestThoughtSignatureFlags(t *testing.T) {
+	for id, info := range modelRegistry {
+		isGemini3 := strings.HasPrefix(id, "gemini-3")
+		if isGemini3 && !info.ThoughtSignature {
+			t.Errorf("Model %s (Gemini 3.x) should have ThoughtSignature=true", id)
+		}
+		if info.Provider == "gemini" && !isGemini3 && info.ThoughtSignature {
+			t.Errorf("Model %s (Gemini non-3.x) should have ThoughtSignature=false", id)
+		}
+		// Non-Gemini models should never have ThoughtSignature
+		if info.Provider != "gemini" && info.ThoughtSignature {
+			t.Errorf("Non-Gemini model %s should have ThoughtSignature=false", id)
+		}
+	}
+}

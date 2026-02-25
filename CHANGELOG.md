@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.11] - 2026-02-23
+## [0.1.11] - 2026-02-25
 
 ### Security
 
@@ -23,7 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Go 1.26 minimum** — `go.mod` upgraded from `go 1.23.4` to `go 1.26.0`. Resolves 15 known stdlib CVEs in crypto/tls, crypto/x509, net/http, and related packages that affected Go 1.23.x.
 
+### Added
+
+- **`ThoughtSignature` registry test** — `TestThoughtSignatureFlags` validates that `ThoughtSignature` is true only for Gemini 3.x models, false for older Gemini models, and false for all non-Gemini models. Prevents silent model registry corruption from reaching production.
+
 ### Fixed
+
+- **`ThinkingBudgetTokens` returned 4096 for `ThinkingNone`** — The default case returned 4096 instead of 0 when called with `ThinkingNone`. If ever called by mistake with the none level, it would silently produce a 4096-token thinking budget. Now returns 0.
+
+- **"No healthy profiles" error inconsistent with `ErrNoAvailableProfiles`** — When all auth profiles were permanently disabled (e.g., by 401 errors), `AuthPool.GetAvailable()` returned a bare `fmt.Errorf` that did not wrap `ErrNoAvailableProfiles`. Callers using `errors.Is(err, ErrNoAvailableProfiles)` would not match. Now wraps `ErrNoAvailableProfiles` via `%w`.
 
 - **Local providers had no retry/backoff** — `NewClient()` bypassed `PooledClient` for keyless providers (Ollama, vLLM, LM Studio), giving them zero transient-error resilience. A single 502 from a local model server caused immediate failure. Now `NewClient()` always routes through `NewClientWithKeys()`, wrapping all providers — including keyless ones — in `PooledClient` for automatic retry with exponential backoff.
 

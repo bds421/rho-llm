@@ -69,7 +69,7 @@ func ThinkingBudgetTokens(level ThinkingLevel, customBudget int) int {
 	case ThinkingHigh:
 		return 65536
 	default:
-		return 4096
+		return 0
 	}
 }
 

@@ -2007,9 +2007,12 @@ func TestAuthPoolAuthErrorPermanentDisable(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error after auth failure")
 	}
-	// Should say "no healthy" not "cooldown"
-	if !strings.Contains(err.Error(), "no healthy") {
-		t.Errorf("error = %q, want to contain 'no healthy'", err.Error())
+	// Should match ErrNoAvailableProfiles (permanently disabled, not cooldown)
+	if !errors.Is(err, llm.ErrNoAvailableProfiles) {
+		t.Errorf("error = %q, want errors.Is(ErrNoAvailableProfiles)", err.Error())
+	}
+	if !strings.Contains(err.Error(), "permanently disabled") {
+		t.Errorf("error = %q, want to contain 'permanently disabled'", err.Error())
 	}
 }
 
