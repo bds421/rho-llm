@@ -380,6 +380,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// message_start/message_delta events, callers can distinguish "not reported"
 	// from "zero tokens" (0).
 	var inputTokens = llm.TokensNotReported
+	doneEmitted := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -476,6 +477,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 
 		case "message_delta":
+			doneEmitted = true
 			if !yield(llm.StreamEvent{
 				Type:         llm.EventDone,
 				StopReason:   event.Delta.StopReason,
@@ -494,7 +496,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	// Only report scanner errors if the stream did not already complete
+	// successfully. A trailing read error after EventDone is noise.
+	if err := scanner.Err(); err != nil && !doneEmitted {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
 	}
 }

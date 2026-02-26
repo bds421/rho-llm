@@ -141,14 +141,15 @@ func IsRetryable(err error) bool {
 	}
 
 	// String fallback: errors where type info was lost (fmt.Errorf without %w).
-	// Patterns use suffix/phrase matching to avoid false positives on substrings.
+	// Patterns are narrowed to network-transport phrases to avoid false positives
+	// on API-level messages that happen to contain generic words like "request failed".
 	errMsg := strings.ToLower(err.Error())
-	return strings.Contains(errMsg, "request failed") ||
-		strings.Contains(errMsg, "connection refused") ||
+	return strings.Contains(errMsg, "connection refused") ||
 		strings.Contains(errMsg, "no such host") ||
 		strings.HasSuffix(errMsg, "timeout") || strings.Contains(errMsg, "timeout ") || strings.Contains(errMsg, "timed out") ||
 		strings.HasSuffix(errMsg, "eof") || strings.Contains(errMsg, "eof:") ||
-		strings.Contains(errMsg, "connection reset")
+		strings.Contains(errMsg, "connection reset") ||
+		strings.Contains(errMsg, "broken pipe")
 }
 
 // IsAuthError reports whether err is an authentication/authorization error (401/403).

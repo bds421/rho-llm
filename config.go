@@ -113,6 +113,15 @@ type Config struct {
 	LogRequests bool `json:"log_requests,omitempty"`
 }
 
+// DefaultTimeout is applied when Config.Timeout is zero (the time.Duration zero value).
+// Prevents unbounded HTTP clients when callers construct Config manually without
+// calling DefaultConfig().
+const DefaultTimeout = 120 * time.Second
+
+// maxRetryAttempts caps the number of retry/rotation iterations in PooledClient
+// regardless of pool size. Prevents pathological retry storms with large key pools.
+const maxRetryAttempts = 10
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
@@ -121,7 +130,7 @@ func DefaultConfig() Config {
 		MaxTokens:     8192,
 		Temperature:   1.0,
 		ThinkingLevel: ThinkingNone,
-		Timeout:       120 * time.Second,
+		Timeout:       DefaultTimeout,
 		AuthHeader:    "Bearer",
 	}
 }

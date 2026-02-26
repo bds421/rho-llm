@@ -145,7 +145,11 @@ func NewToolResultMessage(toolUseID, result string, isError bool) Message {
 // NewAssistantMessage creates an assistant message from a Response, preserving
 // both text content and tool_use blocks. Use this instead of NewTextMessage
 // when the response contains tool calls — NewTextMessage would lose them.
+// Panics if resp is nil (caller bug — matches Go conventions for nil receivers).
 func NewAssistantMessage(resp *Response) Message {
+	if resp == nil {
+		panic("llm.NewAssistantMessage: resp must not be nil")
+	}
 	msg := Message{Role: RoleAssistant}
 	if resp.Content != "" {
 		msg.Content = append(msg.Content, ContentPart{

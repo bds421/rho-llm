@@ -250,7 +250,7 @@ Cooldown durations are error-type-dependent:
 
 ```
 Complete():
-    loop (maxRetries = max(pool.Count(), 3)):  // Minimum 3 for single-key resilience
+    loop (maxRetries = min(max(pool.Count(), 3), 10)):  // Min 3, capped at 10
         1. Call current client
         2. Success → MarkSuccess(), return
         3. Non-retryable, non-auth error (400) → return immediately
@@ -264,7 +264,7 @@ Complete():
                - Transient error → Backoff(attempt, 1s, 30s) → sleep & retry same
 
 Stream():
-    loop (maxRetries = max(pool.Count(), 3)):
+    loop (maxRetries = min(max(pool.Count(), 3), 10)):
         1. Start streaming from current client
         2. If error BEFORE any event yielded (firstEvent == true):
              a. Non-retryable, non-auth error → return immediately
@@ -375,7 +375,7 @@ type ModelInfo struct {
 Different LLM providers implement chain-of-thought reasoning in fundamentally different ways. The registry abstracts these semantic capabilities:
 
 1. **API-Controlled Budgets (`SupportsThinking: true`)**
-   Models like Anthropic's Claude 4 series require the client to explicitly allocate a "thinking budget" in the API request payload. The config `ThinkingLevel` is mapped into this budget. If `ThinkingLevel` is passed to a model where `SupportsThinking == false`, the adapter silently strips it from the HTTP payload to prevent API errors.
+   Models like Anthropic's Claude 4 series require the client to explicitly allocate a "thinking budget" in the API request payload. The config `ThinkingLevel` is mapped into this budget. Only the `anthropic` and `gemini` adapters support this — the OpenAI-compatible adapter returns an explicit error if `ThinkingLevel` is set, since the OpenAI chat completions API has no equivalent parameter.
 
 2. **Intrinsic Reasoning (`Thinking: true`)**
    Models like DeepSeek-R1 and Grok 4 Reasoning emit chain-of-thought intrinsically inside their standard output streams. They do not require specific API flags to enable this, but the registry flags them so your application knows they will consume output tokens for reasoning before answering.

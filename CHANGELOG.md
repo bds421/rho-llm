@@ -23,11 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Go 1.26 minimum** — `go.mod` upgraded from `go 1.23.4` to `go 1.26.0`. Resolves 15 known stdlib CVEs in crypto/tls, crypto/x509, net/http, and related packages that affected Go 1.23.x.
 
+- **`DefaultTimeout` constant exported** — `llm.DefaultTimeout` (120s) is available for callers who want to reference the library's default HTTP timeout.
+
 ### Added
 
 - **`ThoughtSignature` registry test** — `TestThoughtSignatureFlags` validates that `ThoughtSignature` is true only for Gemini 3.x models, false for older Gemini models, and false for all non-Gemini models. Prevents silent model registry corruption from reaching production.
 
 ### Fixed
+
+- **`ThinkingLevel` silently ignored for OpenAI-compatible providers** — Setting `ThinkingLevel` on an OpenAI-compat provider (xAI, Groq, Cerebras, Mistral, OpenRouter, Ollama, vLLM, LM Studio) was silently dropped with no feedback. Now returns an explicit error: `"<provider> adapter does not support ThinkingLevel"`. ThinkingLevel is only supported by the `anthropic` and `gemini` adapters.
+
+- **`PooledClient.Provider()` and `Model()` bypassed ref-counting** — Both methods accessed the underlying client directly without calling `Acquire()`/`Release()`, creating a race with `rotateClient()` which could close the client mid-call. Now uses the same Acquire/Release pattern as `Complete()` and `Stream()`.
+
+- **`Config.Timeout` zero-value created unbounded HTTP client** — `NewClient(Config{...})` without an explicit `Timeout` created an HTTP client with no timeout, risking goroutine hangs on unresponsive endpoints. Now defaults to `DefaultTimeout` (120s) when `Timeout <= 0`.
+
+- **Negative `MaxTokens` and `Temperature` accepted silently** — `newSingleClient()` passed negative values through to provider APIs, which returned opaque errors. Now validates early: `MaxTokens` and `Temperature` must be >= 0.
+
+- **`maxRetries` unbounded for large auth pools** — `maxRetries = max(pool.Count(), 3)` scaled linearly with pool size. A 50-key pool allowed 50 retry attempts. Now capped at `maxRetryAttempts` (10) in both `Complete()` and `Stream()`.
+
+- **`IsRetryable` false positives on `"request failed"` prefix** — The string fallback matched any error containing `"request failed"`, including non-retryable errors like `"request failed: 400 bad request"`. Removed. Added `"broken pipe"` to match connection resets by peer. In production, wrapped `net.Error` types trigger the type-based check path instead.
+
+- **Anthropic stream scanner error inconsistency** — If the Anthropic SSE stream completed successfully (`message_delta` emitted) but the underlying reader returned a trailing error (e.g., connection close after EOF), the error was propagated to the caller despite the stream being complete. Now suppresses trailing scanner errors after `EventDone`, matching the Gemini adapter's behavior.
+
+- **`NewAssistantMessage(nil)` panicked with opaque nil dereference** — Now panics with an explicit message: `"llm.NewAssistantMessage: resp must not be nil"`.
 
 - **`ThinkingBudgetTokens` returned 4096 for `ThinkingNone`** — The default case returned 4096 instead of 0 when called with `ThinkingNone`. If ever called by mistake with the none level, it would silently produce a 4096-token thinking budget. Now returns 0.
 

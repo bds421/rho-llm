@@ -357,6 +357,19 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		apiReq.Messages = append(apiReq.Messages, oaiMsg)
 	}
 
+	// Reject ThinkingLevel — OpenAI-compatible providers do not support it.
+	// Without this check, the field is silently dropped and users get no feedback.
+	thinkingLevel := req.ThinkingLevel
+	if thinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
+		thinkingLevel = c.config.ThinkingLevel
+	}
+	if thinkingLevel != llm.ThinkingNone {
+		return openaiRequest{}, fmt.Errorf(
+			"%s adapter does not support ThinkingLevel (set on model %q); "+
+				"ThinkingLevel is only supported by anthropic and gemini providers",
+			c.providerName, apiReq.Model)
+	}
+
 	// Configure stop sequences
 	if len(req.StopSequences) > 0 {
 		apiReq.Stop = req.StopSequences

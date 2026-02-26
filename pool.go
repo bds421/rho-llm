@@ -303,6 +303,9 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 	if maxRetries < 3 {
 		maxRetries = 3 // Minimum 3 retries for single-key resilience
 	}
+	if maxRetries > maxRetryAttempts {
+		maxRetries = maxRetryAttempts // Prevent pathological retry storms with large key pools
+	}
 
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
@@ -380,6 +383,9 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 		maxRetries := pc.pool.HealthyCount()
 		if maxRetries < 3 {
 			maxRetries = 3 // Minimum 3 retries for single-key resilience
+		}
+		if maxRetries > maxRetryAttempts {
+			maxRetries = maxRetryAttempts // Prevent pathological retry storms with large key pools
 		}
 
 		var lastErr error
@@ -516,25 +522,37 @@ func (pc *PooledClient) rotateClient(failedName string) error {
 }
 
 // Provider implements Client.Provider.
+// Acquires a ref to prevent calling Provider() on a concurrently-closed client.
 func (pc *PooledClient) Provider() string {
 	pc.mu.RLock()
 	rc := pc.rc
-	pc.mu.RUnlock()
 	if rc == nil {
+		pc.mu.RUnlock()
 		return pc.cfg.Provider
 	}
-	return rc.client.Provider()
+	rc.Acquire()
+	pc.mu.RUnlock()
+
+	s := rc.client.Provider()
+	rc.Release()
+	return s
 }
 
 // Model implements Client.Model.
+// Acquires a ref to prevent calling Model() on a concurrently-closed client.
 func (pc *PooledClient) Model() string {
 	pc.mu.RLock()
 	rc := pc.rc
-	pc.mu.RUnlock()
 	if rc == nil {
+		pc.mu.RUnlock()
 		return pc.cfg.Model
 	}
-	return rc.client.Model()
+	rc.Acquire()
+	pc.mu.RUnlock()
+
+	s := rc.client.Model()
+	rc.Release()
+	return s
 }
 
 // Close implements Client.Close.

@@ -32,6 +32,18 @@ func newSingleClient(cfg Config) (Client, error) {
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("model is required")
 	}
+	if cfg.MaxTokens < 0 {
+		return nil, fmt.Errorf("MaxTokens must be >= 0, got %d", cfg.MaxTokens)
+	}
+	if cfg.Temperature < 0 {
+		return nil, fmt.Errorf("Temperature must be >= 0, got %f", cfg.Temperature)
+	}
+
+	// Apply timeout floor — prevents unbounded HTTP clients when callers
+	// construct Config manually without calling DefaultConfig().
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultTimeout
+	}
 
 	protocol := ResolveProtocol(cfg)
 
