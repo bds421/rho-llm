@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-02-26
+
+### Fixed
+
+- **Gemini API 400 on empty text parts** — `ContentText` parts with empty strings (`""`) produced `geminiPart{Text: ""}` which serialized to `{}` due to the `omitempty` JSON tag. The Gemini API requires each part to have exactly one `data` oneof field set; an empty object violates this, returning: `"required oneof field 'data' must have one initialized field"`. Now empty text parts are skipped in both message content and system instructions. The existing `len(content.Parts) > 0` guard then drops messages that become entirely empty after filtering.
+
+- **Anthropic and OpenAI adapters also sent empty text parts** — Same root cause across all three adapters. Anthropic sent `{"type":"text","text":""}` content blocks; OpenAI-compatible joined empty strings with `\n`, producing whitespace-only messages. Now all three adapters skip `ContentText` parts where `Text == ""` in every code path (system messages, user messages, assistant messages, tool-result-adjacent text).
+
 ## [0.1.11] - 2026-02-25
 
 ### Security

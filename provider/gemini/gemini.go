@@ -276,7 +276,7 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				apiReq.SystemInstruction = &geminiContent{}
 			}
 			for _, part := range msg.Content {
-				if part.Type == llm.ContentText {
+				if part.Type == llm.ContentText && part.Text != "" {
 					apiReq.SystemInstruction.Parts = append(apiReq.SystemInstruction.Parts, geminiPart{Text: part.Text})
 				}
 			}
@@ -289,7 +289,9 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		for _, part := range msg.Content {
 			switch part.Type {
 			case llm.ContentText:
-				content.Parts = append(content.Parts, geminiPart{Text: part.Text})
+				if part.Text != "" {
+					content.Parts = append(content.Parts, geminiPart{Text: part.Text})
+				}
 
 			case llm.ContentImage:
 				return geminiRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)

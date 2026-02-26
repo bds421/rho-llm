@@ -298,7 +298,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 						ToolCallID: part.ToolResultID,
 					})
 				case llm.ContentText:
-					textParts = append(textParts, part.Text)
+					if part.Text != "" {
+						textParts = append(textParts, part.Text)
+					}
 				case llm.ContentImage:
 					return openaiRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
 				}
@@ -322,7 +324,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		// Build content from text parts
 		var textParts []string
 		for _, part := range msg.Content {
-			if part.Type == llm.ContentText {
+			if part.Type == llm.ContentText && part.Text != "" {
 				textParts = append(textParts, part.Text)
 			}
 		}

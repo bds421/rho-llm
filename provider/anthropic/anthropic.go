@@ -272,7 +272,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			// System messages go to the top-level "system" field, not the messages array.
 			// Anthropic rejects role="system" in the messages array.
 			for _, part := range msg.Content {
-				if part.Type == llm.ContentText {
+				if part.Type == llm.ContentText && part.Text != "" {
 					if apiReq.System != "" {
 						apiReq.System += "\n"
 					}
@@ -286,10 +286,12 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		for _, part := range msg.Content {
 			switch part.Type {
 			case llm.ContentText:
-				apiMsg.Content = append(apiMsg.Content, map[string]string{
-					"type": "text",
-					"text": part.Text,
-				})
+				if part.Text != "" {
+					apiMsg.Content = append(apiMsg.Content, map[string]string{
+						"type": "text",
+						"text": part.Text,
+					})
+				}
 			case llm.ContentImage:
 				return anthropicRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
 			case llm.ContentToolUse:
