@@ -70,14 +70,28 @@ func newSingleClient(cfg Config) (Client, error) {
 func newPooledClient(cfg Config, keys []string) (Client, error) {
 	slog.Info("creating pooled client", "profiles", len(keys), "provider", cfg.Provider)
 
+	// Logging is applied once at the pool level, not per-inner-client.
+	// Without this, each rotated inner client gets its own LoggingClient,
+	// and the pool-level wrapper doubles the output.
+	wantLog := cfg.LogRequests
+
 	clientFunc := func(profile AuthProfile) (Client, error) {
 		cfgCopy := cfg
 		cfgCopy.APIKey = profile.APIKey
+		cfgCopy.LogRequests = false // prevent inner LoggingClient wrapping
 		if profile.BaseURL != "" {
 			cfgCopy.BaseURL = profile.BaseURL
 		}
 		return newSingleClient(cfgCopy)
 	}
 
-	return NewPooledClient(cfg, keys, clientFunc)
+	pc, err := NewPooledClient(cfg, keys, clientFunc)
+	if err != nil {
+		return nil, err
+	}
+
+	if wantLog {
+		return WithLogging(pc), nil
+	}
+	return pc, nil
 }
