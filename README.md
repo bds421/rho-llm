@@ -175,9 +175,9 @@ req := llm.Request{
 
 If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
 
-## Automatic Retry & Auth Pool Rotation
+## Automatic Retry, Circuit Breaker & Auth Pool Rotation
 
-All clients get automatic retry with exponential backoff (1s→2s→4s, capped at 30s) — including keyless local providers like Ollama and vLLM. A solo developer hitting a transient 502 or 429 gets the same resilience as an enterprise with 10 keys.
+All clients get automatic retry with exponential backoff (1s→2s→4s, capped at 30s) and a circuit breaker (opens after 5 consecutive failures, probes after 30s) — including keyless local providers like Ollama and vLLM. A solo developer hitting a transient 502 or 429 gets the same resilience as an enterprise with 10 keys.
 
 The rotation engine is thread-safe. During concurrent rate-limit events, rotation is synchronized to prevent redundant HTTP client allocations, ensuring all in-flight requests seamlessly fail over to the next available endpoint.
 
@@ -190,12 +190,46 @@ cfg := llm.Config{
     Timeout:   120 * time.Second,
 }
 
-// Single-key: gets retry/backoff on transient errors
+// Single-key: gets retry/backoff + circuit breaker on transient errors
 client, err := llm.NewClient(cfg)
 
 // Multi-key: rotates between keys on failure
 keys := []string{"key1", "key2", "key3"}
 client, err := llm.NewClientWithKeys(cfg, keys)
+```
+
+### Circuit Breaker
+
+When an endpoint is degraded (returning 503s), the circuit breaker prevents request storms by opening after consecutive failures and allowing a single probe after cooldown:
+
+```go
+cfg := llm.DefaultConfig()                     // circuit breaker enabled by default
+cfg.CircuitThreshold = 3                        // open after 3 consecutive failures
+cfg.CircuitCooldown  = 15 * time.Second         // probe after 15s
+```
+
+Auth errors (401/403) do not trip the circuit — a bad key is not a broken endpoint.
+
+### Configurable Retry & Cooldowns
+
+```go
+cfg.RetryPolicy = &llm.RetryPolicy{
+    BaseDelay: 500 * time.Millisecond,         // faster retries for local providers
+    MaxDelay:  10 * time.Second,
+    Factor:    2.0,
+    Jitter:    0.25,
+}
+cfg.CooldownRateLimit = 30 * time.Second       // 429 cooldown (default: 60s)
+cfg.CooldownOverload  = 15 * time.Second       // 503 cooldown (default: 30s)
+cfg.CooldownDefault   = 5 * time.Second        // other errors (default: 10s)
+```
+
+### Retry Observability
+
+```go
+cfg.RetryHook = func(evt llm.RetryEvent) {
+    metrics.Counter("llm_retries", "type", evt.Type.String()).Inc()
+}
 ```
 
 ### Per-Profile Endpoints
@@ -279,12 +313,16 @@ client = llm.WithLoggingPrefix(client, "[MyApp]")
 
 ## Exponential Backoff
 
-The pool uses exponential backoff with jitter (1s base, 30s cap) when retrying:
+The pool uses configurable exponential backoff with jitter (default: 1s base, 30s cap). Override via `Config.RetryPolicy` or use the utility directly:
 
 ```go
 // Available as a utility for custom retry logic
 delay := llm.Backoff(attempt, 1*time.Second, 30*time.Second)
 // attempt 0: ~1s, 1: ~2s, 2: ~4s, 3: ~8s, ...
+
+// Or use RetryPolicy directly
+p := llm.RetryPolicy{BaseDelay: 100*time.Millisecond, MaxDelay: 5*time.Second, Factor: 3.0, Jitter: 0.1}
+delay = p.Delay(attempt)
 ```
 
 ## Config Reference
@@ -302,6 +340,13 @@ delay := llm.Backoff(attempt, 1*time.Second, 30*time.Second)
 | AuthHeader | string | "Bearer" | Override auth header format |
 | ProviderName | string | "" | Override Client.Provider() |
 | LogRequests | bool | false | Enable request/response metadata logging |
+| RetryPolicy | *RetryPolicy | nil | Configurable backoff (nil = DefaultRetryPolicy: 3 retries, 1s–30s) |
+| CircuitThreshold | int | 5 | Consecutive failures to open circuit (0 = disabled) |
+| CircuitCooldown | Duration | 30s | Open→half-open cooldown |
+| CooldownRateLimit | Duration | 60s | Profile cooldown for 429 errors |
+| CooldownOverload | Duration | 30s | Profile cooldown for 503 errors |
+| CooldownDefault | Duration | 10s | Profile cooldown for other transient errors |
+| RetryHook | RetryHook | nil | Observability hook for retry lifecycle events |
 
 ## Model Registry
 
@@ -414,6 +459,8 @@ llm/
   types.go, config.go, errors.go, ...   # Core types and interfaces
   register.go                            # RegisterProvider() registry
   factory.go                             # NewClient() -> registry lookup
+  retrypolicy.go                         # RetryPolicy + RetryHook (configurable backoff)
+  circuitbreaker.go                      # CircuitBreaker (3-state machine)
   provider/
     all.go                               # Blank-imports all sub-packages
     anthropic/anthropic.go               # Anthropic Claude adapter

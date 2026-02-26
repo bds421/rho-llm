@@ -30,11 +30,14 @@ gitlab2024.bds421-cloud.com/bds421/rho/llm/
 ├── registry.go       # ModelRegistry, ModelAliases, cost estimation, ResolveModelAlias()
 ├── register.go       # RegisterProvider() + provider factory registry
 ├── factory.go        # NewClient() / NewClientWithKeys() — registry lookup entry point
-├── pool.go           # AuthPool + PooledClient (rotation + retry for Complete and Stream pre-data failures)
-├── middleware.go     # LoggingClient decorator
-├── errors.go         # APIError type + Is*() helpers
-├── backoff.go        # Exponential backoff with jitter
-├── llm_test.go       # Integration and unit tests
+├── pool.go              # AuthPool + PooledClient (rotation + retry for Complete and Stream pre-data failures)
+├── retrypolicy.go       # RetryPolicy (configurable exponential backoff with jitter) + RetryHook
+├── circuitbreaker.go    # CircuitBreaker (3-state: closed → open → half-open)
+├── middleware.go        # LoggingClient decorator
+├── errors.go            # APIError type + Is*() helpers
+├── llm_test.go          # Integration and unit tests
+├── retrypolicy_test.go  # RetryPolicy unit tests
+├── circuitbreaker_test.go # CircuitBreaker unit tests
 │
 └── provider/                        # Provider adapters (database/sql driver pattern)
     ├── all.go                       # Blank-imports all sub-packages
@@ -62,10 +65,11 @@ Provider implementations register themselves via `init()` using `llm.RegisterPro
                       └──────────────┬─────────────────┘
                                      │
                                      ▼
-                      ┌──────────────────────┐
-                      │   PooledClient       │
-                      │  (retry + rotation)  │
-                      └──────────┬───────────┘
+                      ┌──────────────────────────────┐
+                      │       PooledClient            │
+                      │  (retry + rotation + circuit  │
+                      │   breaker + retry hooks)      │
+                      └──────────────┬────────────────┘
                                  │ wraps N SingleClients (1 per key)
                                  ▼
          ┌─────────────────────────────────────────────────┐
@@ -236,13 +240,13 @@ GetAvailable():
   3. If all in cooldown → return error with "next available in Xm"
 ```
 
-Cooldown durations are error-type-dependent:
+Cooldown durations are error-type-dependent (configurable via `Config`):
 
-| Error | Cooldown |
-|---|---|
-| Rate limit (429) | 60 s |
-| Overloaded (503) | 30 s |
-| Any other retryable | 10 s |
+| Error | Default Cooldown | Config Field |
+|---|---|---|
+| Rate limit (429) | 60 s | `CooldownRateLimit` |
+| Overloaded (503) | 30 s | `CooldownOverload` |
+| Any other retryable | 10 s | `CooldownDefault` |
 
 ### PooledClient
 
@@ -251,30 +255,33 @@ Cooldown durations are error-type-dependent:
 ```
 Complete():
     loop (maxRetries = min(max(pool.Count(), 3), 10)):  // Min 3, capped at 10
+        0. Circuit breaker gate: if open → backoff, continue (skip HTTP call)
         1. Call current client
-        2. Success → MarkSuccess(), return
+        2. Success → MarkSuccess(), breaker.RecordSuccess(), return
         3. Non-retryable, non-auth error (400) → return immediately
         4. Auth error (401/403) OR retryable error (429/503/502):
+             breaker.RecordFailure() (auth errors exempt — bad key ≠ broken endpoint)
              MarkFailed(err):
                - Auth errors: IsHealthy = false (permanent)
-               - Others: cooldown (temporary)
+               - Others: cooldown (temporary, configurable)
              rotateClient() → GetAvailable() → create new single client
              if rotation fails:
                - Auth error → return immediately (dead key is dead)
-               - Transient error → Backoff(attempt, 1s, 30s) → sleep & retry same
+               - Transient error → retryPolicy.Delay(attempt) → sleep & retry same
 
 Stream():
     loop (maxRetries = min(max(pool.Count(), 3), 10)):
+        0. Circuit breaker gate: if open → backoff, continue (skip HTTP call)
         1. Start streaming from current client
         2. If error BEFORE any event yielded (firstEvent == true):
              a. Non-retryable, non-auth error → return immediately
-             b. Auth or retryable error → MarkFailed(err), rotateClient():
+             b. Auth or retryable error → breaker.RecordFailure(), MarkFailed(err), rotateClient():
                   - rotation fails + auth error → return immediately
-                  - rotation fails + transient → backoff & retry
+                  - rotation fails + transient → retryPolicy.Delay(attempt) & retry
                   - rotation succeeds → retry with new client
         3. If error AFTER events yielded (firstEvent == false):
              → pass through to caller (no retry — would duplicate content)
-        4. Stream completes → MarkSuccess(), return
+        4. Stream completes → MarkSuccess(), breaker.RecordSuccess(), return
 ```
 
 **Auth error handling:** When a 401/403 occurs, the key is marked permanently unhealthy (`IsHealthy = false`), not just put in cooldown. If rotation fails because no healthy keys remain, the error returns immediately — no point backing off with a dead key.
@@ -303,9 +310,9 @@ func (pc *PooledClient) rotateClient(failedName string) error {
 
 Goroutine 1 rotates; goroutines 2-50 block at `rotateMu.Lock()`, then short-circuit when they see `currentName != failedName`.
 
-### Backoff (`backoff.go`)
+### Retry Policy (`retrypolicy.go`)
 
-Exponential with ±25% jitter to prevent thundering herd:
+`RetryPolicy` provides configurable exponential backoff with jitter. The `DefaultRetryPolicy` matches the original hardcoded behavior (1s base, 30s cap, 2x factor, ±25% jitter).
 
 ```
 attempt 0: base × 2⁰ = ~1s  (0.75–1.25s)
@@ -314,6 +321,36 @@ attempt 2: base × 2² = ~4s  (3.00–5.00s)
 attempt 3: base × 2³ = ~8s  (6.00–10.0s)
 ...capped at maxDelay (default 30s)
 ```
+
+All parameters are configurable via `Config.RetryPolicy`: `BaseDelay`, `MaxDelay`, `Factor`, `Jitter`, `MaxRetries`. The backward-compatible `Backoff()` function still works.
+
+### Circuit Breaker (`circuitbreaker.go`)
+
+Port of kit's 3-state machine, zero external dependencies:
+
+```
+CircuitClosed ──(threshold consecutive failures)──→ CircuitOpen
+CircuitOpen   ──(cooldown elapsed, 1 probe)───────→ CircuitHalfOpen
+CircuitHalfOpen ──(probe success)─────────────────→ CircuitClosed
+CircuitHalfOpen ──(probe failure)─────────────────→ CircuitOpen
+```
+
+- **Nil-safe:** all methods are no-ops on nil receiver (circuit always allows)
+- **Thread-safe:** `sync.Mutex` protects all state transitions
+- **Auth-aware:** `WithSuccessPredicate` excludes auth errors from failure counting (bad key ≠ broken endpoint)
+- Enabled by default via `DefaultConfig()` with threshold=5, cooldown=30s
+
+### Retry Hook (`retrypolicy.go`)
+
+`RetryHook` is a `func(RetryEvent)` callback fired during retry lifecycle events:
+
+| Event Type | When |
+|---|---|
+| `RetryAttemptFailed` | An attempt returned a retryable error |
+| `RetryRotating` | Pool is rotating to a different auth profile |
+| `RetryBackingOff` | Client is sleeping before next attempt |
+| `RetryCircuitOpen` | Circuit breaker rejected an attempt |
+| `RetryExhausted` | All retry attempts exhausted |
 
 ---
 
@@ -456,29 +493,40 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 
 ```go
 type Config struct {
-    Provider      string        // Provider name (see presets)
-    Model         string        // Model ID or alias
-    APIKey        string        // API key (empty OK for no-auth providers)
-    MaxTokens     int           // Max output tokens (default: 8192)
-    Temperature   float64       // Sampling temperature (default: 1.0)
-    ThinkingLevel ThinkingLevel  // ThinkingLow | ThinkingMedium | ThinkingHigh (zero = none)
-    Timeout       time.Duration // HTTP timeout (default: 120s)
-    BaseURL       string        // Override provider endpoint
-    AuthHeader    string        // Override auth header ("Bearer", "x-api-key", "")
-    ProviderName  string        // Override Client.Provider() return value
-    LogRequests   bool          // Enable metadata logging
+    Provider         string         // Provider name (see presets)
+    Model            string         // Model ID or alias
+    APIKey           string         // API key (empty OK for no-auth providers)
+    MaxTokens        int            // Max output tokens (default: 8192)
+    Temperature      float64        // Sampling temperature (default: 1.0)
+    ThinkingLevel    ThinkingLevel  // ThinkingLow | ThinkingMedium | ThinkingHigh (zero = none)
+    Timeout          time.Duration  // HTTP timeout (default: 120s)
+    BaseURL          string         // Override provider endpoint
+    AuthHeader       string         // Override auth header ("Bearer", "x-api-key", "")
+    ProviderName     string         // Override Client.Provider() return value
+    LogRequests      bool           // Enable metadata logging
+
+    // Resilience
+    RetryPolicy       *RetryPolicy  // Configurable backoff (nil = DefaultRetryPolicy)
+    CircuitThreshold  int           // Consecutive failures to open circuit (default: 5)
+    CircuitCooldown   time.Duration // Open→half-open cooldown (default: 30s)
+    CooldownRateLimit time.Duration // Profile cooldown for 429 errors (default: 60s)
+    CooldownOverload  time.Duration // Profile cooldown for 503 errors (default: 30s)
+    CooldownDefault   time.Duration // Profile cooldown for other errors (default: 10s)
+    RetryHook         RetryHook     // Observability hook for retry events (not serialized)
 }
 ```
 
 **Defaults (`DefaultConfig()`):**
 ```
-Provider:      "anthropic"
-Model:         "claude-sonnet-4-6"
-MaxTokens:     8192
-Temperature:   1.0
-ThinkingLevel: "" (ThinkingNone)
-Timeout:       120s
-AuthHeader:    "Bearer"
+Provider:         "anthropic"
+Model:            "claude-sonnet-4-6"
+MaxTokens:        8192
+Temperature:      1.0
+ThinkingLevel:    "" (ThinkingNone)
+Timeout:          120s
+AuthHeader:       "Bearer"
+CircuitThreshold: 5
+CircuitCooldown:  30s
 ```
 
 ---

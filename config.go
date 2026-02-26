@@ -111,6 +111,29 @@ type Config struct {
 	// Logs provider, model, message count, token usage, and errors.
 	// Does NOT log message content (privacy safe).
 	LogRequests bool `json:"log_requests,omitempty"`
+
+	// RetryPolicy configures backoff behavior. Nil uses DefaultRetryPolicy.
+	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
+
+	// CircuitThreshold is the number of consecutive failures before the circuit opens.
+	// Zero (default) disables the circuit breaker.
+	CircuitThreshold int `json:"circuit_threshold,omitempty"`
+
+	// CircuitCooldown is how long the circuit stays open before allowing a probe.
+	// Defaults to 30s when CircuitThreshold > 0.
+	CircuitCooldown time.Duration `json:"circuit_cooldown,omitempty"`
+
+	// CooldownRateLimit overrides the cooldown for 429 errors. Zero uses DefaultCooldownRateLimit.
+	CooldownRateLimit time.Duration `json:"cooldown_rate_limit,omitempty"`
+
+	// CooldownOverload overrides the cooldown for 503 errors. Zero uses DefaultCooldownOverload.
+	CooldownOverload time.Duration `json:"cooldown_overload,omitempty"`
+
+	// CooldownDefault overrides the cooldown for other transient errors. Zero uses DefaultCooldownDefault.
+	CooldownDefault time.Duration `json:"cooldown_default,omitempty"`
+
+	// RetryHook receives retry lifecycle events for observability. Not serialized.
+	RetryHook RetryHook `json:"-"`
 }
 
 // DefaultTimeout is applied when Config.Timeout is zero (the time.Duration zero value).
@@ -122,16 +145,35 @@ const DefaultTimeout = 120 * time.Second
 // regardless of pool size. Prevents pathological retry storms with large key pools.
 const maxRetryAttempts = 10
 
+const (
+	// DefaultCooldownRateLimit is the cooldown applied to profiles after a 429 rate-limit error.
+	DefaultCooldownRateLimit = 60 * time.Second
+
+	// DefaultCooldownOverload is the cooldown applied to profiles after a 503 overloaded error.
+	DefaultCooldownOverload = 30 * time.Second
+
+	// DefaultCooldownDefault is the cooldown applied to profiles after other transient errors.
+	DefaultCooldownDefault = 10 * time.Second
+
+	// DefaultCircuitThreshold is the number of consecutive failures before opening the circuit.
+	DefaultCircuitThreshold = 5
+
+	// DefaultCircuitCooldown is how long the circuit stays open before allowing a probe request.
+	DefaultCircuitCooldown = 30 * time.Second
+)
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		Provider:      "anthropic",
-		Model:         "claude-sonnet-4-6",
-		MaxTokens:     8192,
-		Temperature:   1.0,
-		ThinkingLevel: ThinkingNone,
-		Timeout:       DefaultTimeout,
-		AuthHeader:    "Bearer",
+		Provider:         "anthropic",
+		Model:            "claude-sonnet-4-6",
+		MaxTokens:        8192,
+		Temperature:      1.0,
+		ThinkingLevel:    ThinkingNone,
+		Timeout:          DefaultTimeout,
+		AuthHeader:       "Bearer",
+		CircuitThreshold: DefaultCircuitThreshold,
+		CircuitCooldown:  DefaultCircuitCooldown,
 	}
 }
 

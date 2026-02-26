@@ -125,8 +125,15 @@ func (p *AuthPool) GetAvailable() (AuthProfile, error) {
 }
 
 // MarkFailedByName marks a specific profile as failed.
-// Auth errors (401/403) permanently disable the key. Other errors apply a temporary cooldown.
+// Auth errors (401/403) permanently disable the key. Other errors apply a temporary cooldown
+// using the default durations (60s rate limit, 30s overload, 10s other).
 func (p *AuthPool) MarkFailedByName(name string, err error) {
+	p.MarkFailedByNameWithCooldown(name, err, DefaultCooldownRateLimit, DefaultCooldownOverload, DefaultCooldownDefault)
+}
+
+// MarkFailedByNameWithCooldown marks a specific profile as failed with configurable cooldowns.
+// Auth errors (401/403) permanently disable the key. Other errors apply the appropriate cooldown.
+func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimitCD, overloadCD, defaultCD time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -152,13 +159,13 @@ func (p *AuthPool) MarkFailedByName(name string, err error) {
 	var cooldown time.Duration
 	// Cooldown based on error type
 	if IsRateLimited(err) {
-		cooldown = 60 * time.Second
+		cooldown = rateLimitCD
 		slog.Warn("profile rate limited", "profile", profile.Name, "cooldown", cooldown)
 	} else if IsOverloaded(err) {
-		cooldown = 30 * time.Second
+		cooldown = overloadCD
 		slog.Warn("profile overloaded", "profile", profile.Name, "cooldown", cooldown)
 	} else {
-		cooldown = 10 * time.Second
+		cooldown = defaultCD
 		slog.Warn("profile failed", "profile", profile.Name, "error", err, "cooldown", cooldown)
 	}
 
@@ -263,11 +270,55 @@ type PooledClient struct {
 	rc         *refCountedClient
 	activeName string // Name of the profile currently active
 	cfg        Config
+	breaker    *CircuitBreaker // nil when CircuitThreshold == 0
+	retryHook  RetryHook       // nil when no hook configured
 	mu         sync.RWMutex
 	rotateMu   sync.Mutex // Serializes rotation to prevent thundering herd
 }
 
+// retryPolicy returns the configured RetryPolicy or the default.
+func (pc *PooledClient) retryPolicy() RetryPolicy {
+	if pc.cfg.RetryPolicy != nil {
+		return *pc.cfg.RetryPolicy
+	}
+	return DefaultRetryPolicy
+}
+
+// cooldownForError returns rate-limit, overload, or default cooldown
+// based on the error type, using config values with defaults.
+func (pc *PooledClient) cooldownForError() (rateLimitCD, overloadCD, defaultCD time.Duration) {
+	rateLimitCD = pc.cfg.CooldownRateLimit
+	if rateLimitCD == 0 {
+		rateLimitCD = DefaultCooldownRateLimit
+	}
+	overloadCD = pc.cfg.CooldownOverload
+	if overloadCD == 0 {
+		overloadCD = DefaultCooldownOverload
+	}
+	defaultCD = pc.cfg.CooldownDefault
+	if defaultCD == 0 {
+		defaultCD = DefaultCooldownDefault
+	}
+	return
+}
+
+// markFailed marks the named profile as failed with configured cooldowns.
+func (pc *PooledClient) markFailed(name string, err error) {
+	rl, ol, df := pc.cooldownForError()
+	pc.pool.MarkFailedByNameWithCooldown(name, err, rl, ol, df)
+}
+
+// emitRetryEvent fires the retry hook if configured.
+func (pc *PooledClient) emitRetryEvent(evt RetryEvent) {
+	if pc.retryHook != nil {
+		evt.Provider = pc.cfg.Provider
+		pc.retryHook(evt)
+	}
+}
+
 // NewPooledClient creates a new pooled client with auth rotation.
+// If cfg.CircuitThreshold > 0, a circuit breaker is automatically created.
+// If cfg.RetryHook is set, it is wired into the retry loop.
 func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProfile) (Client, error)) (*PooledClient, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("no API keys provided for provider %s", cfg.Provider)
@@ -288,13 +339,29 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 
 	slog.Info("pooled client created", "profiles", pool.Count(), "provider", cfg.Provider)
 
-	return &PooledClient{
+	pc := &PooledClient{
 		pool:       pool,
 		clientFunc: clientFunc,
 		rc:         newRefCountedClient(client),
 		activeName: profile.Name,
 		cfg:        cfg,
-	}, nil
+		retryHook:  cfg.RetryHook,
+	}
+
+	// Wire circuit breaker from config
+	if cfg.CircuitThreshold > 0 {
+		cooldown := cfg.CircuitCooldown
+		if cooldown == 0 {
+			cooldown = DefaultCircuitCooldown
+		}
+		pc.breaker = NewCircuitBreaker(cfg.CircuitThreshold, cooldown,
+			WithSuccessPredicate(func(err error) bool {
+				return IsAuthError(err)
+			}),
+		)
+	}
+
+	return pc, nil
 }
 
 // Complete implements Client.Complete with retry/rotation and exponential backoff.
@@ -307,8 +374,24 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 		maxRetries = maxRetryAttempts // Prevent pathological retry storms with large key pools
 	}
 
+	rp := pc.retryPolicy()
+
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
+		// Circuit breaker gate: if open, skip the attempt and backoff
+		if !pc.breaker.Allow() {
+			pc.emitRetryEvent(RetryEvent{Type: RetryCircuitOpen, Attempt: i})
+			backoff := rp.Delay(i)
+			pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: i, Backoff: backoff})
+			slog.Info("circuit open, backing off", "attempt", i+1, "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+				continue
+			}
+		}
+
 		pc.mu.RLock()
 		rc := pc.rc
 		usedName := pc.activeName
@@ -323,10 +406,12 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 		rc.Release()
 		if err == nil {
 			pc.pool.MarkSuccessByName(usedName)
+			pc.breaker.RecordSuccess()
 			return resp, nil
 		}
 
 		lastErr = err
+		pc.emitRetryEvent(RetryEvent{Type: RetryAttemptFailed, Attempt: i, Err: err})
 
 		// Auth errors and retryable errors trigger rotation to try another key.
 		// Other errors (400 bad request, etc.) are not key-related — return immediately.
@@ -334,8 +419,13 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 			return nil, err
 		}
 
+		// Auth errors do NOT trip the circuit — bad key ≠ broken endpoint
+		if !IsAuthError(err) {
+			pc.breaker.RecordFailure()
+		}
+
 		// Mark failed (auth errors get permanently disabled, others get cooldown)
-		pc.pool.MarkFailedByName(usedName, err)
+		pc.markFailed(usedName, err)
 
 		if rotErr := pc.rotateClient(usedName); rotErr != nil {
 			// Rotation failed (all keys in cooldown or single-key pool).
@@ -354,8 +444,9 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 					backoff = time.Second
 				}
 			} else {
-				backoff = Backoff(i, 1*time.Second, 30*time.Second)
+				backoff = rp.Delay(i)
 			}
+			pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: i, Err: rotErr, Backoff: backoff})
 			slog.Info("rotation failed, backing off", "attempt", i+1, "backoff", backoff, "error", rotErr)
 
 			select {
@@ -365,10 +456,12 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 				// Continue to next iteration with same client
 			}
 		} else {
+			pc.emitRetryEvent(RetryEvent{Type: RetryRotating, Attempt: i, Err: err})
 			slog.Info("retrying with new profile", "attempt", i+2, "max", maxRetries)
 		}
 	}
 
+	pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Err: lastErr})
 	return nil, fmt.Errorf("all retries exhausted: %w", lastErr)
 }
 
@@ -388,8 +481,25 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			maxRetries = maxRetryAttempts // Prevent pathological retry storms with large key pools
 		}
 
+		rp := pc.retryPolicy()
+
 		var lastErr error
 		for attempt := 0; attempt < maxRetries; attempt++ {
+			// Circuit breaker gate: if open, skip the attempt and backoff
+			if !pc.breaker.Allow() {
+				pc.emitRetryEvent(RetryEvent{Type: RetryCircuitOpen, Attempt: attempt})
+				backoff := rp.Delay(attempt)
+				pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: attempt, Backoff: backoff})
+				slog.Info("stream: circuit open, backing off", "attempt", attempt+1, "backoff", backoff)
+				select {
+				case <-ctx.Done():
+					yield(StreamEvent{}, ctx.Err())
+					return
+				case <-time.After(backoff):
+					continue
+				}
+			}
+
 			pc.mu.RLock()
 			rc := pc.rc
 			usedName := pc.activeName
@@ -414,7 +524,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 					}
 					// Mid-stream error or non-retryable — pass through
 					if IsRetryable(err) || IsAuthError(err) {
-						pc.pool.MarkFailedByName(usedName, err)
+						pc.markFailed(usedName, err)
 					}
 					rc.Release()
 					yield(StreamEvent{}, err)
@@ -423,6 +533,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				firstEvent = false
 				if !yield(event, nil) {
 					pc.pool.MarkSuccessByName(usedName)
+					pc.breaker.RecordSuccess()
 					rc.Release()
 					return
 				}
@@ -433,11 +544,19 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			if !retryable {
 				// Stream completed normally
 				pc.pool.MarkSuccessByName(usedName)
+				pc.breaker.RecordSuccess()
 				return
 			}
 
+			pc.emitRetryEvent(RetryEvent{Type: RetryAttemptFailed, Attempt: attempt, Err: lastErr})
+
+			// Auth errors do NOT trip the circuit — bad key ≠ broken endpoint
+			if !IsAuthError(lastErr) {
+				pc.breaker.RecordFailure()
+			}
+
 			// Pre-data retryable error — rotate and retry
-			pc.pool.MarkFailedByName(usedName, lastErr)
+			pc.markFailed(usedName, lastErr)
 			if rotErr := pc.rotateClient(usedName); rotErr != nil {
 				// Rotation failed (all keys in cooldown or single-key pool).
 				// Auth errors are permanent — no point retrying with the same dead key.
@@ -456,8 +575,9 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 						backoff = time.Second
 					}
 				} else {
-					backoff = Backoff(attempt, 1*time.Second, 30*time.Second)
+					backoff = rp.Delay(attempt)
 				}
+				pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: attempt, Err: rotErr, Backoff: backoff})
 				slog.Info("stream: rotation failed, backing off", "attempt", attempt+1, "backoff", backoff, "error", rotErr)
 
 				select {
@@ -468,10 +588,12 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 					// Continue to next iteration with same client
 				}
 			} else {
+				pc.emitRetryEvent(RetryEvent{Type: RetryRotating, Attempt: attempt, Err: lastErr})
 				slog.Info("stream: retrying with new profile", "attempt", attempt+2, "max", maxRetries)
 			}
 		}
 
+		pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Err: lastErr})
 		yield(StreamEvent{}, fmt.Errorf("stream: all retries exhausted: %w", lastErr))
 	}
 }

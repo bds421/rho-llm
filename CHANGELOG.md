@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-02-26
+
+### Added
+
+- **Circuit breaker** — 3-state machine (`closed → open → half-open`) that opens after a configurable threshold of consecutive failures, prevents request storms into degraded endpoints, and auto-recovers via probe requests after cooldown. Enabled by default (`CircuitThreshold: 5`, `CircuitCooldown: 30s`). Auth errors (401/403) do not trip the circuit — bad key ≠ broken endpoint. All methods are nil-safe and thread-safe. New file: `circuitbreaker.go`.
+
+- **Configurable retry policy** — `RetryPolicy` struct with `BaseDelay`, `MaxDelay`, `Factor`, `Jitter`, `MaxRetries`. `Config.RetryPolicy` overrides the default (1s base, 30s max, 2x factor, ±25% jitter). The `Backoff()` function remains backward-compatible. New file: `retrypolicy.go` (replaces `backoff.go`).
+
+- **Configurable cooldowns** — `Config.CooldownRateLimit` (default 60s), `Config.CooldownOverload` (default 30s), `Config.CooldownDefault` (default 10s) replace hardcoded magic numbers. Exported constants: `DefaultCooldownRateLimit`, `DefaultCooldownOverload`, `DefaultCooldownDefault`, `DefaultCircuitThreshold`, `DefaultCircuitCooldown`.
+
+- **Retry observability hook** — `Config.RetryHook` receives `RetryEvent` structs with typed events (`RetryAttemptFailed`, `RetryRotating`, `RetryBackingOff`, `RetryCircuitOpen`, `RetryExhausted`) for metrics, alerting, or debugging.
+
+- **`MarkFailedByNameWithCooldown()`** — New method on `AuthPool` accepting explicit cooldown durations. Original `MarkFailedByName()` delegates to it with defaults.
+
+### Changed
+
+- **`DefaultConfig()` enables circuit breaker** — `CircuitThreshold: 5`, `CircuitCooldown: 30s`. All clients through `DefaultConfig()` or `NewClient()` benefit automatically.
+
+- **`NewPooledClient` wires resilience from config** — Circuit breaker and retry hook are initialized from `Config` fields directly in `NewPooledClient`, not just in the factory path. Direct callers of `NewPooledClient` get the same behavior as `NewClient`.
+
+### Removed
+
+- **`backoff.go`** — Replaced by `retrypolicy.go`. The exported `Backoff()` function is preserved as a backward-compatible wrapper around `RetryPolicy.Delay()`.
+
 ## [0.1.12] - 2026-02-26
 
 ### Fixed
