@@ -180,5 +180,6 @@ func isContextLengthMessage(body string) bool {
 		strings.Contains(lower, "maximum context") ||
 		strings.Contains(lower, "prompt is too long") ||
 		strings.Contains(lower, "input too long") ||
-		strings.Contains(lower, "request too large")
+		strings.Contains(lower, "request too large") ||
+		strings.Contains(lower, "token count exceeds") // Gemini: "input token count exceeds the maximum number of tokens allowed"
 }

@@ -529,6 +529,7 @@ func TestAPIErrorFromStatus(t *testing.T) {
 		{400, "context_length_exceeded: max 8192 tokens", false, false, true},
 		{400, "input too long for model", false, false, true},
 		{400, "request too large", false, false, true},
+		{400, `{"error":{"code":400,"message":"The input token count exceeds the maximum number of tokens allowed 1048576.","status":"INVALID_ARGUMENT"}}`, false, false, true},
 		{400, "bad request", false, false, false},
 		{500, "internal server error", true, false, false},
 	}
