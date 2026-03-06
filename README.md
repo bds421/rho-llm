@@ -429,7 +429,7 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `grok`, `grok4`, `grok-4` | `grok-4-fast-non-reasoning` |
+| `grok`, `grok4.2`, `grok4.20`, `grok4` | `grok-4.20-beta` |
 | `grok4.1`, `grok-4.1` | `grok-4-1-fast-non-reasoning` |
 | `grok-reasoning`, `grok-4-reasoning` | `grok-4-fast-reasoning` |
 | `grok-4.1-reasoning` | `grok-4-1-fast-reasoning` |
@@ -440,7 +440,9 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `gpt`, `gpt5` | `gpt-5.2` |
+| `gpt`, `gpt5.4`, `gpt5` | `gpt-5.4` |
+| `gpt5.3`, `gpt-instant` | `gpt-5.3-instant` |
+| `gpt5.2` | `gpt-5.2` |
 | `gpt5.1` | `gpt-5.1` |
 | `gpt5-mini` | `gpt-5-mini` |
 | `gpt5-nano` | `gpt-5-nano` |
@@ -482,9 +484,9 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `gemini`, `flash-lite` | `gemini-2.5-flash-lite` |
+| `gemini`, `flash-lite` | `gemini-3.1-flash-lite-preview` |
 | `flash` | `gemini-2.5-flash` |
-| `gemini-pro`, `gemini3`, `gemini-3` | `gemini-3-pro-preview` |
+| `gemini-pro`, `gemini3.1`, `gemini3`, `gemini-3` | `gemini-3.1-pro-preview` |
 
 > **Gemini 3 note:** `gemini-3-pro-preview` and `gemini-3-flash-preview` use
 > `ThoughtSignature` — the model returns an opaque signature in tool call responses
