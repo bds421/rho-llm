@@ -108,6 +108,9 @@ type ContentPart struct {
 	ToolResultID      string `json:"tool_use_id,omitempty"`
 	ToolResultContent string `json:"content,omitempty"`
 	IsError           bool   `json:"is_error,omitempty"`
+
+	// Caching (Anthropic): mark this content block as cacheable
+	CacheControl bool `json:"cache_control,omitempty"`
 }
 
 // ImageSource represents an image source.
@@ -178,6 +181,9 @@ type Tool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"input_schema"`
+
+	// Caching (Anthropic): mark this tool definition as cacheable
+	CacheControl bool `json:"cache_control,omitempty"`
 }
 
 // ToolCall represents a tool invocation by the LLM.
@@ -203,6 +209,10 @@ type Request struct {
 	ThinkingLevel  ThinkingLevel `json:"thinking_level,omitempty"`  // low, medium, high (zero value = none)
 	ThinkingBudget int           `json:"thinking_budget,omitempty"` // custom token budget; overrides ThinkingLevel default when > 0
 	StopSequences  []string      `json:"stop_sequences,omitempty"`
+
+	// Caching
+	SystemCacheControl bool   `json:"system_cache_control,omitempty"` // Anthropic: cache the system prompt
+	CachedContent      string `json:"cached_content,omitempty"`       // Gemini: pre-created cache name
 }
 
 // Response represents an LLM completion response.
@@ -215,6 +225,10 @@ type Response struct {
 	StopReason   string     `json:"stop_reason"` // end_turn, tool_use, max_tokens
 	InputTokens  int        `json:"input_tokens"`
 	OutputTokens int        `json:"output_tokens"`
+
+	// Cache token usage (Anthropic)
+	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache
+	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`     // tokens read from cache
 }
 
 // =============================================================================
@@ -240,6 +254,10 @@ type StreamEvent struct {
 
 	// Done event
 	StopReason string `json:"stop_reason,omitempty"`
+
+	// Cache token usage (reported in EventDone, Anthropic only)
+	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
 
 	// Error event
 	Error string `json:"error,omitempty"`

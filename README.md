@@ -175,6 +175,64 @@ req := llm.Request{
 
 If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
 
+## Context Caching
+
+Context caching reduces cost and latency by reusing previously processed input. Anthropic and Gemini support caching with different models.
+
+### Anthropic (inline cache_control)
+
+Mark content blocks, system prompts, or tool definitions as cacheable. Anthropic caches the marked prefix and reuses it on subsequent requests with the same prefix.
+
+```go
+req := llm.Request{
+    System:             "You are a helpful assistant with extensive knowledge...",
+    SystemCacheControl: true, // Cache the system prompt
+    Messages: []llm.Message{{
+        Role: llm.RoleUser,
+        Content: []llm.ContentPart{
+            {Type: llm.ContentText, Text: longDocument, CacheControl: true}, // Cache this block
+            {Type: llm.ContentText, Text: "Summarize the above."},
+        },
+    }},
+    Tools: []llm.Tool{{
+        Name: "search", Description: "Search the web",
+        InputSchema:  map[string]interface{}{"type": "object"},
+        CacheControl: true, // Cache this tool definition
+    }},
+}
+
+resp, _ := client.Complete(ctx, req)
+fmt.Printf("Cache write: %d tokens, Cache read: %d tokens\n",
+    resp.CacheCreationTokens, resp.CacheReadTokens)
+```
+
+Cache token usage is also available in streaming via `EventDone`:
+```go
+for event, err := range client.Stream(ctx, req) {
+    if event.Type == llm.EventDone {
+        fmt.Printf("Cache: write=%d read=%d\n",
+            event.CacheCreationTokens, event.CacheReadTokens)
+    }
+}
+```
+
+### Gemini (cached content reference)
+
+Gemini uses a two-stage model: create a cache resource externally, then reference it by name. Cache lifecycle (create/list/delete) is managed outside the SDK.
+
+```go
+req := llm.Request{
+    CachedContent: "cachedContents/abc123", // Pre-created via Gemini API
+    Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "Summarize.")},
+}
+resp, _ := client.Complete(ctx, req)
+fmt.Printf("Cached tokens: %d\n", resp.CacheReadTokens)
+```
+
+### OpenAI-compatible
+
+Cache fields are silently ignored — no error, no effect.
+
 ## Automatic Retry, Circuit Breaker & Auth Pool Rotation
 
 All clients get automatic retry with exponential backoff (1s→2s→4s, capped at 30s) and a circuit breaker (opens after 5 consecutive failures, probes after 30s) — including keyless local providers like Ollama and vLLM. A solo developer hitting a transient 502 or 429 gets the same resilience as an enterprise with 10 keys.
@@ -340,7 +398,7 @@ delay = p.Delay(attempt)
 | AuthHeader | string | "Bearer" | Override auth header format |
 | ProviderName | string | "" | Override Client.Provider() |
 | LogRequests | bool | false | Enable request/response metadata logging |
-| RetryPolicy | *RetryPolicy | nil | Configurable backoff (nil = DefaultRetryPolicy: 3 retries, 1s–30s) |
+| RetryPolicy | *RetryPolicy | nil | Configurable backoff (nil = DefaultRetryPolicy: 1s–30s, 2x, ±25% jitter) |
 | CircuitThreshold | int | 5 | Consecutive failures to open circuit (0 = disabled) |
 | CircuitCooldown | Duration | 30s | Open→half-open cooldown |
 | CooldownRateLimit | Duration | 60s | Profile cooldown for 429 errors |

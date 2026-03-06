@@ -180,6 +180,7 @@ type geminiRequest struct {
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 	Tools             []geminiTool            `json:"tools,omitempty"`
 	ThinkingConfig    *geminiThinkingConfig   `json:"thinkingConfig,omitempty"`
+	CachedContent     string                  `json:"cachedContent,omitempty"` // pre-created cache resource name
 }
 
 type geminiThinkingConfig struct {
@@ -234,9 +235,10 @@ type geminiResponse struct {
 		} `json:"safetyRatings"`
 	} `json:"candidates"`
 	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 	} `json:"usageMetadata"`
 	ModelVersion string `json:"modelVersion"`
 }
@@ -247,6 +249,7 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 			Temperature:     req.Temperature,
 			MaxOutputTokens: req.MaxTokens,
 		},
+		CachedContent: req.CachedContent,
 	}
 
 	if apiReq.GenerationConfig.MaxOutputTokens == 0 {
@@ -367,9 +370,10 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 	}
 
 	resp := &llm.Response{
-		Model:        model,
-		InputTokens:  apiResp.UsageMetadata.PromptTokenCount,
-		OutputTokens: apiResp.UsageMetadata.CandidatesTokenCount,
+		Model:           model,
+		InputTokens:     apiResp.UsageMetadata.PromptTokenCount,
+		OutputTokens:    apiResp.UsageMetadata.CandidatesTokenCount,
+		CacheReadTokens: apiResp.UsageMetadata.CachedContentTokenCount,
 	}
 
 	if len(apiResp.Candidates) > 0 {
@@ -455,10 +459,11 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			if candidate.FinishReason != "" {
 				doneEmitted = true
 				if !yield(llm.StreamEvent{
-					Type:         llm.EventDone,
-					StopReason:   normalizeStopReason(candidate.FinishReason),
-					InputTokens:  event.UsageMetadata.PromptTokenCount,
-					OutputTokens: event.UsageMetadata.CandidatesTokenCount,
+					Type:            llm.EventDone,
+					StopReason:      normalizeStopReason(candidate.FinishReason),
+					InputTokens:     event.UsageMetadata.PromptTokenCount,
+					OutputTokens:    event.UsageMetadata.CandidatesTokenCount,
+					CacheReadTokens: event.UsageMetadata.CachedContentTokenCount,
 				}, nil) {
 					return
 				}

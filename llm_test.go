@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -3282,7 +3283,6 @@ func TestIsRetryableStringFallback(t *testing.T) {
 // TestMaxRetryAttemptsCapped verifies the retry cap prevents excessive iterations.
 func TestMaxRetryAttemptsCapped(t *testing.T) {
 	// Create a pool with 20 keys (all will fail), verify we don't do 20 retries
-	var attempts int
 	keys := make([]string, 20)
 	for i := range keys {
 		keys[i] = fmt.Sprintf("key-%d", i)
@@ -3307,7 +3307,6 @@ func TestMaxRetryAttemptsCapped(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when all keys fail")
 	}
-	_ = attempts // attempts tracked inside pool, verified by timing
 	// The test passes if it completes within 5s — without the cap,
 	// 20 retries × backoff would take much longer.
 }
@@ -3324,14 +3323,22 @@ func TestDefaultTimeoutConstant(t *testing.T) {
 // =============================================================================
 
 // TestCircuitBreakerOpensAfterConsecutiveFailures verifies the circuit opens
-// after CircuitThreshold consecutive failures, skipping HTTP calls.
+// after CircuitThreshold consecutive failures, returning circuit-open error.
 func TestCircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 	var mu sync.Mutex
-	var callCount int
+	var circuitOpenEvents int
 
 	cfg := llm.DefaultConfig()
-	cfg.CircuitThreshold = 3
-	cfg.CircuitCooldown = 50 * time.Millisecond // short for testing
+	cfg.CircuitThreshold = 2 // opens after 2 failures; attempt 0,1 fail → circuit opens → attempt 2 sees it
+	cfg.CircuitCooldown = 50 * time.Millisecond
+	cfg.CooldownOverload = 10 * time.Millisecond
+	cfg.RetryHook = func(evt llm.RetryEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		if evt.Type == llm.RetryCircuitOpen {
+			circuitOpenEvents++
+		}
+	}
 
 	pc, err := llm.NewPooledClient(cfg, []string{"key-a"}, func(profile llm.AuthProfile) (llm.Client, error) {
 		return &threadSafeMockClient{
@@ -3348,48 +3355,23 @@ func TestCircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Use a hook to count actual attempts vs circuit rejections
-	var circuitOpenEvents int
-	cfg.RetryHook = func(evt llm.RetryEvent) {
-		mu.Lock()
-		defer mu.Unlock()
-		if evt.Type == llm.RetryCircuitOpen {
-			circuitOpenEvents++
-		}
-	}
-
-	// We can't set the hook after construction on the external API,
-	// so let's just verify that after enough 503s, the call eventually
-	// exhausts retries faster than without circuit breaker.
+	// Attempts 0 and 1 fail (hitting threshold=2), circuit opens.
+	// Attempt 2 sees the open circuit and returns immediately.
 	_, err = pc.Complete(ctx, llm.Request{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 
-	// Count calls by creating a fresh pool where we actually track calls
-	callCount = 0
-	pc2, err := llm.NewPooledClient(cfg, []string{"key-b"}, func(profile llm.AuthProfile) (llm.Client, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		callCount++
-		return &threadSafeMockClient{
-			provider: "test",
-			model:    "m",
-			err:      llm.NewOverloadedError("test", "overloaded"),
-		}, nil
-	})
-	if err != nil {
-		t.Fatalf("NewPooledClient: %v", err)
-	}
-	defer pc2.Close()
-
-	_, _ = pc2.Complete(ctx, llm.Request{})
-
 	mu.Lock()
-	// clientFunc is only called once (initial creation), not per-retry.
-	// The circuit breaker gates retries at the pool level.
-	_ = callCount
+	if circuitOpenEvents == 0 {
+		t.Error("expected at least one RetryCircuitOpen event from hook")
+	}
 	mu.Unlock()
+
+	// Error should mention circuit breaker
+	if !strings.Contains(err.Error(), "circuit breaker open") {
+		t.Errorf("expected circuit breaker open error, got: %v", err)
+	}
 }
 
 // TestCircuitBreakerRecovery verifies the circuit transitions half-open → closed
@@ -3490,30 +3472,18 @@ func TestCircuitBreakerAuthErrorsDoNotTrip(t *testing.T) {
 }
 
 // TestCircuitBreakerStreamIntegration verifies the circuit breaker gates
-// stream attempts the same as Complete.
+// stream attempts the same as Complete — returning circuit-open error.
 func TestCircuitBreakerStreamIntegration(t *testing.T) {
-	var mu sync.Mutex
-	failCount := 0
-	threshold := 2
-
 	cfg := llm.DefaultConfig()
-	cfg.CircuitThreshold = threshold
+	cfg.CircuitThreshold = 2 // opens after 2 failures
 	cfg.CircuitCooldown = 50 * time.Millisecond
+	cfg.CooldownOverload = 10 * time.Millisecond
 
 	pc, err := llm.NewPooledClient(cfg, []string{"key-a"}, func(profile llm.AuthProfile) (llm.Client, error) {
-		return &mockClient{
+		return &threadSafeMockClient{
 			provider: "test",
 			model:    "m",
-			completeFunc: func(ctx context.Context, req llm.Request) (*llm.Response, error) {
-				mu.Lock()
-				fc := failCount
-				failCount++
-				mu.Unlock()
-				if fc < threshold {
-					return nil, llm.NewOverloadedError("test", "overloaded")
-				}
-				return &llm.Response{Content: "recovered"}, nil
-			},
+			err:      llm.NewOverloadedError("test", "overloaded"),
 		}, nil
 	})
 	if err != nil {
@@ -3524,24 +3494,21 @@ func TestCircuitBreakerStreamIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var text string
 	var streamErr error
-	for event, err := range pc.Stream(ctx, llm.Request{}) {
+	for _, err := range pc.Stream(ctx, llm.Request{}) {
 		if err != nil {
 			streamErr = err
 			break
 		}
-		if event.Type == llm.EventContent {
-			text += event.Text
-		}
 	}
 
-	// Stream uses the mock's Stream method which uses completeErr,
-	// but our mock uses completeFunc. The mockClient's Stream checks
-	// the err field, not completeFunc. So we verify no panic/race occurred.
-	// The key point: circuit breaker gates stream attempts without error.
-	_ = text
-	_ = streamErr
+	if streamErr == nil {
+		t.Fatal("expected error from stream, got nil")
+	}
+	// After threshold failures, the circuit opens and stream returns circuit-open error
+	if !strings.Contains(streamErr.Error(), "circuit breaker open") {
+		t.Errorf("expected circuit breaker open error, got: %v", streamErr)
+	}
 }
 
 // TestRetryHookReceivesEvents verifies the RetryHook fires on retry lifecycle events.
@@ -3639,8 +3606,7 @@ func TestDefaultConfigIncludesCircuitBreaker(t *testing.T) {
 // TestRetryPolicyFromConfig verifies that a custom RetryPolicy on Config is used.
 func TestRetryPolicyFromConfig(t *testing.T) {
 	customPolicy := &llm.RetryPolicy{
-		MaxRetries: 2,
-		BaseDelay:  10 * time.Millisecond,
+		BaseDelay: 10 * time.Millisecond,
 		MaxDelay:   100 * time.Millisecond,
 		Factor:     2.0,
 		Jitter:     0,
@@ -3678,5 +3644,700 @@ func TestRetryPolicyFromConfig(t *testing.T) {
 	// the custom policy was used (default would take ~7s minimum).
 	if elapsed > 2*time.Second {
 		t.Errorf("elapsed = %v, expected < 2s with fast retry policy", elapsed)
+	}
+}
+
+// =============================================================================
+// CONTEXT CACHING TESTS
+// =============================================================================
+
+// TestAnthropicCacheControlContentBlocks verifies that cache_control is added
+// to content blocks in the wire request when CacheControl is true.
+func TestAnthropicCacheControlContentBlocks(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_test",
+			"type": "message",
+			"role": "assistant",
+			"model": "claude-sonnet-4-6",
+			"content": [{"type": "text", "text": "hi"}],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 10, "output_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		Messages: []llm.Message{{
+			Role: llm.RoleUser,
+			Content: []llm.ContentPart{
+				{Type: llm.ContentText, Text: "large context here", CacheControl: true},
+				{Type: llm.ContentText, Text: "question"},
+			},
+		}},
+	}
+
+	_, err = client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// Parse and verify the wire request
+	var wireReq map[string]interface{}
+	if err := json.Unmarshal(captured, &wireReq); err != nil {
+		t.Fatalf("unmarshal wire request: %v", err)
+	}
+
+	msgs, ok := wireReq["messages"].([]interface{})
+	if !ok || len(msgs) == 0 {
+		t.Fatal("no messages in wire request")
+	}
+	msg := msgs[0].(map[string]interface{})
+	content := msg["content"].([]interface{})
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(content))
+	}
+
+	// First block should have cache_control
+	block0 := content[0].(map[string]interface{})
+	cc, ok := block0["cache_control"]
+	if !ok {
+		t.Fatal("first content block missing cache_control")
+	}
+	ccMap := cc.(map[string]interface{})
+	if ccMap["type"] != "ephemeral" {
+		t.Errorf("cache_control type = %q, want ephemeral", ccMap["type"])
+	}
+
+	// Second block should NOT have cache_control
+	block1 := content[1].(map[string]interface{})
+	if _, ok := block1["cache_control"]; ok {
+		t.Error("second content block should not have cache_control")
+	}
+}
+
+// TestAnthropicSystemCacheControl verifies that SystemCacheControl sends
+// the system prompt as structured content blocks with cache_control.
+func TestAnthropicSystemCacheControl(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_test",
+			"type": "message",
+			"role": "assistant",
+			"model": "claude-sonnet-4-6",
+			"content": [{"type": "text", "text": "hi"}],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 10, "output_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		System:             "You are a helpful assistant with a large knowledge base.",
+		SystemCacheControl: true,
+		Messages: []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "hello"),
+		},
+	}
+
+	_, err = client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var wireReq map[string]interface{}
+	if err := json.Unmarshal(captured, &wireReq); err != nil {
+		t.Fatalf("unmarshal wire request: %v", err)
+	}
+
+	// System should be an array of content blocks, not a string
+	sysField := wireReq["system"]
+	sysBlocks, ok := sysField.([]interface{})
+	if !ok {
+		t.Fatalf("system field should be array, got %T", sysField)
+	}
+	if len(sysBlocks) != 1 {
+		t.Fatalf("expected 1 system block, got %d", len(sysBlocks))
+	}
+
+	block := sysBlocks[0].(map[string]interface{})
+	if block["type"] != "text" {
+		t.Errorf("system block type = %q, want text", block["type"])
+	}
+	cc, ok := block["cache_control"]
+	if !ok {
+		t.Fatal("system block missing cache_control")
+	}
+	ccMap := cc.(map[string]interface{})
+	if ccMap["type"] != "ephemeral" {
+		t.Errorf("cache_control type = %q, want ephemeral", ccMap["type"])
+	}
+}
+
+// TestAnthropicSystemNoCacheControl verifies that without SystemCacheControl,
+// the system prompt is sent as a plain string (backward compatible).
+func TestAnthropicSystemNoCacheControl(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_test",
+			"type": "message",
+			"role": "assistant",
+			"model": "claude-sonnet-4-6",
+			"content": [{"type": "text", "text": "hi"}],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 10, "output_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		System: "You are a helpful assistant.",
+		Messages: []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "hello"),
+		},
+	}
+
+	_, err = client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var wireReq map[string]interface{}
+	if err := json.Unmarshal(captured, &wireReq); err != nil {
+		t.Fatalf("unmarshal wire request: %v", err)
+	}
+
+	// System should be a plain string
+	sysField := wireReq["system"]
+	sysStr, ok := sysField.(string)
+	if !ok {
+		t.Fatalf("system field should be string, got %T", sysField)
+	}
+	if sysStr != "You are a helpful assistant." {
+		t.Errorf("system = %q, want exact string", sysStr)
+	}
+}
+
+// TestAnthropicToolCacheControl verifies that cache_control is added
+// to tool definitions when Tool.CacheControl is true.
+func TestAnthropicToolCacheControl(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_test",
+			"type": "message",
+			"role": "assistant",
+			"model": "claude-sonnet-4-6",
+			"content": [{"type": "text", "text": "hi"}],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 10, "output_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		Messages: []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "hello"),
+		},
+		Tools: []llm.Tool{
+			{
+				Name:         "get_weather",
+				Description:  "Get the weather",
+				InputSchema:  map[string]interface{}{"type": "object"},
+				CacheControl: true,
+			},
+			{
+				Name:        "get_time",
+				Description: "Get the time",
+				InputSchema: map[string]interface{}{"type": "object"},
+			},
+		},
+	}
+
+	_, err = client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var wireReq map[string]interface{}
+	if err := json.Unmarshal(captured, &wireReq); err != nil {
+		t.Fatalf("unmarshal wire request: %v", err)
+	}
+
+	tools := wireReq["tools"].([]interface{})
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(tools))
+	}
+
+	// First tool should have cache_control
+	tool0 := tools[0].(map[string]interface{})
+	cc, ok := tool0["cache_control"]
+	if !ok {
+		t.Fatal("first tool missing cache_control")
+	}
+	ccMap := cc.(map[string]interface{})
+	if ccMap["type"] != "ephemeral" {
+		t.Errorf("cache_control type = %q, want ephemeral", ccMap["type"])
+	}
+
+	// Second tool should NOT have cache_control
+	tool1 := tools[1].(map[string]interface{})
+	if _, ok := tool1["cache_control"]; ok {
+		t.Error("second tool should not have cache_control")
+	}
+}
+
+// TestAnthropicCacheTokenUsageComplete verifies cache token parsing in Complete responses.
+func TestAnthropicCacheTokenUsageComplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_test",
+			"type": "message",
+			"role": "assistant",
+			"model": "claude-sonnet-4-6",
+			"content": [{"type": "text", "text": "cached response"}],
+			"stop_reason": "end_turn",
+			"usage": {
+				"input_tokens": 100,
+				"output_tokens": 20,
+				"cache_creation_input_tokens": 5000,
+				"cache_read_input_tokens": 3000
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	resp, err := client.Complete(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if resp.CacheCreationTokens != 5000 {
+		t.Errorf("CacheCreationTokens = %d, want 5000", resp.CacheCreationTokens)
+	}
+	if resp.CacheReadTokens != 3000 {
+		t.Errorf("CacheReadTokens = %d, want 3000", resp.CacheReadTokens)
+	}
+}
+
+// TestAnthropicCacheTokenUsageStream verifies cache token parsing in stream responses.
+func TestAnthropicCacheTokenUsageStream(t *testing.T) {
+	ssePayload := strings.Join([]string{
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":5000,"cache_read_input_tokens":3000}}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+		`data: {"type":"content_block_stop","index":0}`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(ssePayload))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	var doneEvent llm.StreamEvent
+	for event, err := range client.Stream(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	}) {
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+		if event.Type == llm.EventDone {
+			doneEvent = event
+		}
+	}
+
+	if doneEvent.CacheCreationTokens != 5000 {
+		t.Errorf("CacheCreationTokens = %d, want 5000", doneEvent.CacheCreationTokens)
+	}
+	if doneEvent.CacheReadTokens != 3000 {
+		t.Errorf("CacheReadTokens = %d, want 3000", doneEvent.CacheReadTokens)
+	}
+	if doneEvent.InputTokens != 100 {
+		t.Errorf("InputTokens = %d, want 100", doneEvent.InputTokens)
+	}
+}
+
+// TestGeminiCachedContentField verifies that CachedContent is sent in the wire request.
+func TestGeminiCachedContentField(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+			"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2, "cachedContentTokenCount": 500}
+		}`))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "gemini",
+		Model:    "gemini-2.5-flash",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		CachedContent: "cachedContents/abc123",
+		Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "hello")},
+	}
+
+	resp, err := client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// Verify the wire request contains cachedContent
+	var wireReq map[string]interface{}
+	if err := json.Unmarshal(captured, &wireReq); err != nil {
+		t.Fatalf("unmarshal wire request: %v", err)
+	}
+	if wireReq["cachedContent"] != "cachedContents/abc123" {
+		t.Errorf("cachedContent = %v, want cachedContents/abc123", wireReq["cachedContent"])
+	}
+
+	// Verify cache read tokens from response
+	if resp.CacheReadTokens != 500 {
+		t.Errorf("CacheReadTokens = %d, want 500", resp.CacheReadTokens)
+	}
+}
+
+// TestGeminiCachedContentStream verifies cache token parsing in Gemini stream.
+func TestGeminiCachedContentStream(t *testing.T) {
+	ssePayload := strings.Join([]string{
+		`data: {"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"cachedContentTokenCount":500}}`,
+		"",
+	}, "\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(ssePayload))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "gemini",
+		Model:    "gemini-2.5-flash",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	var doneEvent llm.StreamEvent
+	for event, err := range client.Stream(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	}) {
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+		if event.Type == llm.EventDone {
+			doneEvent = event
+		}
+	}
+
+	if doneEvent.CacheReadTokens != 500 {
+		t.Errorf("CacheReadTokens = %d, want 500", doneEvent.CacheReadTokens)
+	}
+}
+
+// TestOpenAICacheFieldsIgnored verifies that cache fields are silently ignored
+// by the OpenAI-compatible adapter (no error, fields not sent).
+func TestOpenAICacheFieldsIgnored(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-test",
+			"object": "chat.completion",
+			"model": "gpt-5.2",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "openai",
+		Model:    "gpt-5.2",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	req := llm.Request{
+		SystemCacheControl: true,
+		CachedContent:      "should-be-ignored",
+		Messages: []llm.Message{{
+			Role: llm.RoleUser,
+			Content: []llm.ContentPart{
+				{Type: llm.ContentText, Text: "hello", CacheControl: true},
+			},
+		}},
+		Tools: []llm.Tool{{
+			Name:         "test",
+			Description:  "test tool",
+			InputSchema:  map[string]interface{}{"type": "object"},
+			CacheControl: true,
+		}},
+	}
+
+	_, err = client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// Verify cache fields are NOT in the wire request
+	wireStr := string(captured)
+	if strings.Contains(wireStr, "cache_control") {
+		t.Error("OpenAI wire request should not contain cache_control")
+	}
+	if strings.Contains(wireStr, "cachedContent") {
+		t.Error("OpenAI wire request should not contain cachedContent")
+	}
+	if strings.Contains(wireStr, "cached_content") {
+		t.Error("OpenAI wire request should not contain cached_content")
+	}
+}
+
+// TestLoggingClientCacheTokens verifies that the LoggingClient tracks cache tokens.
+func TestLoggingClientCacheTokens(t *testing.T) {
+	inner := &mockClient{
+		provider: "test",
+		model:    "test-model",
+		resp: &llm.Response{
+			Content:             "hello",
+			InputTokens:         100,
+			OutputTokens:        20,
+			StopReason:          "end_turn",
+			CacheCreationTokens: 5000,
+			CacheReadTokens:     3000,
+		},
+	}
+
+	client := llm.WithLogging(inner)
+
+	resp, err := client.Complete(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	// Verify cache tokens pass through
+	if resp.CacheCreationTokens != 5000 {
+		t.Errorf("CacheCreationTokens = %d, want 5000", resp.CacheCreationTokens)
+	}
+	if resp.CacheReadTokens != 3000 {
+		t.Errorf("CacheReadTokens = %d, want 3000", resp.CacheReadTokens)
+	}
+}
+
+// TestCacheTokenFieldsRoundTrip verifies that cache token fields survive
+// through StreamEvent and can be read by callers.
+func TestCacheTokenFieldsRoundTrip(t *testing.T) {
+	event := llm.StreamEvent{
+		Type:                llm.EventDone,
+		StopReason:          "end_turn",
+		InputTokens:         100,
+		OutputTokens:        20,
+		CacheCreationTokens: 5000,
+		CacheReadTokens:     3000,
+	}
+
+	// Verify fields are set
+	if event.CacheCreationTokens != 5000 {
+		t.Errorf("CacheCreationTokens = %d, want 5000", event.CacheCreationTokens)
+	}
+	if event.CacheReadTokens != 3000 {
+		t.Errorf("CacheReadTokens = %d, want 3000", event.CacheReadTokens)
+	}
+
+	// Verify JSON round-trip
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var decoded llm.StreamEvent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.CacheCreationTokens != 5000 {
+		t.Errorf("decoded CacheCreationTokens = %d, want 5000", decoded.CacheCreationTokens)
+	}
+	if decoded.CacheReadTokens != 3000 {
+		t.Errorf("decoded CacheReadTokens = %d, want 3000", decoded.CacheReadTokens)
+	}
+}
+
+// TestAnthropicCacheTokenUsageZero verifies that zero cache tokens are not
+// confused with the absence of cache usage.
+func TestAnthropicCacheTokenUsageZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_test",
+			"type": "message",
+			"role": "assistant",
+			"model": "claude-sonnet-4-6",
+			"content": [{"type": "text", "text": "no cache"}],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 50, "output_tokens": 10}
+		}`))
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key",
+		BaseURL:  srv.URL,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	resp, err := client.Complete(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if resp.CacheCreationTokens != 0 {
+		t.Errorf("CacheCreationTokens = %d, want 0 (no caching)", resp.CacheCreationTokens)
+	}
+	if resp.CacheReadTokens != 0 {
+		t.Errorf("CacheReadTokens = %d, want 0 (no caching)", resp.CacheReadTokens)
 	}
 }

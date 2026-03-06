@@ -65,9 +65,9 @@ var modelRegistry = map[string]ModelInfo{
 	"gpt-5-nano":           {ID: "gpt-5-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.05, OutputPricePer1M: 0.40, Thinking: true, Label: "GPT-5 Nano"},
 
 	// OpenAI — GPT-4.1 family (non-reasoning, 1M context)
-	"gpt-4.1":      {ID: "gpt-4.1", Provider: "openai", MaxTokens: 32768, ContextWindow: 1047576, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Label: "GPT-4.1"},
-	"gpt-4.1-mini": {ID: "gpt-4.1-mini", Provider: "openai", MaxTokens: 32768, ContextWindow: 1047576, InputPricePer1M: 0.40, OutputPricePer1M: 1.60, Label: "GPT-4.1 Mini"},
-	"gpt-4.1-nano": {ID: "gpt-4.1-nano", Provider: "openai", MaxTokens: 32768, ContextWindow: 1047576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "GPT-4.1 Nano"},
+	"gpt-4.1":      {ID: "gpt-4.1", Provider: "openai", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Label: "GPT-4.1"},
+	"gpt-4.1-mini": {ID: "gpt-4.1-mini", Provider: "openai", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 0.40, OutputPricePer1M: 1.60, Label: "GPT-4.1 Mini"},
+	"gpt-4.1-nano": {ID: "gpt-4.1-nano", Provider: "openai", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "GPT-4.1 Nano"},
 
 	// OpenAI — O-series reasoning models
 	"o3":      {ID: "o3", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "O3"},

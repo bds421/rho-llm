@@ -189,9 +189,6 @@ func TestRetryPolicyJitterDistribution(t *testing.T) {
 
 func TestDefaultRetryPolicyValues(t *testing.T) {
 	p := llm.DefaultRetryPolicy
-	if p.MaxRetries != 3 {
-		t.Errorf("MaxRetries = %d, want 3", p.MaxRetries)
-	}
 	if p.BaseDelay != 1*time.Second {
 		t.Errorf("BaseDelay = %v, want 1s", p.BaseDelay)
 	}

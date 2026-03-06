@@ -378,18 +378,15 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
-		// Circuit breaker gate: if open, skip the attempt and backoff
+		// Circuit breaker gate: if open, fail fast. The circuit's own cooldown
+		// timer controls when the next probe is allowed — burning retry
+		// iterations with backoff delays accomplishes nothing.
 		if !pc.breaker.Allow() {
 			pc.emitRetryEvent(RetryEvent{Type: RetryCircuitOpen, Attempt: i})
-			backoff := rp.Delay(i)
-			pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: i, Backoff: backoff})
-			slog.Info("circuit open, backing off", "attempt", i+1, "backoff", backoff)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoff):
-				continue
+			if lastErr != nil {
+				return nil, fmt.Errorf("circuit breaker open: %w", lastErr)
 			}
+			return nil, fmt.Errorf("circuit breaker open: %w", ErrCircuitOpen)
 		}
 
 		pc.mu.RLock()
@@ -485,19 +482,15 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 
 		var lastErr error
 		for attempt := 0; attempt < maxRetries; attempt++ {
-			// Circuit breaker gate: if open, skip the attempt and backoff
+			// Circuit breaker gate: if open, fail fast (see Complete for rationale).
 			if !pc.breaker.Allow() {
 				pc.emitRetryEvent(RetryEvent{Type: RetryCircuitOpen, Attempt: attempt})
-				backoff := rp.Delay(attempt)
-				pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: attempt, Backoff: backoff})
-				slog.Info("stream: circuit open, backing off", "attempt", attempt+1, "backoff", backoff)
-				select {
-				case <-ctx.Done():
-					yield(StreamEvent{}, ctx.Err())
-					return
-				case <-time.After(backoff):
-					continue
+				if lastErr != nil {
+					yield(StreamEvent{}, fmt.Errorf("stream: circuit breaker open: %w", lastErr))
+				} else {
+					yield(StreamEvent{}, fmt.Errorf("stream: circuit breaker open: %w", ErrCircuitOpen))
 				}
+				return
 			}
 
 			pc.mu.RLock()

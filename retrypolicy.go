@@ -36,9 +36,6 @@ type RetryHook func(RetryEvent)
 
 // RetryPolicy configures exponential backoff with jitter.
 type RetryPolicy struct {
-	// MaxRetries is the maximum number of retry attempts (0 means no retries).
-	MaxRetries int
-
 	// BaseDelay is the initial backoff delay before the first retry.
 	BaseDelay time.Duration
 
@@ -53,10 +50,9 @@ type RetryPolicy struct {
 }
 
 // DefaultRetryPolicy matches the original hardcoded retry behavior:
-// 3 retries, 1s base, 30s max, doubling, +/-25% jitter.
+// 1s base, 30s max, doubling, +/-25% jitter.
 var DefaultRetryPolicy = RetryPolicy{
-	MaxRetries: 3,
-	BaseDelay:  1 * time.Second,
+	BaseDelay: 1 * time.Second,
 	MaxDelay:   30 * time.Second,
 	Factor:     2.0,
 	Jitter:     0.25,

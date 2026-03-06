@@ -90,7 +90,10 @@ func TestBuildRequestEmptyTextPartOmitted(t *testing.T) {
 	// Verify no empty parts exist in any content message.
 	for i, content := range apiReq.Contents {
 		for j, part := range content.Parts {
-			b, _ := json.Marshal(part)
+			b, err := json.Marshal(part)
+			if err != nil {
+				t.Fatalf("json.Marshal(part[%d][%d]): %v", i, j, err)
+			}
 			if string(b) == "{}" {
 				t.Errorf("contents[%d].parts[%d] serializes to empty {}: %+v", i, j, part)
 			}
@@ -134,7 +137,10 @@ func TestBuildRequestEmptyTextSystemInstructionOmitted(t *testing.T) {
 	// System instruction should be nil when the only system part was empty.
 	if apiReq.SystemInstruction != nil && len(apiReq.SystemInstruction.Parts) > 0 {
 		for j, part := range apiReq.SystemInstruction.Parts {
-			b, _ := json.Marshal(part)
+			b, err := json.Marshal(part)
+			if err != nil {
+				t.Fatalf("json.Marshal(systemInstruction.parts[%d]): %v", j, err)
+			}
 			if string(b) == "{}" {
 				t.Errorf("systemInstruction.parts[%d] serializes to empty {}: %+v", j, part)
 			}

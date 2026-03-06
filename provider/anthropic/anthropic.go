@@ -94,10 +94,12 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 // =============================================================================
 
 // anthropicRequest is the Anthropic API request format.
+// System is interface{} to support both plain string and structured content blocks
+// (required for cache_control on system prompts).
 type anthropicRequest struct {
 	Model         string             `json:"model"`
 	Messages      []anthropicMessage `json:"messages"`
-	System        string             `json:"system,omitempty"`
+	System        interface{}        `json:"system,omitempty"`
 	MaxTokens     int                `json:"max_tokens"`
 	Temperature   float64            `json:"temperature"`
 	Tools         []anthropicTool    `json:"tools,omitempty"`
@@ -112,9 +114,16 @@ type anthropicMessage struct {
 }
 
 type anthropicTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  map[string]interface{} `json:"input_schema"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+// anthropicCacheControl represents the cache_control annotation.
+// Anthropic currently only supports type "ephemeral".
+type anthropicCacheControl struct {
+	Type string `json:"type"`
 }
 
 type anthropicThinking struct {
@@ -138,8 +147,10 @@ type anthropicResponse struct {
 	} `json:"content"`
 	StopReason string `json:"stop_reason"`
 	Usage      struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens         int `json:"input_tokens"`
+		OutputTokens        int `json:"output_tokens"`
+		CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
+		CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
 	} `json:"usage"`
 }
 
@@ -253,7 +264,6 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, error) {
 	apiReq := anthropicRequest{
 		Model:       req.Model,
-		System:      req.System,
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		Stream:      stream,
@@ -266,6 +276,12 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		apiReq.MaxTokens = c.config.MaxTokens
 	}
 
+	// Build system prompt. Collect all system text first (from req.System and RoleSystem messages).
+	var systemTexts []string
+	if req.System != "" {
+		systemTexts = append(systemTexts, req.System)
+	}
+
 	// Convert messages
 	for _, msg := range req.Messages {
 		if msg.Role == llm.RoleSystem {
@@ -273,10 +289,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			// Anthropic rejects role="system" in the messages array.
 			for _, part := range msg.Content {
 				if part.Type == llm.ContentText && part.Text != "" {
-					if apiReq.System != "" {
-						apiReq.System += "\n"
-					}
-					apiReq.System += part.Text
+					systemTexts = append(systemTexts, part.Text)
 				}
 			}
 			continue
@@ -287,10 +300,14 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			switch part.Type {
 			case llm.ContentText:
 				if part.Text != "" {
-					apiMsg.Content = append(apiMsg.Content, map[string]string{
+					block := map[string]interface{}{
 						"type": "text",
 						"text": part.Text,
-					})
+					}
+					if part.CacheControl {
+						block["cache_control"] = map[string]string{"type": "ephemeral"}
+					}
+					apiMsg.Content = append(apiMsg.Content, block)
 				}
 			case llm.ContentImage:
 				return anthropicRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
@@ -313,13 +330,36 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		apiReq.Messages = append(apiReq.Messages, apiMsg)
 	}
 
+	// Set system field: structured blocks (with cache_control) or plain string
+	if req.SystemCacheControl && len(systemTexts) > 0 {
+		// Send as array of content blocks with cache_control on the last block
+		var blocks []interface{}
+		for i, text := range systemTexts {
+			block := map[string]interface{}{
+				"type": "text",
+				"text": text,
+			}
+			if i == len(systemTexts)-1 {
+				block["cache_control"] = map[string]string{"type": "ephemeral"}
+			}
+			blocks = append(blocks, block)
+		}
+		apiReq.System = blocks
+	} else if len(systemTexts) > 0 {
+		apiReq.System = strings.Join(systemTexts, "\n")
+	}
+
 	// Convert tools
 	for _, tool := range req.Tools {
-		apiReq.Tools = append(apiReq.Tools, anthropicTool{
+		at := anthropicTool{
 			Name:        tool.Name,
 			Description: tool.Description,
 			InputSchema: tool.InputSchema,
-		})
+		}
+		if tool.CacheControl {
+			at.CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+		}
+		apiReq.Tools = append(apiReq.Tools, at)
 	}
 
 	// Configure stop sequences
@@ -347,11 +387,13 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 
 func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 	resp := &llm.Response{
-		ID:           apiResp.ID,
-		Model:        apiResp.Model,
-		StopReason:   apiResp.StopReason,
-		InputTokens:  apiResp.Usage.InputTokens,
-		OutputTokens: apiResp.Usage.OutputTokens,
+		ID:                  apiResp.ID,
+		Model:               apiResp.Model,
+		StopReason:          apiResp.StopReason,
+		InputTokens:         apiResp.Usage.InputTokens,
+		OutputTokens:        apiResp.Usage.OutputTokens,
+		CacheCreationTokens: apiResp.Usage.CacheCreationTokens,
+		CacheReadTokens:     apiResp.Usage.CacheReadTokens,
 	}
 
 	for _, block := range apiResp.Content {
@@ -382,6 +424,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// message_start/message_delta events, callers can distinguish "not reported"
 	// from "zero tokens" (0).
 	var inputTokens = llm.TokensNotReported
+	var cacheCreationTokens, cacheReadTokens int
 	doneEmitted := false
 
 	for scanner.Scan() {
@@ -415,8 +458,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			Message struct {
 				StopReason string `json:"stop_reason"`
 				Usage      struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
+					InputTokens         int `json:"input_tokens"`
+					OutputTokens        int `json:"output_tokens"`
+					CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
+					CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
 				} `json:"usage"`
 			} `json:"message"`
 			// message_delta puts usage at top level (not inside message)
@@ -481,10 +526,12 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		case "message_delta":
 			doneEmitted = true
 			if !yield(llm.StreamEvent{
-				Type:         llm.EventDone,
-				StopReason:   event.Delta.StopReason,
-				InputTokens:  inputTokens,
-				OutputTokens: event.Usage.OutputTokens,
+				Type:                llm.EventDone,
+				StopReason:          event.Delta.StopReason,
+				InputTokens:         inputTokens,
+				OutputTokens:        event.Usage.OutputTokens,
+				CacheCreationTokens: cacheCreationTokens,
+				CacheReadTokens:     cacheReadTokens,
 			}, nil) {
 				return
 			}
@@ -493,8 +540,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// Final event
 
 		case "message_start":
-			// Capture input tokens (reported once at stream start)
+			// Capture input tokens and cache usage (reported once at stream start)
 			inputTokens = event.Message.Usage.InputTokens
+			cacheCreationTokens = event.Message.Usage.CacheCreationTokens
+			cacheReadTokens = event.Message.Usage.CacheReadTokens
 		}
 	}
 

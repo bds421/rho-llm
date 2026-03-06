@@ -5,13 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.14] - 2026-03-06
+
+### Added
+
+- **Context caching support** — Anthropic inline caching (`cache_control`) and Gemini cached content references. New fields:
+  - `ContentPart.CacheControl` — mark individual content blocks as cacheable (Anthropic)
+  - `Request.SystemCacheControl` — cache the system prompt (Anthropic, sends structured content blocks with `cache_control: {type: "ephemeral"}`)
+  - `Request.CachedContent` — reference a pre-created Gemini cache by name
+  - `Tool.CacheControl` — mark tool definitions as cacheable (Anthropic)
+  - `Response.CacheCreationTokens` / `Response.CacheReadTokens` — cache token usage from Anthropic
+  - `StreamEvent.CacheCreationTokens` / `StreamEvent.CacheReadTokens` — cache token usage in streaming (Anthropic, Gemini)
+  - `LoggingClient` logs `cache_write` and `cache_read` when > 0
+  - OpenAI-compatible adapters silently ignore all cache fields (no API support)
+
+### Fixed
+
+- **OpenAI-compat stream: spurious error after successful completion** — The OpenAI-compatible adapter reported scanner errors even after the stream completed successfully (`finishReason != ""`). Unlike the Anthropic and Gemini adapters which had a `doneEmitted` guard, the OpenAI adapter would yield a trailing scanner error to the caller, causing the pool to spuriously mark profiles as failed. Now guarded by `finishReason == ""`, matching the other two adapters.
+
+- **Circuit breaker `onStateChange` callback deadlock** — The `WithOnStateChange` callback was invoked while holding `cb.mu.Lock()`. Any callback that called back into the circuit breaker (e.g., `cb.State()`) would deadlock. Now the callback is invoked after releasing the lock via a `setStateLocked`/`fireCallback` split.
+
+- **Circuit breaker + retry loop burned dead iterations** — When the circuit breaker was open, the retry loop would back off and `continue` for each remaining iteration, sleeping 1-8s per attempt without making any HTTP call. After a circuit trip, every request burned through all retry iterations doing nothing. Now `Complete` and `Stream` return `ErrCircuitOpen` immediately when the circuit is open, letting the circuit's own cooldown timer control recovery.
+
+- **GPT-4.1 ContextWindow off by 1000** — `gpt-4.1`, `gpt-4.1-mini`, and `gpt-4.1-nano` had `ContextWindow: 1047576` instead of the correct `1048576` (1024 * 1024).
+
+- **Double logging in pooled clients** — When `LogRequests: true` was set, each rotated inner client got its own `LoggingClient` wrapper, and the pool-level wrapper doubled the output. Now `LogRequests` is cleared on inner client configs and applied once at the pool level.
+
+### Changed
+
+- **`RetryPolicy.MaxRetries` removed** — This field was never read by any code path. The pool's retry count is determined by `HealthyCount()` clamped to `[3, 10]`. Removing prevents users from setting a value that silently has no effect.
+
+- **`RetryPolicy` struct** — `BaseDelay`, `MaxDelay`, `Factor`, `Jitter` remain. `MaxRetries` is removed (see above).
+
+- **Configurable retry policy** description in v0.1.13 changelog updated — `RetryPolicy` struct fields are `BaseDelay`, `MaxDelay`, `Factor`, `Jitter`.
+
 ## [0.1.13] - 2026-02-26
 
 ### Added
 
 - **Circuit breaker** — 3-state machine (`closed → open → half-open`) that opens after a configurable threshold of consecutive failures, prevents request storms into degraded endpoints, and auto-recovers via probe requests after cooldown. Enabled by default (`CircuitThreshold: 5`, `CircuitCooldown: 30s`). Auth errors (401/403) do not trip the circuit — bad key ≠ broken endpoint. All methods are nil-safe and thread-safe. New file: `circuitbreaker.go`.
 
-- **Configurable retry policy** — `RetryPolicy` struct with `BaseDelay`, `MaxDelay`, `Factor`, `Jitter`, `MaxRetries`. `Config.RetryPolicy` overrides the default (1s base, 30s max, 2x factor, ±25% jitter). The `Backoff()` function remains backward-compatible. New file: `retrypolicy.go` (replaces `backoff.go`).
+- **Configurable retry policy** — `RetryPolicy` struct with `BaseDelay`, `MaxDelay`, `Factor`, `Jitter`. `Config.RetryPolicy` overrides the default (1s base, 30s max, 2x factor, ±25% jitter). The `Backoff()` function remains backward-compatible. New file: `retrypolicy.go` (replaces `backoff.go`).
 
 - **Configurable cooldowns** — `Config.CooldownRateLimit` (default 60s), `Config.CooldownOverload` (default 30s), `Config.CooldownDefault` (default 10s) replace hardcoded magic numbers. Exported constants: `DefaultCooldownRateLimit`, `DefaultCooldownOverload`, `DefaultCooldownDefault`, `DefaultCircuitThreshold`, `DefaultCircuitCooldown`.
 

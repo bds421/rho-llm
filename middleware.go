@@ -48,11 +48,19 @@ func (l *LoggingClient) Complete(ctx context.Context, req Request) (*Response, e
 	}
 
 	cost := EstimateCost(model, resp.InputTokens, resp.OutputTokens)
-	l.logger.Info("complete done",
+	attrs := []any{
 		"provider", l.inner.Provider(), "model", model,
 		"elapsed", elapsed.Round(time.Millisecond),
 		"tokens_in", resp.InputTokens, "tokens_out", resp.OutputTokens,
-		"stop", resp.StopReason, "cost", cost)
+		"stop", resp.StopReason, "cost", cost,
+	}
+	if resp.CacheCreationTokens > 0 {
+		attrs = append(attrs, "cache_write", resp.CacheCreationTokens)
+	}
+	if resp.CacheReadTokens > 0 {
+		attrs = append(attrs, "cache_read", resp.CacheReadTokens)
+	}
+	l.logger.Info("complete done", attrs...)
 
 	return resp, nil
 }
@@ -72,6 +80,7 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 		start := time.Now()
 		var chunks int
 		lastInputTokens, lastOutputTokens := TokensNotReported, TokensNotReported
+		var lastCacheCreationTokens, lastCacheReadTokens int
 		var lastStopReason string
 		var streamErr error
 
@@ -84,11 +93,19 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				return
 			}
 			cost := EstimateCost(model, lastInputTokens, lastOutputTokens)
-			l.logger.Info("stream done",
+			attrs := []any{
 				"provider", l.inner.Provider(), "model", model,
 				"elapsed", elapsed.Round(time.Millisecond),
 				"chunks", chunks, "tokens_in", lastInputTokens, "tokens_out", lastOutputTokens,
-				"stop", lastStopReason, "cost", cost)
+				"stop", lastStopReason, "cost", cost,
+			}
+			if lastCacheCreationTokens > 0 {
+				attrs = append(attrs, "cache_write", lastCacheCreationTokens)
+			}
+			if lastCacheReadTokens > 0 {
+				attrs = append(attrs, "cache_read", lastCacheReadTokens)
+			}
+			l.logger.Info("stream done", attrs...)
 		}()
 
 		for event, err := range l.inner.Stream(ctx, req) {
@@ -104,6 +121,8 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				lastStopReason = event.StopReason
 				lastInputTokens = event.InputTokens
 				lastOutputTokens = event.OutputTokens
+				lastCacheCreationTokens = event.CacheCreationTokens
+				lastCacheReadTokens = event.CacheReadTokens
 			}
 			if !yield(event, nil) {
 				return

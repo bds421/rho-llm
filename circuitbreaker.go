@@ -95,22 +95,29 @@ func (cb *CircuitBreaker) Allow() bool {
 		return true
 	}
 	cb.mu.Lock()
-	defer cb.mu.Unlock()
 
 	switch cb.state {
 	case CircuitClosed:
+		cb.mu.Unlock()
 		return true
 	case CircuitOpen:
 		if time.Since(cb.openedAt) >= cb.cooldown {
-			cb.setState(CircuitHalfOpen)
+			from, to, changed := cb.setStateLocked(CircuitHalfOpen)
+			cb.mu.Unlock()
+			if changed {
+				cb.fireCallback(from, to)
+			}
 			return true
 		}
+		cb.mu.Unlock()
 		return false
 	case CircuitHalfOpen:
 		// Only one probe at a time; additional requests are rejected
 		// until the probe completes.
+		cb.mu.Unlock()
 		return false
 	default:
+		cb.mu.Unlock()
 		return true
 	}
 }
@@ -122,11 +129,14 @@ func (cb *CircuitBreaker) RecordSuccess() {
 		return
 	}
 	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
 	cb.failures = 0
+	from, to, changed := CircuitClosed, CircuitClosed, false
 	if cb.state == CircuitHalfOpen {
-		cb.setState(CircuitClosed)
+		from, to, changed = cb.setStateLocked(CircuitClosed)
+	}
+	cb.mu.Unlock()
+	if changed {
+		cb.fireCallback(from, to)
 	}
 }
 
@@ -139,20 +149,24 @@ func (cb *CircuitBreaker) RecordFailure() {
 		return
 	}
 	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
 	cb.failures++
 
+	var from, to CircuitState
+	var changed bool
 	switch cb.state {
 	case CircuitClosed:
 		if cb.failures >= cb.threshold {
 			cb.openedAt = time.Now()
-			cb.setState(CircuitOpen)
+			from, to, changed = cb.setStateLocked(CircuitOpen)
 		}
 	case CircuitHalfOpen:
 		// Probe failed — re-open
 		cb.openedAt = time.Now()
-		cb.setState(CircuitOpen)
+		from, to, changed = cb.setStateLocked(CircuitOpen)
+	}
+	cb.mu.Unlock()
+	if changed {
+		cb.fireCallback(from, to)
 	}
 }
 
@@ -199,20 +213,28 @@ func (cb *CircuitBreaker) Reset() {
 		return
 	}
 	cb.mu.Lock()
-	defer cb.mu.Unlock()
-
 	cb.failures = 0
-	cb.setState(CircuitClosed)
+	from, to, changed := cb.setStateLocked(CircuitClosed)
+	cb.mu.Unlock()
+	if changed {
+		cb.fireCallback(from, to)
+	}
 }
 
-// setState transitions to a new state and fires the callback if configured.
-// Must be called with cb.mu held.
-func (cb *CircuitBreaker) setState(to CircuitState) {
-	from := cb.state
+// setStateLocked transitions to a new state. Must be called with cb.mu held.
+// Returns the from/to states and whether a transition occurred, so the
+// caller can fire the callback after releasing the lock.
+func (cb *CircuitBreaker) setStateLocked(to CircuitState) (from, newState CircuitState, changed bool) {
+	from = cb.state
 	if from == to {
-		return
+		return from, to, false
 	}
 	cb.state = to
+	return from, to, true
+}
+
+// fireCallback invokes onStateChange outside the mutex.
+func (cb *CircuitBreaker) fireCallback(from, to CircuitState) {
 	if cb.onStateChange != nil {
 		cb.onStateChange(from, to)
 	}

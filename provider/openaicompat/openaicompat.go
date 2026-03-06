@@ -593,7 +593,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		slog.Warn("stream ended without finish_reason", "provider", c.providerName)
 	}
 
-	if err := scanner.Err(); err != nil {
+	// Only report scanner errors if the stream did not already complete
+	// successfully. A trailing read error after EventDone is noise.
+	if err := scanner.Err(); err != nil && finishReason == "" {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
 	}
 }
