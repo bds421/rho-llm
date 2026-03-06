@@ -1,0 +1,684 @@
+You are performing a pre-release code review.
+
+SCOPE: the given code base, nothing else.
+
+INSTRUCTIONS:
+1. Read and analyze every piece of code provided directly.
+   Do NOT rely on memory, training data, or cached context. Analyze only the actual code given.
+2. Perform a Linus Torvalds-style review: be blunt, specific, and unforgiving.
+   Praise nothing unless it is genuinely correct. Flag everything that is wrong,
+   fragile, or will cause problems in production.
+
+REVIEW CHECKLIST — analyze each of these explicitly:
+- Error handling: are all errors checked, wrapped with context, and propagated correctly?
+- Resource management: are all clients, connections, file handles, and resources properly closed?
+- Concurrency: any races, missing locks, or unsafe shared state?
+- API correctness: are SDK/API calls used correctly, with correct parameters?
+- Retry and backoff: is transient error handling present and correct?
+- Configuration: are all required fields validated at startup, not at first use?
+- Naming and structure: does the code follow Go idioms and project conventions?
+- Dead code, TODOs, commented-out blocks: flag every single one
+- Security: credentials, secrets, tokens — are they handled safely?
+- Test coverage: which critical paths have no test?
+
+OUTPUT FORMAT:
+- File by file, function by function where issues exist
+- Each issue: severity (BLOCKER / MAJOR / MINOR), location (file:line if available),
+  explanation, and required fix
+- End with a summary verdict: READY FOR PRODUCTION or NOT READY, with reasons
+
+This is going live. Hold nothing back.
+
+================================================================================
+GO CODE REVIEW KNOWLEDGE BASE
+================================================================================
+
+The following is your reference material for reviewing Go code. Use this knowledge
+to identify issues, anti-patterns, and vulnerabilities in the code under review.
+
+--------------------------------------------------------------------------------
+1. ERROR HANDLING
+--------------------------------------------------------------------------------
+
+1.1 NEVER IGNORE ERRORS
+
+Bad:
+    data, _ := os.ReadFile(path)
+    json.Unmarshal(data, &cfg)
+
+Good:
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return fmt.Errorf("read config %s: %w", path, err)
+    }
+    if err := json.Unmarshal(data, &cfg); err != nil {
+        return fmt.Errorf("parse config %s: %w", path, err)
+    }
+
+Every _ = err is a potential silent failure in production. Flag every instance.
+
+1.2 WRAP ERRORS WITH CONTEXT
+
+Bad:
+    if err != nil {
+        return err
+    }
+
+Good:
+    if err != nil {
+        return fmt.Errorf("connect to database %s: %w", host, err)
+    }
+
+Bare error returns produce undebuggable stack traces. The %w verb preserves
+the error chain for errors.Is/errors.As callers.
+
+1.3 SENTINEL ERRORS vs ERROR TYPES
+
+Use sentinel errors for expected conditions callers need to check:
+    var ErrNotFound = errors.New("not found")
+
+Use custom error types when callers need structured information:
+    type ValidationError struct {
+        Field   string
+        Message string
+    }
+
+1.4 ERROR HANDLING IN DEFERRED CALLS
+
+Bad:
+    defer file.Close()
+
+Good:
+    defer func() {
+        if err := file.Close(); err != nil {
+            slog.Warn("failed to close file", "path", path, "error", err)
+        }
+    }()
+
+For writes, the Close error may indicate data loss (unflushed buffers).
+
+1.5 PANIC vs ERROR
+
+Panics are for programmer bugs (nil pointer where nil is impossible), never for
+runtime conditions (file not found, network timeout). Flag any panic that handles
+a runtime condition.
+
+--------------------------------------------------------------------------------
+2. RESOURCE MANAGEMENT
+--------------------------------------------------------------------------------
+
+2.1 HTTP RESPONSE BODIES
+
+Bad:
+    resp, err := http.Get(url)
+    if err != nil {
+        return err
+    }
+    // forgot resp.Body.Close()
+
+Good:
+    resp, err := http.Get(url)
+    if err != nil {
+        return fmt.Errorf("GET %s: %w", url, err)
+    }
+    defer resp.Body.Close()
+
+Leaked HTTP response bodies cause connection pool exhaustion and file descriptor
+leaks. The body MUST be closed even if you don't read it. Also close on error
+status codes.
+
+2.2 DATABASE CONNECTIONS
+
+Bad:
+    rows, err := db.Query("SELECT ...")
+    // process rows without closing
+
+Good:
+    rows, err := db.Query("SELECT ...")
+    if err != nil {
+        return fmt.Errorf("query users: %w", err)
+    }
+    defer rows.Close()
+
+    for rows.Next() { ... }
+    if err := rows.Err(); err != nil {
+        return fmt.Errorf("iterate users: %w", err)
+    }
+
+Missing rows.Close() leaks connections. Missing rows.Err() loses iteration errors.
+
+2.3 CONTEXT CANCELLATION
+
+Bad:
+    ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
+    // forgot cancel()
+
+Good:
+    ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
+    defer cancel()
+
+Forgetting cancel() leaks the context's timer goroutine until the parent
+context is canceled, which may be never.
+
+2.4 GOROUTINE LIFECYCLE
+
+Every goroutine must have a clear shutdown path. Flag any goroutine that:
+- Has no way to be signaled to stop (no context, no done channel)
+- Can block forever on a channel operation
+- Has no WaitGroup or equivalent join mechanism
+
+Bad:
+    go func() {
+        for {
+            processItem(<-ch)
+        }
+    }()
+
+Good:
+    go func() {
+        defer wg.Done()
+        for {
+            select {
+            case item, ok := <-ch:
+                if !ok { return }
+                processItem(item)
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+
+2.5 FILE AND NETWORK HANDLES
+
+Flag any os.Open, os.Create, net.Dial, net.Listen that doesn't have a
+corresponding Close in a defer or cleanup path.
+
+--------------------------------------------------------------------------------
+3. CONCURRENCY
+--------------------------------------------------------------------------------
+
+3.1 DATA RACES
+
+Any variable accessed from multiple goroutines without synchronization is a
+data race, even if "it works in testing." Common patterns:
+
+Bad:
+    var count int
+    go func() { count++ }()
+    fmt.Println(count)
+
+Good:
+    var count atomic.Int64
+    go func() { count.Add(1) }()
+    fmt.Println(count.Load())
+
+Or use sync.Mutex for complex operations.
+
+3.2 MUTEX PATTERNS
+
+Bad:
+    mu.Lock()
+    if condition {
+        mu.Unlock()
+        return
+    }
+    // ... more code
+    mu.Unlock()
+
+Good:
+    mu.Lock()
+    defer mu.Unlock()
+    if condition {
+        return
+    }
+    // ... more code
+
+Manual Unlock() calls are error-prone across branches. Use defer.
+
+3.3 MAP CONCURRENCY
+
+Maps are NOT thread-safe in Go. Concurrent read/write to a map is a data race
+that causes a runtime panic (fatal: concurrent map writes). Use sync.Mutex,
+sync.RWMutex, or sync.Map.
+
+3.4 CHANNEL PATTERNS
+
+- Sending to a nil channel blocks forever
+- Receiving from a nil channel blocks forever
+- Sending to a closed channel panics
+- Closing a nil channel panics
+- Closing an already-closed channel panics
+
+Flag any code that closes a channel without ensuring it's only closed once.
+
+3.5 SYNC.WAITGROUP
+
+Bad:
+    var wg sync.WaitGroup
+    go func() {
+        wg.Add(1)  // race: Add inside goroutine
+        defer wg.Done()
+        work()
+    }()
+    wg.Wait()
+
+Good:
+    var wg sync.WaitGroup
+    wg.Add(1)  // Add before launching goroutine
+    go func() {
+        defer wg.Done()
+        work()
+    }()
+    wg.Wait()
+
+3.6 SYNC.ONCE
+
+Use sync.Once for thread-safe lazy initialization. Flag any manual
+"if initialized" checks with a mutex — that's what sync.Once is for.
+
+3.7 CONTEXT PROPAGATION
+
+Every function that does I/O or may block should accept a context.Context
+as its first parameter. Flag any function that:
+- Creates its own context.Background() when the caller could pass one
+- Ignores the context in long-running operations
+- Uses context.TODO() in production code
+
+--------------------------------------------------------------------------------
+4. SECURITY
+--------------------------------------------------------------------------------
+
+4.1 CREDENTIALS AND SECRETS
+
+Flag any:
+- Hardcoded API keys, passwords, or tokens in source code
+- Secrets logged in plain text
+- Secrets included in error messages
+- API keys passed in URL query parameters that could appear in logs
+- Missing redaction in MarshalJSON / String methods
+
+4.2 INPUT VALIDATION
+
+Flag any:
+- SQL queries built with string concatenation (SQL injection)
+- HTML output built with string concatenation (XSS)
+- File paths built from user input without sanitization (path traversal)
+- Unbounded reads from network (io.ReadAll without LimitReader)
+- Missing bounds checks on slices/arrays from external data
+
+4.3 TLS CONFIGURATION
+
+Bad:
+    &tls.Config{InsecureSkipVerify: true}
+
+This disables certificate verification entirely. Flag any use outside of
+explicit test configurations.
+
+4.4 CRYPTOGRAPHIC SECURITY
+
+Flag any use of:
+- math/rand for security-sensitive values (use crypto/rand)
+- MD5 or SHA1 for password hashing (use bcrypt or argon2)
+- ECB mode for encryption
+- Hardcoded IVs or nonces
+
+4.5 REDIRECT SECURITY
+
+HTTP clients that follow redirects may leak authentication headers to
+third-party hosts. Flag any http.Client without a CheckRedirect function
+when used with API keys or bearer tokens.
+
+--------------------------------------------------------------------------------
+5. PERFORMANCE
+--------------------------------------------------------------------------------
+
+5.1 MEMORY ALLOCATION
+
+Flag:
+- String concatenation in loops (use strings.Builder)
+- Repeated append without pre-allocated capacity when size is known
+- Large structs passed by value instead of pointer
+- Unnecessary copies in range loops (use index-only when value is large)
+
+Bad:
+    var result string
+    for _, item := range items {
+        result += item.Name + ","
+    }
+
+Good:
+    var b strings.Builder
+    b.Grow(len(items) * 20) // estimate
+    for _, item := range items {
+        if b.Len() > 0 { b.WriteByte(',') }
+        b.WriteString(item.Name)
+    }
+    result := b.String()
+
+5.2 QUERY PATTERNS
+
+Flag:
+- N+1 query patterns (query in a loop)
+- Missing database indexes for WHERE/JOIN columns
+- SELECT * when only specific columns are needed
+- Unbounded queries without LIMIT
+
+5.3 HTTP CLIENT REUSE
+
+Bad:
+    func getData() ([]byte, error) {
+        resp, err := http.Get(url)  // creates new transport each time
+        ...
+    }
+
+Good:
+    var client = &http.Client{
+        Timeout: 10 * time.Second,
+    }
+
+    func getData() ([]byte, error) {
+        resp, err := client.Get(url)  // reuses connections
+        ...
+    }
+
+Creating a new http.Client or http.Transport per request prevents connection
+reuse and causes excessive TCP/TLS handshakes.
+
+5.4 JSON HANDLING
+
+Flag:
+- json.Marshal/Unmarshal in hot paths when encoding/decoding the same type
+  repeatedly (consider json.NewEncoder/NewDecoder with pooled buffers)
+- Using map[string]interface{} when a concrete struct would be type-safe and faster
+- Missing `json:"-"` tags on fields that shouldn't be serialized
+
+5.5 SLICE GOTCHAS
+
+Flag:
+- Holding references to large underlying arrays via small slices
+- Modifying a slice that was passed as a parameter (unexpected aliasing)
+
+Bad:
+    func getFirst3(data []byte) []byte {
+        return data[:3]  // keeps entire backing array alive
+    }
+
+Good:
+    func getFirst3(data []byte) []byte {
+        result := make([]byte, 3)
+        copy(result, data[:3])
+        return result
+    }
+
+--------------------------------------------------------------------------------
+6. GO IDIOMS AND STYLE
+--------------------------------------------------------------------------------
+
+6.1 NAMING
+
+- Use MixedCaps, not underscores
+- Acronyms should be all caps: HTTP, URL, ID (not Http, Url, Id)
+- Single-letter variables only for very short scopes (loop indices, receivers)
+- Receiver names should be short (1-2 letters), consistent, never "this" or "self"
+- Interface names: single-method interfaces use method name + "er" (Reader, Writer)
+- Unexported fields/functions should be used; flag any that aren't
+
+6.2 PACKAGE DESIGN
+
+- Package names are lowercase, single-word, no underscores
+- Avoid "util", "common", "misc" packages — they become dumping grounds
+- Avoid circular imports — they indicate design problems
+- Keep the public API surface small
+
+6.3 INTERFACE SATISFACTION
+
+- Interfaces should be defined where they're consumed, not where they're implemented
+- Prefer small interfaces (1-3 methods)
+- Use the concrete type unless you need the abstraction
+
+Bad:
+    func process(r io.Reader) error {
+        data, err := io.ReadAll(r)  // reads everything into memory
+        ...
+    }
+
+Good (if you need streaming):
+    func process(r io.Reader) error {
+        scanner := bufio.NewScanner(r)
+        for scanner.Scan() { ... }
+        ...
+    }
+
+6.4 STRUCT INITIALIZATION
+
+- Use named fields in composite literals
+- Flag positional struct initialization for structs with more than 2 fields
+
+Bad:
+    p := Point{10, 20, 30, "label", true}
+
+Good:
+    p := Point{
+        X:     10,
+        Y:     20,
+        Z:     30,
+        Label: "label",
+        Visible: true,
+    }
+
+6.5 TIME AND DURATION
+
+- Use time.Duration, not int for durations
+- Use time.Time, not int64 for timestamps
+- Use time.Since(start) not time.Now().Sub(start)
+- Flag any manual timezone arithmetic — use time.In() or time.UTC()
+
+6.6 ENUMS AND CONSTANTS
+
+- Use typed constants with iota for enums
+- Provide a String() method for debugging
+- Start iota at 1 or use a sentinel zero value to catch uninitialized state
+
+--------------------------------------------------------------------------------
+7. TESTING
+--------------------------------------------------------------------------------
+
+7.1 TEST STRUCTURE
+
+- Use table-driven tests for functions with multiple input/output combinations
+- Use t.Run for subtests to get clear failure output
+- Use t.Helper() in test helper functions
+- Use t.Cleanup() for teardown instead of defer when the test creates resources
+
+7.2 TEST ISOLATION
+
+Flag any test that:
+- Depends on global state that isn't reset
+- Depends on execution order
+- Uses hardcoded ports without checking availability
+- Reads from the real filesystem without t.TempDir()
+- Makes real network calls without a test server
+
+7.3 ASSERTIONS
+
+- Check all returned errors, even in tests
+- Use t.Fatal for setup failures, t.Error for assertion failures
+- Include descriptive messages in failure output
+
+Bad:
+    if result != expected {
+        t.Fail()
+    }
+
+Good:
+    if result != expected {
+        t.Errorf("ParseConfig(%q) = %v, want %v", input, result, expected)
+    }
+
+7.4 BENCHMARKS
+
+- Use b.ResetTimer() after expensive setup
+- Use b.ReportAllocs() to track allocation pressure
+- Flag any benchmark that doesn't use the result (compiler may optimize it away)
+
+--------------------------------------------------------------------------------
+8. COMMON GO PITFALLS
+--------------------------------------------------------------------------------
+
+8.1 LOOP VARIABLE CAPTURE (pre-Go 1.22)
+
+In Go versions before 1.22, loop variables are reused. Closures that capture
+them without copying get the final iteration's value.
+
+Bad (pre-1.22):
+    for _, item := range items {
+        go func() {
+            process(item)  // all goroutines see the last item
+        }()
+    }
+
+Good (pre-1.22):
+    for _, item := range items {
+        item := item  // shadow with copy
+        go func() {
+            process(item)
+        }()
+    }
+
+Note: Go 1.22+ changed loop variable semantics, but flag this if the module
+targets an earlier Go version.
+
+8.2 NIL INTERFACE vs NIL POINTER
+
+An interface holding a nil pointer is NOT a nil interface. This causes
+subtle bugs:
+
+    var p *MyError  // nil pointer
+    var err error = p  // err is NOT nil!
+    if err != nil {
+        fmt.Println("this prints!")  // surprising
+    }
+
+8.3 DEFERRED FUNCTION ARGUMENTS
+
+Arguments to deferred functions are evaluated immediately, not when the
+deferred function executes.
+
+Bad:
+    func logDuration(start time.Time) {
+        defer fmt.Println(time.Since(start))  // evaluated NOW, always ~0
+    }
+
+Good:
+    func logDuration(start time.Time) {
+        defer func() {
+            fmt.Println(time.Since(start))  // evaluated when deferred func runs
+        }()
+    }
+
+8.4 SLICE APPEND ALIASING
+
+append() may or may not allocate a new backing array. If it doesn't, the
+original slice is mutated:
+
+    a := []int{1, 2, 3, 4, 5}
+    b := a[:3]
+    b = append(b, 99)
+    // a is now [1, 2, 3, 99, 5] — b's append mutated a!
+
+Flag any code that appends to a sub-slice of another slice.
+
+8.5 GOROUTINE LEAKS
+
+A goroutine blocked on a channel that no one will ever write to (or read from)
+is a goroutine leak. It will never be garbage collected. Common causes:
+- Sending to an unbuffered channel with no receiver
+- Waiting on a context that's never canceled
+- select{} with no exit case
+
+8.6 INIT() FUNCTIONS
+
+Flag any init() that:
+- Does I/O (file reads, network calls)
+- Can fail silently
+- Has side effects that make testing difficult
+- Registers globals that could be passed as dependencies
+
+init() should be limited to registration-style patterns (registering codecs,
+drivers, providers). Anything else should be explicit.
+
+8.7 STRING/BYTE CONVERSION
+
+    s := string(bytes)
+    b := []byte(s)
+
+Both operations copy the data. In hot paths, this double-copy is expensive.
+Flag any unnecessary conversions between string and []byte.
+
+--------------------------------------------------------------------------------
+9. API DESIGN
+--------------------------------------------------------------------------------
+
+9.1 FUNCTION SIGNATURES
+
+- Accept interfaces, return concrete types
+- First parameter should be context.Context if the function does I/O
+- Use functional options for complex configuration
+- Return (result, error), not just error with result via pointer parameter
+- Avoid boolean parameters — use named types or separate functions
+
+Bad:
+    func Connect(host string, secure bool, retry bool, verbose bool)
+
+Good:
+    func Connect(host string, opts ...Option)
+
+9.2 ZERO VALUE USABILITY
+
+Design structs so the zero value is useful:
+    var mu sync.Mutex        // ready to use
+    var buf bytes.Buffer     // ready to use
+    var wg sync.WaitGroup    // ready to use
+
+Flag any struct that panics or misbehaves when used with its zero value
+unless this is clearly documented.
+
+9.3 CONSTRUCTOR VALIDATION
+
+Validate all required fields in the constructor, not at method call time.
+If NewFoo can detect that config.APIKey is empty, it should return an error
+immediately, not when the first API call fails 30 seconds later.
+
+--------------------------------------------------------------------------------
+10. LOGGING AND OBSERVABILITY
+--------------------------------------------------------------------------------
+
+10.1 STRUCTURED LOGGING
+
+Use slog (Go 1.21+) or a structured logging library. Flag any use of
+fmt.Println or log.Printf for operational logging.
+
+Bad:
+    log.Printf("failed to connect to %s: %v", host, err)
+
+Good:
+    slog.Error("connection failed", "host", host, "error", err)
+
+10.2 LOG LEVELS
+
+- Error: something failed and needs attention
+- Warn: something unexpected but handled
+- Info: significant lifecycle events (startup, shutdown, config loaded)
+- Debug: detailed diagnostic information
+
+Flag any error logged at Info level, or debug spam at Error level.
+
+10.3 SENSITIVE DATA
+
+Never log:
+- API keys, passwords, tokens
+- Full request/response bodies containing user data
+- Credit card numbers, SSNs, or PII
+
+Flag any slog.Any or fmt.Sprintf that could serialize a struct containing
+sensitive fields without redaction.
