@@ -180,14 +180,15 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 // =============================================================================
 
 type openaiRequest struct {
-	Model         string               `json:"model"`
-	Messages      []openaiMessage      `json:"messages"`
-	MaxTokens     int                  `json:"max_tokens,omitempty"`
-	Temperature   float64              `json:"temperature"`
-	Stream        bool                 `json:"stream,omitempty"`
-	StreamOptions *openaiStreamOptions `json:"stream_options,omitempty"`
-	Tools         []openaiTool         `json:"tools,omitempty"`
-	Stop          []string             `json:"stop,omitempty"`
+	Model               string               `json:"model"`
+	Messages            []openaiMessage      `json:"messages"`
+	MaxTokens           int                  `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int                  `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64             `json:"temperature,omitempty"`
+	Stream              bool                 `json:"stream,omitempty"`
+	StreamOptions       *openaiStreamOptions `json:"stream_options,omitempty"`
+	Tools               []openaiTool         `json:"tools,omitempty"`
+	Stop                []string             `json:"stop,omitempty"`
 }
 
 type openaiStreamOptions struct {
@@ -252,23 +253,37 @@ func normalizeStopReason(reason string) string {
 }
 
 func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, error) {
+	model := req.Model
+	if model == "" {
+		model = c.config.Model
+	}
+
+	maxTok := req.MaxTokens
+	if maxTok == 0 {
+		maxTok = c.config.MaxTokens
+	}
+
 	apiReq := openaiRequest{
-		Model:       req.Model,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      stream,
+		Model:  model,
+		Stream: stream,
+	}
+
+	// Reasoning/thinking models (o-series, gpt-5 family) require
+	// max_completion_tokens instead of the legacy max_tokens parameter,
+	// and do not support custom temperature (only default 1 is allowed).
+	info, _ := llm.GetModelInfo(model)
+	if info.Thinking {
+		apiReq.MaxCompletionTokens = maxTok
+		// Omit temperature entirely — reasoning models only accept default (1).
+	} else {
+		apiReq.MaxTokens = maxTok
+		temp := req.Temperature
+		apiReq.Temperature = &temp
 	}
 
 	// Request usage stats in streaming responses (required since May 2024)
 	if stream {
 		apiReq.StreamOptions = &openaiStreamOptions{IncludeUsage: true}
-	}
-
-	if apiReq.Model == "" {
-		apiReq.Model = c.config.Model
-	}
-	if apiReq.MaxTokens == 0 {
-		apiReq.MaxTokens = c.config.MaxTokens
 	}
 
 	// Add system message if provided
