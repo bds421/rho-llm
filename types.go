@@ -268,8 +268,9 @@ type Response struct {
 	ToolCalls    []ToolCall `json:"tool_calls"`  // Tool use requests
 	Thinking     string     `json:"thinking"`    // Extended thinking content
 	StopReason   string     `json:"stop_reason"` // end_turn, tool_use, max_tokens
-	InputTokens  int        `json:"input_tokens"`
-	OutputTokens int        `json:"output_tokens"`
+	InputTokens    int `json:"input_tokens"`
+	OutputTokens   int `json:"output_tokens"`
+	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
 
 	// Cache token usage (Anthropic)
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache
@@ -294,8 +295,9 @@ type StreamEvent struct {
 	Thinking string `json:"thinking,omitempty"`
 
 	// Usage event
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
+	InputTokens    int `json:"input_tokens,omitempty"`
+	OutputTokens   int `json:"output_tokens,omitempty"`
+	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking
 
 	// Done event
 	StopReason string `json:"stop_reason,omitempty"`

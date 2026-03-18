@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of March 2026 (v0.1.21).
+> **Status:** Reflects the actual implementation as of March 2026 (v0.1.22).
 
 ---
 
@@ -150,9 +150,10 @@ type StreamEvent struct {
     ToolCall *ToolCall  // tool_use
     Thinking string     // thinking (Anthropic extended thinking)
 
-    InputTokens  int    // usage / done (-1 = not reported)
-    OutputTokens int    // usage / done (-1 = not reported)
-    StopReason   string // done: "end_turn" | "tool_use" | "max_tokens"
+    InputTokens    int    // usage / done (-1 = not reported)
+    OutputTokens   int    // usage / done (-1 = not reported)
+    ThinkingTokens int    // Gemini: tokens consumed by thinking (0 for other providers)
+    StopReason     string // done: "end_turn" | "tool_use" | "max_tokens"
 
     CacheCreationTokens int // Anthropic: tokens written to cache (EventDone)
     CacheReadTokens     int // Anthropic/Gemini: tokens read from cache (EventDone)
@@ -493,7 +494,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Auth: `x-goog-api-key` header (moved from URL query parameter in v0.1.9 to prevent key leakage)
 - Streaming: SSE with JSON chunks
 - `ThoughtSignature`: when a model has `ThoughtSignature: true` in the registry, function call responses include a `thought_signature` field that must be preserved and echoed in subsequent `tool_result` parts
-- Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is parsed but not yet exposed separately (OutputTokens maps to `candidatesTokenCount` which excludes thinking tokens).
+- Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is exposed as `resp.ThinkingTokens` / `event.ThinkingTokens`, separate from `OutputTokens` (which maps to `candidatesTokenCount` only). Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` is 0.
 - System prompt: mapped to `systemInstruction.parts[0].text`
 - Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`.
 

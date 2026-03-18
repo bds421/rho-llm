@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-03-18
+
+### Added
+
+- **`Response.ThinkingTokens` / `StreamEvent.ThinkingTokens`** — Gemini models that think by default (gemini-2.5-*) report `thoughtsTokenCount` separately from `candidatesTokenCount`. This was previously parsed but discarded. Now exposed so callers can see the full token breakdown. Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` remains 0.
+- **Logging middleware** now includes `tokens_thinking` when > 0, matching the pattern used for cache tokens.
+
 ## [0.1.21] - 2026-03-18
 
 ### Added

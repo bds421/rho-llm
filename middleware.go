@@ -54,6 +54,9 @@ func (l *LoggingClient) Complete(ctx context.Context, req Request) (*Response, e
 		"tokens_in", resp.InputTokens, "tokens_out", resp.OutputTokens,
 		"stop", resp.StopReason, "cost", cost,
 	}
+	if resp.ThinkingTokens > 0 {
+		attrs = append(attrs, "tokens_thinking", resp.ThinkingTokens)
+	}
 	if resp.CacheCreationTokens > 0 {
 		attrs = append(attrs, "cache_write", resp.CacheCreationTokens)
 	}
@@ -80,7 +83,7 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 		start := time.Now()
 		var chunks int
 		lastInputTokens, lastOutputTokens := TokensNotReported, TokensNotReported
-		var lastCacheCreationTokens, lastCacheReadTokens int
+		var lastThinkingTokens, lastCacheCreationTokens, lastCacheReadTokens int
 		var lastStopReason string
 		var streamErr error
 
@@ -98,6 +101,9 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				"elapsed", elapsed.Round(time.Millisecond),
 				"chunks", chunks, "tokens_in", lastInputTokens, "tokens_out", lastOutputTokens,
 				"stop", lastStopReason, "cost", cost,
+			}
+			if lastThinkingTokens > 0 {
+				attrs = append(attrs, "tokens_thinking", lastThinkingTokens)
 			}
 			if lastCacheCreationTokens > 0 {
 				attrs = append(attrs, "cache_write", lastCacheCreationTokens)
@@ -121,6 +127,7 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				lastStopReason = event.StopReason
 				lastInputTokens = event.InputTokens
 				lastOutputTokens = event.OutputTokens
+				lastThinkingTokens = event.ThinkingTokens
 				lastCacheCreationTokens = event.CacheCreationTokens
 				lastCacheReadTokens = event.CacheReadTokens
 			}

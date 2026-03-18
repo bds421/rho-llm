@@ -187,8 +187,8 @@ func TestParseResponseThinkingParts(t *testing.T) {
 }
 
 // TestParseResponseThoughtsTokenCount verifies that thoughtsTokenCount is
-// captured in the response. Currently OutputTokens maps to CandidatesTokenCount
-// which excludes thinking tokens — this test documents that behavior.
+// exposed as ThinkingTokens on the response, separate from OutputTokens
+// (which maps to CandidatesTokenCount only).
 func TestParseResponseThoughtsTokenCount(t *testing.T) {
 	raw := `{
 		"candidates": [{
@@ -219,14 +219,18 @@ func TestParseResponseThoughtsTokenCount(t *testing.T) {
 	if resp.OutputTokens != 5 {
 		t.Errorf("OutputTokens = %d, want 5 (CandidatesTokenCount)", resp.OutputTokens)
 	}
+	// ThinkingTokens exposes the separate thoughtsTokenCount
+	if resp.ThinkingTokens != 100 {
+		t.Errorf("ThinkingTokens = %d, want 100", resp.ThinkingTokens)
+	}
 }
 
 // TestParseStreamThinkingParts verifies that streaming thought parts emit
 // EventThinking while non-thought parts emit EventContent.
 func TestParseStreamThinkingParts(t *testing.T) {
-	// Simulate two SSE chunks: one with a thought part, one with content
+	// Simulate two SSE chunks: one with a thought part, one with content + usage
 	sseData := "data: " + `{"candidates":[{"content":{"parts":[{"text":"reasoning...","thought":true}]}}]}` + "\n\n" +
-		"data: " + `{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}` + "\n\n"
+		"data: " + `{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":80}}` + "\n\n"
 
 	c := &Client{providerName: "gemini"}
 	var events []llm.StreamEvent
@@ -250,6 +254,9 @@ func TestParseStreamThinkingParts(t *testing.T) {
 	}
 	if events[2].Type != llm.EventDone {
 		t.Errorf("event[2].Type = %v, want EventDone", events[2].Type)
+	}
+	if events[2].ThinkingTokens != 80 {
+		t.Errorf("EventDone.ThinkingTokens = %d, want 80", events[2].ThinkingTokens)
 	}
 }
 

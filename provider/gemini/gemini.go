@@ -409,6 +409,7 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 		Model:           model,
 		InputTokens:     apiResp.UsageMetadata.PromptTokenCount,
 		OutputTokens:    apiResp.UsageMetadata.CandidatesTokenCount,
+		ThinkingTokens:  apiResp.UsageMetadata.ThoughtsTokenCount,
 		CacheReadTokens: apiResp.UsageMetadata.CachedContentTokenCount,
 	}
 
@@ -509,6 +510,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					StopReason:      normalizeStopReason(candidate.FinishReason),
 					InputTokens:     event.UsageMetadata.PromptTokenCount,
 					OutputTokens:    event.UsageMetadata.CandidatesTokenCount,
+					ThinkingTokens:  event.UsageMetadata.ThoughtsTokenCount,
 					CacheReadTokens: event.UsageMetadata.CachedContentTokenCount,
 				}, nil) {
 					return
