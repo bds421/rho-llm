@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"gitlab2024.bds421-cloud.com/bds421/rho/llm"
-	_ "gitlab2024.bds421-cloud.com/bds421/rho/llm/provider"
+	"github.com/bds421/rho-llm"
+	_ "github.com/bds421/rho-llm/provider"
 )
 
 // TestPrompt is a simple prompt that all models should handle.

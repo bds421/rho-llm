@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"gitlab2024.bds421-cloud.com/bds421/rho/llm"
-	"gitlab2024.bds421-cloud.com/bds421/rho/llm/provider/anthropic"
-	"gitlab2024.bds421-cloud.com/bds421/rho/llm/provider/gemini"
-	"gitlab2024.bds421-cloud.com/bds421/rho/llm/provider/openaicompat"
+	"github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/provider/anthropic"
+	"github.com/bds421/rho-llm/provider/gemini"
+	"github.com/bds421/rho-llm/provider/openaicompat"
 )
 
 // =============================================================================

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	llm "gitlab2024.bds421-cloud.com/bds421/rho/llm"
+	llm "github.com/bds421/rho-llm"
 )
 
 // TestMakeToolCallIDResolveToolNameRoundTrip verifies that resolveToolName

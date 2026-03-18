@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-`gitlab2024.bds421-cloud.com/bds421/rho/llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers eleven providers across three distinct wire protocols.
+`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers eleven providers across three distinct wire protocols.
 
 **Key capabilities:**
 - Single `Client` interface for all providers and protocols
@@ -23,7 +23,7 @@
 ## 2. Package Structure
 
 ```
-gitlab2024.bds421-cloud.com/bds421/rho/llm/
+github.com/bds421/rho-llm/
 ├── types.go          # Core types: Message, Request, Response, StreamEvent, Client interface
 ├── config.go         # Config struct + DefaultConfig()
 ├── provider.go       # Provider presets, protocol resolution, URL/auth resolution
@@ -46,7 +46,7 @@ gitlab2024.bds421-cloud.com/bds421/rho/llm/
     └── openaicompat/openaicompat.go # OpenAI-compatible adapter (11+ providers)
 ```
 
-Provider implementations register themselves via `init()` using `llm.RegisterProvider()`. Consumers that call `llm.NewClient()` must add a blank import: `_ "gitlab2024.bds421-cloud.com/bds421/rho/llm/provider"`.
+Provider implementations register themselves via `init()` using `llm.RegisterProvider()`. Consumers that call `llm.NewClient()` must add a blank import: `_ "github.com/bds421/rho-llm/provider"`.
 
 ---
 

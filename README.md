@@ -1,4 +1,4 @@
-# rho/llm
+# rho-llm
 
 Multi-provider LLM client for Go. Streaming, tool use, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
 
@@ -7,7 +7,7 @@ Multi-provider LLM client for Go. Streaming, tool use, extended thinking, auth p
 ## Install
 
 ```bash
-go get gitlab2024.bds421-cloud.com/bds421/rho/llm
+go get github.com/bds421/rho-llm
 ```
 
 ## Supported Providers
@@ -31,7 +31,7 @@ go get gitlab2024.bds421-cloud.com/bds421/rho/llm
 This example demonstrates a complete request using Google Gemini, but the code is identical for all 11 providers.
 
 ```go
-import _ "gitlab2024.bds421-cloud.com/bds421/rho/llm/provider" // required: register adapters
+import _ "github.com/bds421/rho-llm/provider" // required: register adapters
 
 // 1. Configure and initialize
 cfg := llm.Config{
@@ -531,7 +531,7 @@ llm/
 Consumers that call `llm.NewClient()` must add a blank import in their `main.go`:
 
 ```go
-import _ "gitlab2024.bds421-cloud.com/bds421/rho/llm/provider"  // register all provider adapters
+import _ "github.com/bds421/rho-llm/provider"  // register all provider adapters
 ```
 
 Consumers that only use types (`llm.Client`, `llm.Config`, `llm.Message`, etc.) need no blank import.

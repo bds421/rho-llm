@@ -358,7 +358,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Replaced `shared/logger` dependency with stdlib `log/slog` — zero external dependencies
 - `LoggingClient` now stores `*slog.Logger` instead of string prefix
-- Standalone module path: `gitlab2024.bds421-cloud.com/bds421/rho/llm`
+- Standalone module path: `github.com/bds421/rho-llm`
 
 ## [0.1.0] - 2026-01-30
 
