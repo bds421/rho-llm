@@ -4341,3 +4341,94 @@ func TestAnthropicCacheTokenUsageZero(t *testing.T) {
 		t.Errorf("CacheReadTokens = %d, want 0 (no caching)", resp.CacheReadTokens)
 	}
 }
+
+// TestReasoningModelMaxTokensWireFormat verifies that reasoning models get the
+// correct max tokens parameter based on their provider: OpenAI/xAI use
+// max_completion_tokens, while Mistral/Groq/Ollama use standard max_tokens.
+func TestReasoningModelMaxTokensWireFormat(t *testing.T) {
+	tests := []struct {
+		provider               string
+		model                  string
+		wantMaxTokens          bool // expect max_tokens in wire request
+		wantMaxCompletionToken bool // expect max_completion_tokens in wire request
+	}{
+		// OpenAI reasoning models → max_completion_tokens
+		{"openai", "gpt-5.2", false, true},
+		{"openai", "o3-mini", false, true},
+		// xAI reasoning models → max_completion_tokens
+		{"xai", "grok-3-mini", false, true},
+		// Mistral reasoning models → max_tokens
+		{"mistral", "mistral-small-2603", true, false},
+		{"mistral", "magistral-medium-2509", true, false},
+		{"mistral", "magistral-small-2509", true, false},
+		// Groq reasoning models → max_tokens
+		{"groq", "deepseek-r1-distill-llama-70b", true, false},
+		// Ollama reasoning models → max_tokens
+		{"ollama", "qwen3:8b", true, false},
+		// Non-reasoning models → max_tokens
+		{"openai", "gpt-4.1", true, false},
+		{"mistral", "mistral-large-2512", true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.provider+"/"+tt.model, func(t *testing.T) {
+			var captured []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read body: %v", err)
+				}
+				captured = body
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{
+					"id": "chatcmpl-test",
+					"object": "chat.completion",
+					"model": "` + tt.model + `",
+					"choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+					"usage": {"prompt_tokens": 10, "completion_tokens": 2}
+				}`))
+			}))
+			defer srv.Close()
+
+			cfg := llm.Config{
+				Provider:  tt.provider,
+				Model:     tt.model,
+				APIKey:    "test-key",
+				BaseURL:   srv.URL,
+				MaxTokens: 1024,
+				Timeout:   5 * time.Second,
+			}
+			client, err := llm.NewClient(cfg)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer client.Close()
+
+			_, err = client.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			wireStr := string(captured)
+
+			hasMaxTokens := strings.Contains(wireStr, `"max_tokens"`)
+			hasMaxCompletionTokens := strings.Contains(wireStr, `"max_completion_tokens"`)
+
+			if hasMaxTokens != tt.wantMaxTokens {
+				t.Errorf("max_tokens present=%v, want %v\nwire: %s", hasMaxTokens, tt.wantMaxTokens, wireStr)
+			}
+			if hasMaxCompletionTokens != tt.wantMaxCompletionToken {
+				t.Errorf("max_completion_tokens present=%v, want %v\nwire: %s", hasMaxCompletionTokens, tt.wantMaxCompletionToken, wireStr)
+			}
+
+			// Reasoning models on non-OpenAI/xAI providers should also include temperature
+			if tt.wantMaxTokens {
+				if !strings.Contains(wireStr, `"temperature"`) {
+					t.Errorf("expected temperature in wire request for %s/%s\nwire: %s", tt.provider, tt.model, wireStr)
+				}
+			}
+		})
+	}
+}

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-03-18
+
+### Fixed
+
+- **Mistral/Groq/Ollama reasoning models sent wrong max tokens parameter** — The OpenAI-compatible adapter used `max_completion_tokens` (and omitted temperature) for all reasoning models (`Thinking: true`), but this is an OpenAI/xAI-specific API quirk. Mistral (`mistral-small-2603`, `magistral-medium-2509`, `magistral-small-2509`), Groq (`deepseek-r1-distill-*`), and Ollama (`qwen3:*`, `deepseek-r1:*`) reasoning models use standard `max_tokens` and accept temperature. Now scoped to `info.Provider == "openai" || info.Provider == "xai"` only.
+
 ## [0.1.17] - 2026-03-18
 
 ### Added

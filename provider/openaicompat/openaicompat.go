@@ -268,13 +268,13 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		Stream: stream,
 	}
 
-	// Reasoning/thinking models (o-series, gpt-5 family) require
-	// max_completion_tokens instead of the legacy max_tokens parameter,
-	// and do not support custom temperature (only default 1 is allowed).
+	// OpenAI and xAI reasoning models require max_completion_tokens instead
+	// of max_tokens, and reject custom temperature. Other providers (Mistral,
+	// Groq, Ollama) use standard max_tokens even for reasoning models.
 	info, _ := llm.GetModelInfo(model)
-	if info.Thinking {
+	if info.Thinking && (info.Provider == "openai" || info.Provider == "xai") {
 		apiReq.MaxCompletionTokens = maxTok
-		// Omit temperature entirely — reasoning models only accept default (1).
+		// Omit temperature entirely — these reasoning models only accept default (1).
 	} else {
 		apiReq.MaxTokens = maxTok
 		temp := req.Temperature
