@@ -143,10 +143,10 @@ func TestFactoryDefaultModels(t *testing.T) {
 	}{
 		{"anthropic", "claude-sonnet-4-6"},
 		{"claude", "claude-sonnet-4-6"},
-		{"xai", "grok-4-fast-non-reasoning"},
-		{"grok", "grok-4-fast-non-reasoning"},
-		{"gemini", "gemini-2.5-flash-lite"},
-		{"google", "gemini-2.5-flash-lite"},
+		{"xai", "grok-4.20-beta"},
+		{"grok", "grok-4.20-beta"},
+		{"gemini", "gemini-3.1-flash-lite-preview"},
+		{"google", "gemini-3.1-flash-lite-preview"},
 	}
 
 	for _, tc := range tests {
@@ -308,10 +308,10 @@ func TestResolveModelAlias(t *testing.T) {
 		{"opus", "claude-opus-4-6"},
 		{"sonnet", "claude-sonnet-4-6"},
 		{"haiku", "claude-haiku-4-5-20251001"},
-		{"grok", "grok-4-fast-non-reasoning"},
+		{"grok", "grok-4.20-beta"},
 		{"grok-code", "grok-code-fast-1"},
-		{"gemini-pro", "gemini-3-pro-preview"},
-		{"flash-lite", "gemini-2.5-flash-lite"},
+		{"gemini-pro", "gemini-3.1-pro-preview"},
+		{"flash-lite", "gemini-3.1-flash-lite-preview"},
 		// Non-alias should pass through
 		{"claude-opus-4-6", "claude-opus-4-6"},
 		{"unknown-model", "unknown-model"},
@@ -644,9 +644,9 @@ func TestEstimateCost(t *testing.T) {
 		{"gemini-2.5-flash-lite", 10000, 5000, 0, 0},
 		// unknown model: 0
 		{"unknown-model", 1000, 500, 0, 0},
-		// claude-opus-4-6: $15/1M input, $75/1M output
-		// 10000 input: 0.15, 2000 output: 0.15
-		{"claude-opus-4-6", 10000, 2000, 0.299, 0.301},
+		// claude-opus-4-6: $5/1M input, $25/1M output
+		// 10000 input: 0.05, 2000 output: 0.05
+		{"claude-opus-4-6", 10000, 2000, 0.099, 0.101},
 	}
 
 	for _, tc := range tests {
@@ -804,7 +804,7 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 
 	// 2. Intrinsic reasoning (Thinking)
 	intrinsic := []string{
-		"grok-4-1-fast-reasoning", "grok-4-fast-reasoning",
+		"grok-4-1-fast-reasoning", "grok-4-fast-reasoning", "grok-3-mini",
 	}
 	for _, model := range intrinsic {
 		info, ok := llm.GetModelInfo(model)
@@ -815,7 +815,7 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 
 	// 3. No reasoning
 	none := []string{
-		"gemini-2.5-flash", "claude-haiku-4-5-20251001", "grok-3-mini",
+		"gemini-2.5-flash",
 	}
 	for _, model := range none {
 		info, ok := llm.GetModelInfo(model)

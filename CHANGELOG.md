@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-03-18
+
+### Added
+
+- **OpenAI: GPT-5.4 Mini and Nano** — `gpt-5.4-mini` ($0.75/$4.50, 400K context, reasoning) and `gpt-5.4-nano` ($0.20/$1.25, 400K context, reasoning). Released 2026-03-17.
+- **OpenAI: GPT-5 Pro, GPT-5.2 Pro, GPT-5 Codex** — `gpt-5-pro` ($15/$120, 272K max output), `gpt-5.2-pro` ($21/$168), `gpt-5-codex` ($1.25/$10).
+- **xAI: Grok 4.20 dated variants** — `grok-4.20-beta-0309-reasoning`, `grok-4.20-beta-0309-non-reasoning`, `grok-4.20-multi-agent-beta-0309` (all $2/$6, 2M context).
+- **Mistral: Mistral Small 4** — `mistral-small-2603` ($0.15/$0.60, 256K context, toggleable reasoning). Now the default Mistral model.
+- **Mistral: Ministral 14B** — `ministral-14b-2512` ($0.20/$0.20, 256K context).
+- **OpenAI aliases** — `gpt5.4-mini`, `gpt5.4-nano`.
+
+### Fixed
+
+- **Anthropic pricing corrections** — Opus 4.6 and 4.5 were listed at $15/$75 (the Opus 4.0/4.1 price); corrected to $5/$25. Haiku 4.5 corrected from $0.80/$4 to $1/$5.
+- **Anthropic context windows** — Opus 4.6 and Sonnet 4.6 now show 1M context (were 200K). These are the first Anthropic models with native 1M context.
+- **Anthropic max output** — Opus 4.5 corrected to 64K (was 128K), Opus 4.1/4.0 corrected to 32K (were 128K), Haiku 4.5 corrected to 64K (was 8192).
+- **Haiku 4.5 extended thinking** — Now correctly marked `SupportsThinking: true` per official docs.
+- **xAI pricing overhaul** — All Grok `-fast-` models corrected from $3/$15 to $0.20/$0.50. `grok-4.20-beta` corrected from $3.50/$18 to $2/$6. `grok-code-fast-1` corrected from $3/$15 to $0.20/$1.50.
+- **xAI context windows** — All `-fast-` and 4.20 models corrected to 2M (were 131K). `grok-4-0709` and `grok-code-fast-1` corrected to 256K.
+- **xAI reasoning flags** — Added `Thinking: true` to `grok-4-0709`, `grok-code-fast-1`, and `grok-3-mini`.
+- **OpenAI `gpt-5.4-pro` pricing** — Corrected from $5/$20 to $30/$180.
+- **OpenAI `gpt-5.3-codex` pricing** — Corrected from $1.50/$12 to $1.75/$14.
+- **OpenAI `gpt-5.3-instant` renamed** — Model ID did not exist in OpenAI's API. Renamed to `gpt-5.3-chat-latest` with corrected pricing ($1.75/$14).
+- **Gemini `gemini-3.1-flash-lite-preview`** — Pricing corrected from $0/$0 to $0.25/$1.50. Added `ThoughtSignature: true` (required for all Gemini 3.x models).
+- **Mistral `mistral-large-2512` pricing** — Corrected from $2/$6 to $0.50/$1.50. Context window corrected to 256K.
+- **Mistral `magistral-medium-2509` pricing** — Corrected from $0.40/$2 to $2/$5. Context corrected from 40K to 128K.
+- **Mistral `magistral-small-2509` pricing** — Corrected from $0.10/$0.30 to $0.50/$1.50. Context corrected from 32K to 128K.
+- **Mistral broken model IDs** — `devstral-small-2-25-12` (invalid) replaced with `devstral-2512` ($0.40/$2, 256K). `ministral-3-8b-25-12` (invalid) replaced with `ministral-8b-2512` ($0.15/$0.15, 256K).
+- **Mistral context windows** — All models updated to match official docs (most were undersized).
+
+### Changed
+
+- **Default Mistral model** — Changed from `mistral-small-2506` to `mistral-small-2603` (Mistral Small 4).
+- **`mistral-small` alias** — Now resolves to `mistral-small-2603` (was `mistral-small-2506`).
+- **`devstral` alias** — Now resolves to `devstral-2512` (was invalid `devstral-small-2-25-12`).
+- **`ministral` alias** — Now resolves to `ministral-8b-2512` (was invalid `ministral-3-8b-25-12`).
+
+## [0.1.15] - 2026-03-18
+
+### Added
+
+- **New models** — Grok 4.20, Gemini 3.1 Flash Lite, GPT 5.4, GPT 5.3, new LLM examples (cached interactions for Gemini/Anthropic, Go code review system prompt).
+- **OpenAI reasoning model parameters** — Fixed parameter handling for reasoning models.
+
+### Changed
+
+- **Module path migration** — Migrated from `gitlab2024.bds421-cloud.com/bds421/rho/llm` to `github.com/bds421/rho-llm`.
+
 ## [0.1.14] - 2026-03-06
 
 ### Added

@@ -38,7 +38,9 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 		}
 
 		// 5. Explicit Negatives (Models that should NEVER have either)
-		if strings.Contains(id, "gemini-") || strings.Contains(id, "haiku") || strings.Contains(id, "non-reasoning") {
+		// Haiku 4.5+ supports extended thinking; only Claude 3 Haiku does not.
+		isLegacyHaiku := strings.Contains(id, "claude-3-haiku")
+		if strings.Contains(id, "gemini-") || isLegacyHaiku || strings.Contains(id, "non-reasoning") {
 			if info.SupportsThinking || info.Thinking {
 				t.Errorf("Model %s should not have any thinking flags set", id)
 			}

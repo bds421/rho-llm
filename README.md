@@ -412,7 +412,7 @@ Use `ResolveModelAlias()` for short aliases:
 
 ```go
 model := llm.ResolveModelAlias("opus")   // -> "claude-opus-4-6"
-model = llm.ResolveModelAlias("grok")    // -> "grok-4-fast-non-reasoning"
+model = llm.ResolveModelAlias("grok")    // -> "grok-4.20-beta"
 model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 ```
 
@@ -441,7 +441,9 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | Alias | Resolves to |
 |-------|-------------|
 | `gpt`, `gpt5.4`, `gpt5` | `gpt-5.4` |
-| `gpt5.3`, `gpt-instant` | `gpt-5.3-instant` |
+| `gpt5.3`, `gpt-instant` | `gpt-5.3-chat-latest` |
+| `gpt5.4-mini` | `gpt-5.4-mini` |
+| `gpt5.4-nano` | `gpt-5.4-nano` |
 | `gpt5.2` | `gpt-5.2` |
 | `gpt5.1` | `gpt-5.1` |
 | `gpt5-mini` | `gpt-5-mini` |
@@ -464,11 +466,11 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 |-------|-------------|
 | `mistral-large` | `mistral-large-2512` |
 | `mistral-medium` | `mistral-medium-latest` |
-| `mistral-small` | `mistral-small-2506` |
+| `mistral-small` | `mistral-small-2603` |
 | `magistral` | `magistral-medium-2509` |
 | `codestral` | `codestral-2508` |
-| `devstral` | `devstral-small-2-25-12` |
-| `ministral` | `ministral-3-8b-25-12` |
+| `devstral` | `devstral-2512` |
+| `ministral` | `ministral-8b-2512` |
 
 ### Ollama aliases
 
@@ -500,14 +502,14 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 cost := llm.EstimateCost("claude-sonnet-4-6", inputTokens, outputTokens)
 
 // Query per-model metadata (context window, pricing, thinking support)
-info, ok := llm.GetModelInfo("grok-4-fast-non-reasoning")
+info, ok := llm.GetModelInfo("grok-4.20-beta")
 fmt.Printf("Context: %d tokens\n", info.ContextWindow)
 
 // Detect provider from model ID
 provider := llm.ProviderForModel("gemini-2.5-flash") // -> "gemini"
 
 // Get the default model for a provider
-model := llm.GetDefaultModel("xai") // -> "grok-4-fast-non-reasoning"
+model := llm.GetDefaultModel("xai") // -> "grok-4.20-beta"
 ```
 
 ## Package Structure
