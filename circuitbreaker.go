@@ -2,6 +2,7 @@ package llm
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -234,8 +235,14 @@ func (cb *CircuitBreaker) setStateLocked(to CircuitState) (from, newState Circui
 }
 
 // fireCallback invokes onStateChange outside the mutex.
+// Recovers from panics in user-provided callbacks to prevent crashing the caller.
 func (cb *CircuitBreaker) fireCallback(from, to CircuitState) {
 	if cb.onStateChange != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("circuit breaker callback panicked", "from", from, "to", to, "panic", r)
+			}
+		}()
 		cb.onStateChange(from, to)
 	}
 }

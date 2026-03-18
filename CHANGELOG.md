@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-03-18
+
+### Breaking Changes
+
+- **`Config.Temperature` / `Request.Temperature` changed to `*float64`** — `nil` means "omit from wire" (use provider default). Previously `float64` with default `1.0`. Callers must use a pointer: `temp := 0.7; req.Temperature = &temp`. `DefaultConfig()` no longer sets `Temperature: 1.0` — it is `nil` (omitted).
+
+- **`EstimateCost` signature changed** — Now accepts a single `CostInput` struct instead of `(model, inputTokens, outputTokens)`. The new struct includes `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware and thinking-aware pricing.
+
+- **Unknown providers require `BaseURL`** — `NewClient` with an unrecognized provider name and no `BaseURL` now returns an error instead of silently defaulting to openai_compat with no endpoint. Set `BaseURL` for custom providers.
+
+### Added
+
+- **`CostInput` struct** — Holds all token types for accurate cost estimation: `InputTokens`, `OutputTokens`, `ThinkingTokens`, `CacheCreateTokens`, `CacheReadTokens`.
+
+- **Cache pricing in `ModelInfo`** — New `CacheWritePricePer1M` and `CacheReadPricePer1M` fields. Populated for all Anthropic models (write = 1.25× input, read = 0.1× input per Anthropic docs). `EstimateCost` now includes cache token costs in its calculation.
+
+- **`EstimateCost` thinking token support** — Thinking tokens (Gemini: separate from output) are priced at the output rate. Anthropic bundles thinking in `OutputTokens`, so `ThinkingTokens` is 0 for Anthropic — no double-counting.
+
+### Fixed
+
+- **Context length false positives** — Removed overly broad `"token limit"` and `"too many tokens"` patterns from `isContextLengthMessage()`. These matched rate-limit messages (e.g. "token limit temporarily reached"), causing `IsContextLength()` to misclassify them. Remaining patterns are specific: `"context length"`, `"context_length"`, `"maximum context"`, `"prompt is too long"`, `"input too long"`, `"request too large"`, `"token count exceeds"`.
+
+- **Tool input overflow corrupted stream** — Anthropic and OpenAI-compatible adapters continued parsing after tool input exceeded `MaxToolInputBytes`, producing corrupted tool JSON. Now the stream terminates cleanly with an error on overflow instead of dropping deltas and continuing.
+
+- **Gemini stream tool input unbounded** — Added explicit `MaxToolInputBytes` check in the Gemini streaming adapter for consistency with Anthropic and OpenAI-compatible adapters.
+
+- **Circuit breaker callback panic crashed caller** — A panicking `OnStateChange` callback propagated to the caller. Now recovered with `slog.Error` logging.
+
+- **Anthropic thinking temperature override logged at wrong level** — Changed from `slog.Debug` to `slog.Warn` when overriding user-requested temperature to 1.0 for extended thinking. A silent override of a user-specified parameter should be visible without enabling debug logging.
+
 ## [0.1.22] - 2026-03-18
 
 ### Added

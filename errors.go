@@ -171,12 +171,12 @@ func IsContextLength(err error) bool {
 }
 
 // isContextLengthMessage checks if a 400 error body indicates context length exceeded.
+// Patterns are chosen to avoid false positives with rate-limit messages (e.g. "token limit
+// temporarily reached") and ambiguous phrases (e.g. "too many tokens" in a rate-limit context).
 func isContextLengthMessage(body string) bool {
 	lower := strings.ToLower(body)
 	return strings.Contains(lower, "context length") ||
 		strings.Contains(lower, "context_length") ||
-		strings.Contains(lower, "token limit") ||
-		strings.Contains(lower, "too many tokens") ||
 		strings.Contains(lower, "maximum context") ||
 		strings.Contains(lower, "prompt is too long") ||
 		strings.Contains(lower, "input too long") ||

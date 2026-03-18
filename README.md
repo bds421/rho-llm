@@ -67,10 +67,13 @@ cfg := llm.Config{
 ```
 
 #### Custom OpenAI-compatible endpoint
+
+Unknown providers (not in the presets list) **must** set `BaseURL`. Without it, `NewClient` returns an error to prevent typos from silently defaulting to an incorrect endpoint.
+
 ```go
 cfg := llm.Config{
     Provider:   "custom",
-    BaseURL:    "http://my-proxy:8080/v1",
+    BaseURL:    "http://my-proxy:8080/v1", // required for unknown providers
     APIKey:     "my-key",
 }
 ```
@@ -203,7 +206,7 @@ req := llm.Request{
 }
 ```
 
-**Note:** Anthropic's API requires `temperature = 1.0` when extended thinking is enabled. The adapter enforces this automatically. A debug-level log is emitted when a temperature override occurs.
+**Note:** Anthropic's API requires `temperature = 1.0` when extended thinking is enabled. The adapter enforces this automatically. A warning-level log is emitted when a temperature override occurs.
 
 If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
 
@@ -372,7 +375,14 @@ if err != nil {
 Estimate cost from token counts using registry pricing data:
 
 ```go
-cost := llm.EstimateCost("claude-sonnet-4-6", resp.InputTokens, resp.OutputTokens)
+cost := llm.EstimateCost(llm.CostInput{
+    Model:             "claude-sonnet-4-6",
+    InputTokens:       resp.InputTokens,
+    OutputTokens:      resp.OutputTokens,
+    ThinkingTokens:    resp.ThinkingTokens,
+    CacheCreateTokens: resp.CacheCreationTokens,
+    CacheReadTokens:   resp.CacheReadTokens,
+})
 fmt.Printf("Cost: $%.6f\n", cost)
 
 // Access pricing data directly
@@ -423,7 +433,7 @@ delay = p.Delay(attempt)
 | Model | string | "claude-sonnet-4-6" | Model identifier |
 | APIKey | string | "" | API key (empty OK for local providers) |
 | MaxTokens | int | 8192 | Max output tokens |
-| Temperature | float64 | 1.0 | Sampling temperature |
+| Temperature | *float64 | nil | Sampling temperature (nil = provider default, omitted from wire) |
 | ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingLow/ThinkingMedium/ThinkingHigh |
 | Timeout | Duration | 120s | HTTP timeout |
 | BaseURL | string | "" | Override provider endpoint |
@@ -530,8 +540,8 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 ### Cost and metadata
 
 ```go
-// Estimate cost from token counts
-cost := llm.EstimateCost("claude-sonnet-4-6", inputTokens, outputTokens)
+// Estimate cost from token counts (cache-aware)
+cost := llm.EstimateCost(llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: inputTokens, OutputTokens: outputTokens})
 
 // Query per-model metadata (context window, pricing, thinking support)
 info, ok := llm.GetModelInfo("grok-4.20-beta")

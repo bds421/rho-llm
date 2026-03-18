@@ -89,7 +89,10 @@ func (p RetryPolicy) Delay(attempt int) time.Duration {
 		}
 	}
 
-	// Ensure we don't exceed maxDelay after jitter
+	// Clamp to [BaseDelay, MaxDelay] after jitter. The floor clamp introduces a
+	// slight upward bias (negative-jitter results are pushed to BaseDelay instead
+	// of going below it). This is intentional — slightly longer average delays
+	// are safer than accidentally zero-delaying a retry.
 	if delay > p.MaxDelay {
 		delay = p.MaxDelay
 	}

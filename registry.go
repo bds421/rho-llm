@@ -8,6 +8,8 @@ type ModelInfo struct {
 	ContextWindow    int     // Max input tokens (0 = unknown)
 	InputPricePer1M  float64 // USD per 1M input tokens (0 = unknown/free)
 	OutputPricePer1M float64 // USD per 1M output tokens (0 = unknown/free)
+	CacheWritePricePer1M float64 // Anthropic: price per 1M cache creation tokens (0 = not applicable)
+	CacheReadPricePer1M  float64 // Anthropic/Gemini: price per 1M cached input tokens (0 = not applicable)
 	SupportsThinking bool    // Anthropic extended thinking
 	ThoughtSignature bool    // Gemini 3 models require thought_signature in function call responses
 	Thinking         bool    // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
@@ -20,20 +22,22 @@ type ModelInfo struct {
 var modelRegistry = map[string]ModelInfo{
 	// Anthropic — from platform.claude.com/docs (2026-03-18)
 	// Short aliases (claude-opus-4-5) resolve server-side to dated versions (claude-opus-4-5-20251101)
-	"claude-opus-4-6":            {ID: "claude-opus-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, SupportsThinking: true, Label: "Opus 4.6"},
-	"claude-opus-4-5":            {ID: "claude-opus-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, SupportsThinking: true, Label: "Opus 4.5"},
-	"claude-opus-4-5-20251101":   {ID: "claude-opus-4-5-20251101", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, SupportsThinking: true, Label: "Opus 4.5 (Nov)"},
-	"claude-opus-4-1":            {ID: "claude-opus-4-1", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, SupportsThinking: true, Label: "Opus 4.1"},
-	"claude-opus-4-1-20250805":   {ID: "claude-opus-4-1-20250805", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, SupportsThinking: true, Label: "Opus 4.1 (Aug)"},
-	"claude-opus-4-0":            {ID: "claude-opus-4-0", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, SupportsThinking: true, Label: "Opus 4.0"},
-	"claude-opus-4-20250514":     {ID: "claude-opus-4-20250514", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, SupportsThinking: true, Label: "Opus 4.0 (May)"},
-	"claude-sonnet-4-6":          {ID: "claude-sonnet-4-6", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 1000000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, SupportsThinking: true, Label: "Sonnet 4.6"},
-	"claude-sonnet-4-5":          {ID: "claude-sonnet-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, SupportsThinking: true, Label: "Sonnet 4.5"},
-	"claude-sonnet-4-5-20250929": {ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, SupportsThinking: true, Label: "Sonnet 4.5 (Sep)"},
-	"claude-sonnet-4-0":          {ID: "claude-sonnet-4-0", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, SupportsThinking: true, Label: "Sonnet 4.0"},
-	"claude-sonnet-4-20250514":   {ID: "claude-sonnet-4-20250514", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, SupportsThinking: true, Label: "Sonnet 4.0 (May)"},
-	"claude-haiku-4-5-20251001":  {ID: "claude-haiku-4-5-20251001", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, SupportsThinking: true, Label: "Haiku 4.5"},
-	"claude-3-haiku-20240307":    {ID: "claude-3-haiku-20240307", Provider: "anthropic", MaxTokens: 4096, ContextWindow: 200000, InputPricePer1M: 0.25, OutputPricePer1M: 1.25, SupportsThinking: false, Label: "Haiku 3 (legacy)"},
+	// Anthropic — from platform.claude.com/docs (2026-03-18)
+	// Cache pricing: write = 1.25× input, read = 0.1× input (per Anthropic docs)
+	"claude-opus-4-6":            {ID: "claude-opus-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.6"},
+	"claude-opus-4-5":            {ID: "claude-opus-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5"},
+	"claude-opus-4-5-20251101":   {ID: "claude-opus-4-5-20251101", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5 (Nov)"},
+	"claude-opus-4-1":            {ID: "claude-opus-4-1", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, CacheWritePricePer1M: 18.75, CacheReadPricePer1M: 1.50, SupportsThinking: true, Label: "Opus 4.1"},
+	"claude-opus-4-1-20250805":   {ID: "claude-opus-4-1-20250805", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, CacheWritePricePer1M: 18.75, CacheReadPricePer1M: 1.50, SupportsThinking: true, Label: "Opus 4.1 (Aug)"},
+	"claude-opus-4-0":            {ID: "claude-opus-4-0", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, CacheWritePricePer1M: 18.75, CacheReadPricePer1M: 1.50, SupportsThinking: true, Label: "Opus 4.0"},
+	"claude-opus-4-20250514":     {ID: "claude-opus-4-20250514", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, CacheWritePricePer1M: 18.75, CacheReadPricePer1M: 1.50, SupportsThinking: true, Label: "Opus 4.0 (May)"},
+	"claude-sonnet-4-6":          {ID: "claude-sonnet-4-6", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 1000000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.6"},
+	"claude-sonnet-4-5":          {ID: "claude-sonnet-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.5"},
+	"claude-sonnet-4-5-20250929": {ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.5 (Sep)"},
+	"claude-sonnet-4-0":          {ID: "claude-sonnet-4-0", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.0"},
+	"claude-sonnet-4-20250514":   {ID: "claude-sonnet-4-20250514", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.0 (May)"},
+	"claude-haiku-4-5-20251001":  {ID: "claude-haiku-4-5-20251001", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Haiku 4.5"},
+	"claude-3-haiku-20240307":    {ID: "claude-3-haiku-20240307", Provider: "anthropic", MaxTokens: 4096, ContextWindow: 200000, InputPricePer1M: 0.25, OutputPricePer1M: 1.25, CacheWritePricePer1M: 0.3125, CacheReadPricePer1M: 0.025, SupportsThinking: false, Label: "Haiku 3 (legacy)"},
 
 	// xAI / Grok — from docs.x.ai/developers/models (2026-03-18)
 	"grok-4.20-beta":                      {ID: "grok-4.20-beta", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 Beta"},
@@ -340,20 +344,49 @@ func ProviderForModel(model string) string {
 	return ""
 }
 
+// CostInput holds all token counts needed for accurate cost estimation.
+type CostInput struct {
+	Model             string
+	InputTokens       int
+	OutputTokens      int
+	ThinkingTokens    int // Gemini: separate from output; Anthropic: 0 (bundled in OutputTokens)
+	CacheCreateTokens int // Anthropic: tokens written to cache
+	CacheReadTokens   int // Anthropic/Gemini: tokens read from cache
+}
+
 // EstimateCost returns the estimated cost in USD for a request/response.
+// Accepts a CostInput with all token types for accurate cache-aware pricing.
 // Returns 0 if the model is not in the registry or has no pricing data.
-func EstimateCost(model string, inputTokens, outputTokens int) float64 {
-	info, ok := modelRegistry[model]
+func EstimateCost(input CostInput) float64 {
+	info, ok := modelRegistry[input.Model]
 	if !ok {
 		return 0
 	}
-	if inputTokens < 0 {
-		inputTokens = 0
+
+	// Clamp negatives to 0 (sentinels like TokensNotReported = -1)
+	clamp := func(n int) int {
+		if n < 0 {
+			return 0
+		}
+		return n
 	}
-	if outputTokens < 0 {
-		outputTokens = 0
+
+	inputTok := clamp(input.InputTokens)
+	outputTok := clamp(input.OutputTokens)
+	thinkingTok := clamp(input.ThinkingTokens)
+	cacheCreateTok := clamp(input.CacheCreateTokens)
+	cacheReadTok := clamp(input.CacheReadTokens)
+
+	inputCost := float64(inputTok) * info.InputPricePer1M / 1_000_000
+	outputCost := float64(outputTok+thinkingTok) * info.OutputPricePer1M / 1_000_000
+
+	var cacheCost float64
+	if info.CacheWritePricePer1M > 0 {
+		cacheCost += float64(cacheCreateTok) * info.CacheWritePricePer1M / 1_000_000
 	}
-	inputCost := float64(inputTokens) * info.InputPricePer1M / 1_000_000
-	outputCost := float64(outputTokens) * info.OutputPricePer1M / 1_000_000
-	return inputCost + outputCost
+	if info.CacheReadPricePer1M > 0 {
+		cacheCost += float64(cacheReadTok) * info.CacheReadPricePer1M / 1_000_000
+	}
+
+	return inputCost + outputCost + cacheCost
 }

@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of March 2026 (v0.1.22).
+> **Status:** Reflects the actual implementation as of March 2026 (v0.2.1).
 
 ---
 
@@ -201,7 +201,7 @@ type ProviderPreset struct {
 }
 ```
 
-`Config.BaseURL` and `Config.AuthHeader` always take precedence, enabling proxy routing and custom deployments. Any unknown provider with a `BaseURL` is treated as OpenAI-compatible.
+`Config.BaseURL` and `Config.AuthHeader` always take precedence, enabling proxy routing and custom deployments. Unknown providers (not in presets) **must** set `BaseURL` — without it, `NewClient` returns an error to prevent typos from silently defaulting to an incorrect endpoint.
 
 ---
 
@@ -297,6 +297,8 @@ Stream():
 **Pre-data vs mid-stream retry:** A stream that fails on the initial HTTP connection (429/503 before any SSE events) is functionally identical to a failed `Complete` — no data has reached the caller, so retry with rotation is safe. Once any event has been yielded via `for-range`, retrying would replay content from scratch with no way for the caller to detect duplication, so mid-stream errors pass through immediately.
 
 `rotateClient()` does NOT close the replaced client — doing so would race with in-flight requests still holding a reference. Orphaned clients are garbage collected; their `Close()` method (which drains idle HTTP connections via `CloseIdleConnections()`) is called by the `refCountedClient` mechanism when the last reference is released.
+
+**`Close()` limitation:** The `Close()` methods on all three adapters call `httpClient.CloseIdleConnections()`, which only drains idle connections. Active streaming connections are not forcefully terminated — they are cleaned up by context cancellation or HTTP timeout. This is the correct Go pattern: `http.Client` has no API for forceful connection termination. To cleanly abort an in-progress stream, cancel the context passed to `Stream()`.
 
 **Thundering herd prevention:** When 50 goroutines hit a 429 simultaneously, naive single-checked locking would let all 50 create new clients. `PooledClient` uses double-checked locking with a dedicated `rotateMu` mutex:
 
@@ -404,16 +406,18 @@ DefaultModels    map[string]string        — provider → default model ID
 `ModelInfo` fields:
 ```go
 type ModelInfo struct {
-    ID, Provider     string
-    MaxTokens        int     // Model output limit (0 = use config)
-    ContextWindow    int     // Max input tokens
-    InputPricePer1M  float64 // USD pricing
-    OutputPricePer1M float64
-    SupportsThinking bool    // API-controlled thinking budgets (Anthropic)
-    ThoughtSignature bool    // Gemini 3: must echo thought_signature in tool results
-    Thinking         bool    // Intrinsic reasoning models (DeepSeek, Grok)
-    NoToolSupport    bool    // Model lacks function calling capabilities
-    Label            string  // Short display name
+    ID, Provider         string
+    MaxTokens            int     // Model output limit (0 = use config)
+    ContextWindow        int     // Max input tokens
+    InputPricePer1M      float64 // USD pricing
+    OutputPricePer1M     float64
+    CacheWritePricePer1M float64 // Anthropic: per 1M cache creation tokens
+    CacheReadPricePer1M  float64 // Anthropic/Gemini: per 1M cached input tokens
+    SupportsThinking     bool    // API-controlled thinking budgets (Anthropic)
+    ThoughtSignature     bool    // Gemini 3: must echo thought_signature in tool results
+    Thinking             bool    // Intrinsic reasoning models (DeepSeek, Grok)
+    NoToolSupport        bool    // Model lacks function calling capabilities
+    Label                string  // Short display name
 }
 ```
 
@@ -435,7 +439,7 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 | xAI | grok-4-1-fast-{reasoning,non-reasoning}, grok-4-fast-{reasoning,non-reasoning}, grok-code-fast-1, grok-3, grok-3-mini |
 | Gemini | gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
 
-`EstimateCost(model, inputTokens, outputTokens)` returns a USD float from registry pricing. Returns `0` if the model is unknown.
+`EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0.
 
 ---
 
@@ -520,7 +524,7 @@ type Config struct {
     Model            string         // Model ID or alias
     APIKey           string         // API key (empty OK for no-auth providers)
     MaxTokens        int            // Max output tokens (default: 8192)
-    Temperature      float64        // Sampling temperature (default: 1.0)
+    Temperature      *float64       // Sampling temperature (nil = omit from wire, provider default)
     ThinkingLevel    ThinkingLevel  // ThinkingLow | ThinkingMedium | ThinkingHigh (zero = none)
     Timeout          time.Duration  // HTTP timeout (default: 120s)
     BaseURL          string         // Override provider endpoint
@@ -544,7 +548,7 @@ type Config struct {
 Provider:         "anthropic"
 Model:            "claude-sonnet-4-6"
 MaxTokens:        8192
-Temperature:      1.0
+Temperature:      nil (omitted from wire)
 ThinkingLevel:    "" (ThinkingNone)
 Timeout:          120s
 AuthHeader:       "Bearer"

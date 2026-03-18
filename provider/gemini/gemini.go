@@ -217,7 +217,7 @@ type geminiFunctionResponse struct {
 }
 
 type geminiGenerationConfig struct {
-	Temperature     float64  `json:"temperature"`
+	Temperature     *float64 `json:"temperature,omitempty"`
 	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
 	StopSequences   []string `json:"stopSequences,omitempty"`
 }
@@ -254,7 +254,7 @@ type geminiResponse struct {
 func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	apiReq := geminiRequest{
 		GenerationConfig: &geminiGenerationConfig{
-			Temperature:     req.Temperature,
+			Temperature:     req.Temperature, // nil = omit from wire (provider default)
 			MaxOutputTokens: req.MaxTokens,
 		},
 		CachedContent: req.CachedContent,
@@ -484,6 +484,11 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					}
 				}
 				if part.FunctionCall != nil {
+					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+					if len(argsJSON) > llm.MaxToolInputBytes {
+						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+						return
+					}
 					tc := &llm.ToolCall{
 						ID:    makeToolCallID(callIndex, part.FunctionCall.Name),
 						Name:  part.FunctionCall.Name,

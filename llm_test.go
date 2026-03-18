@@ -25,6 +25,9 @@ import (
 // TestPrompt is a simple prompt that all models should handle.
 const TestPrompt = "Reply with exactly one word: Hello"
 
+// floatPtr is a helper to create *float64 for Temperature fields.
+func floatPtr(v float64) *float64 { return &v }
+
 // envKey reads an API key from env, supporting both singular and plural forms.
 // Checks KEY first, then KEYS (returns first comma-separated value).
 func envKey(singular, plural string) string {
@@ -632,30 +635,29 @@ func TestBackoffNegativeAttempt(t *testing.T) {
 // TestEstimateCost verifies cost calculation for known models.
 func TestEstimateCost(t *testing.T) {
 	tests := []struct {
-		model        string
-		inputTokens  int
-		outputTokens int
-		wantMin      float64
-		wantMax      float64
+		name    string
+		input   llm.CostInput
+		wantMin float64
+		wantMax float64
 	}{
 		// claude-sonnet-4-6: $3/1M input, $15/1M output
 		// 1000 input: 3 * 1000/1M = 0.003, 500 output: 15 * 500/1M = 0.0075
-		{"claude-sonnet-4-6", 1000, 500, 0.0104, 0.0106},
+		{"sonnet basic", llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: 1000, OutputTokens: 500}, 0.0104, 0.0106},
 		// gemini-2.5-flash-lite: free
-		{"gemini-2.5-flash-lite", 10000, 5000, 0, 0},
+		{"flash-lite free", llm.CostInput{Model: "gemini-2.5-flash-lite", InputTokens: 10000, OutputTokens: 5000}, 0, 0},
 		// unknown model: 0
-		{"unknown-model", 1000, 500, 0, 0},
+		{"unknown", llm.CostInput{Model: "unknown-model", InputTokens: 1000, OutputTokens: 500}, 0, 0},
 		// claude-opus-4-6: $5/1M input, $25/1M output
 		// 10000 input: 0.05, 2000 output: 0.05
-		{"claude-opus-4-6", 10000, 2000, 0.099, 0.101},
+		{"opus basic", llm.CostInput{Model: "claude-opus-4-6", InputTokens: 10000, OutputTokens: 2000}, 0.099, 0.101},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.model, func(t *testing.T) {
-			cost := llm.EstimateCost(tc.model, tc.inputTokens, tc.outputTokens)
+		t.Run(tc.name, func(t *testing.T) {
+			cost := llm.EstimateCost(tc.input)
 			if cost < tc.wantMin || cost > tc.wantMax {
-				t.Errorf("EstimateCost(%s, %d, %d) = %f, want [%f, %f]",
-					tc.model, tc.inputTokens, tc.outputTokens, cost, tc.wantMin, tc.wantMax)
+				t.Errorf("EstimateCost(%+v) = %f, want [%f, %f]",
+					tc.input, cost, tc.wantMin, tc.wantMax)
 			}
 		})
 	}
@@ -909,7 +911,7 @@ func TestAllProviders(t *testing.T) {
 				Model:       tc.model,
 				APIKey:      tc.apiKey,
 				MaxTokens:   100,
-				Temperature: 0.0,
+				Temperature: floatPtr(0.0),
 				Timeout:     30 * time.Second,
 			}
 
@@ -930,7 +932,7 @@ func TestAllProviders(t *testing.T) {
 				Model:       tc.model,
 				Messages:    []llm.Message{llm.NewTextMessage("user", TestPrompt)},
 				MaxTokens:   100,
-				Temperature: 0.0,
+				Temperature: floatPtr(0.0),
 			}
 
 			resp, err := client.Complete(ctx, req)
@@ -966,7 +968,7 @@ func TestAnthropicStreaming(t *testing.T) {
 		Model:       "claude-haiku-4-5-20251001",
 		APIKey:      apiKey,
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 		Timeout:     30 * time.Second,
 	}
 
@@ -982,7 +984,7 @@ func TestAnthropicStreaming(t *testing.T) {
 	req := llm.Request{
 		Messages:    []llm.Message{llm.NewTextMessage("user", "Count from 1 to 5")},
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 	}
 
 	var chunks []string
@@ -1025,7 +1027,7 @@ func TestXAIStreaming(t *testing.T) {
 		Model:       "grok-3-mini",
 		APIKey:      apiKey,
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 		Timeout:     30 * time.Second,
 	}
 
@@ -1041,7 +1043,7 @@ func TestXAIStreaming(t *testing.T) {
 	req := llm.Request{
 		Messages:    []llm.Message{llm.NewTextMessage("user", "Count from 1 to 5")},
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 	}
 
 	var chunks []string
@@ -1080,7 +1082,7 @@ func TestGeminiStreaming(t *testing.T) {
 		Model:       "gemini-2.5-flash-lite",
 		APIKey:      apiKey,
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 		Timeout:     30 * time.Second,
 	}
 
@@ -1096,7 +1098,7 @@ func TestGeminiStreaming(t *testing.T) {
 	req := llm.Request{
 		Messages:    []llm.Message{llm.NewTextMessage("user", "Count from 1 to 5")},
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 	}
 
 	var chunks []string
@@ -1134,7 +1136,7 @@ func TestPooledClientWithMultipleKeys(t *testing.T) {
 		Provider:    "anthropic",
 		Model:       "claude-haiku-4-5-20251001",
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 		Timeout:     30 * time.Second,
 	}
 
@@ -1152,7 +1154,7 @@ func TestPooledClientWithMultipleKeys(t *testing.T) {
 	req := llm.Request{
 		Messages:    []llm.Message{llm.NewTextMessage("user", TestPrompt)},
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 	}
 
 	resp, err := client.Complete(ctx, req)
@@ -2000,7 +2002,7 @@ func TestGetAvailableModelsUnknown(t *testing.T) {
 // TestEstimateCostNegativeTokens verifies negative tokens are clamped to 0.
 func TestEstimateCostNegativeTokens(t *testing.T) {
 	// -1 tokens (sentinel for "not reported") should not produce negative cost
-	cost := llm.EstimateCost("claude-sonnet-4-6", -1, -1)
+	cost := llm.EstimateCost(llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: -1, OutputTokens: -1})
 	if cost < 0 {
 		t.Errorf("EstimateCost with negative tokens = %f, want >= 0", cost)
 	}
@@ -3430,7 +3432,7 @@ func TestNegativeTemperatureRejected(t *testing.T) {
 		Provider:    "ollama",
 		Model:       "llama3",
 		MaxTokens:   100,
-		Temperature: -0.5,
+		Temperature: floatPtr(-0.5),
 	}
 
 	_, err := llm.NewClient(cfg)
@@ -4771,12 +4773,245 @@ func TestReasoningModelMaxTokensWireFormat(t *testing.T) {
 				t.Errorf("max_completion_tokens present=%v, want %v\nwire: %s", hasMaxCompletionTokens, tt.wantMaxCompletionToken, wireStr)
 			}
 
-			// Reasoning models on non-OpenAI/xAI providers should also include temperature
-			if tt.wantMaxTokens {
-				if !strings.Contains(wireStr, `"temperature"`) {
-					t.Errorf("expected temperature in wire request for %s/%s\nwire: %s", tt.provider, tt.model, wireStr)
+			// When temperature is nil (default), it should be omitted from wire.
+			// When explicitly set, non-reasoning models on non-OpenAI/xAI providers should include it.
+		})
+	}
+}
+
+// =============================================================================
+// V0.2.1 TESTS
+// =============================================================================
+
+// TestUnknownProviderRequiresBaseURL verifies that unknown providers without BaseURL fail.
+func TestUnknownProviderRequiresBaseURL(t *testing.T) {
+	// Unknown provider without BaseURL → error
+	cfg := llm.Config{
+		Provider:  "typo-provider",
+		Model:     "some-model",
+		APIKey:    "test-key",
+		MaxTokens: 100,
+	}
+	_, err := llm.NewClient(cfg)
+	if err == nil {
+		t.Fatal("expected error for unknown provider without BaseURL")
+	}
+	if !strings.Contains(err.Error(), "unknown provider") {
+		t.Errorf("error = %q, want mention of 'unknown provider'", err.Error())
+	}
+
+	// Unknown provider WITH BaseURL → succeeds
+	cfg.BaseURL = "http://localhost:9999/v1"
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("unknown provider with BaseURL should succeed: %v", err)
+	}
+	client.Close()
+}
+
+// TestTemperatureNilOmitted verifies that nil temperature is not sent on the wire.
+func TestTemperatureNilOmitted(t *testing.T) {
+	adapters := []struct {
+		provider string
+		model    string
+		checkKey string
+	}{
+		{"openai", "gpt-4.1", `"temperature"`},
+		{"anthropic", "claude-sonnet-4-6", `"temperature"`},
+		{"gemini", "gemini-2.0-flash", `"temperature"`},
+	}
+
+	for _, tt := range adapters {
+		t.Run(tt.provider, func(t *testing.T) {
+			var captured []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				captured = body
+				w.Header().Set("Content-Type", "application/json")
+				switch tt.provider {
+				case "anthropic":
+					_, _ = w.Write([]byte(`{"id":"msg-1","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`))
+				case "gemini":
+					_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}}`))
+				default:
+					_, _ = w.Write([]byte(`{"id":"chatcmpl-1","model":"` + tt.model + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`))
 				}
+			}))
+			defer srv.Close()
+
+			cfg := llm.Config{
+				Provider:  tt.provider,
+				Model:     tt.model,
+				APIKey:    "test-key",
+				BaseURL:   srv.URL,
+				MaxTokens: 100,
+				Timeout:   5 * time.Second,
+				// Temperature is nil (default) — should be omitted
+			}
+			client, err := llm.NewClient(cfg)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer client.Close()
+
+			_, err = client.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			if strings.Contains(string(captured), tt.checkKey) {
+				t.Errorf("nil temperature should be omitted from wire for %s\nwire: %s", tt.provider, string(captured))
 			}
 		})
+	}
+}
+
+// TestTemperatureExplicitZero verifies that *float64(0.0) IS sent on the wire.
+func TestTemperatureExplicitZero(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","model":"gpt-4.1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`))
+	}))
+	defer srv.Close()
+
+	zero := 0.0
+	cfg := llm.Config{
+		Provider:    "openai",
+		Model:       "gpt-4.1",
+		APIKey:      "test-key",
+		BaseURL:     srv.URL,
+		MaxTokens:   100,
+		Temperature: &zero,
+		Timeout:     5 * time.Second,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Complete(context.Background(), llm.Request{
+		Messages:    []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		Temperature: &zero,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if !strings.Contains(string(captured), `"temperature"`) {
+		t.Errorf("explicit zero temperature should be present on wire\nwire: %s", string(captured))
+	}
+}
+
+// TestContextLengthFalsePositives verifies rate-limit-like messages are NOT classified as context length.
+func TestContextLengthFalsePositives(t *testing.T) {
+	falsePositives := []string{
+		"token limit temporarily reached",
+		"per token limit exceeded",
+		"too many tokens in this request batch",
+	}
+
+	for _, msg := range falsePositives {
+		t.Run(msg, func(t *testing.T) {
+			err := llm.NewAPIErrorFromStatus("test", 400, msg)
+			if llm.IsContextLength(err) {
+				t.Errorf("IsContextLength(%q) = true, should be false (false positive)", msg)
+			}
+		})
+	}
+
+	// Also verify true positives still work
+	truePositives := []string{
+		"context length exceeded",
+		"maximum context window exceeded",
+		"prompt is too long",
+		"input too long for model",
+		"request too large",
+		"input token count exceeds the maximum",
+	}
+
+	for _, msg := range truePositives {
+		t.Run("true_"+msg, func(t *testing.T) {
+			err := llm.NewAPIErrorFromStatus("test", 400, msg)
+			if !llm.IsContextLength(err) {
+				t.Errorf("IsContextLength(%q) = false, should be true", msg)
+			}
+		})
+	}
+}
+
+// TestCircuitBreakerCallbackPanic verifies a panicking callback doesn't crash the caller.
+func TestCircuitBreakerCallbackPanic(t *testing.T) {
+	cb := llm.NewCircuitBreaker(1, time.Second,
+		llm.WithOnStateChange(func(from, to llm.CircuitState) {
+			panic("boom from callback")
+		}),
+	)
+
+	// This should NOT panic — the library recovers
+	cb.RecordFailure() // trips threshold=1, fires callback
+
+	// Circuit should still be in the expected state despite panic
+	if cb.State() != llm.CircuitOpen {
+		t.Errorf("State() = %v, want CircuitOpen", cb.State())
+	}
+}
+
+// TestEstimateCostWithCacheTokens verifies cache pricing is applied correctly.
+func TestEstimateCostWithCacheTokens(t *testing.T) {
+	// claude-sonnet-4-6: input=$3/1M, output=$15/1M, cache_write=$3.75/1M, cache_read=$0.30/1M
+	input := llm.CostInput{
+		Model:             "claude-sonnet-4-6",
+		InputTokens:       1000,
+		OutputTokens:      500,
+		CacheCreateTokens: 10000,
+		CacheReadTokens:   5000,
+	}
+	cost := llm.EstimateCost(input)
+
+	// input: 1000 * 3 / 1M = 0.003
+	// output: 500 * 15 / 1M = 0.0075
+	// cache_write: 10000 * 3.75 / 1M = 0.0375
+	// cache_read: 5000 * 0.30 / 1M = 0.0015
+	// total: 0.003 + 0.0075 + 0.0375 + 0.0015 = 0.0495
+	expected := 0.0495
+	if cost < expected-0.001 || cost > expected+0.001 {
+		t.Errorf("EstimateCost with cache tokens = %f, want ~%f", cost, expected)
+	}
+
+	// Verify zero cache tokens don't affect cost
+	noCacheInput := llm.CostInput{
+		Model:        "claude-sonnet-4-6",
+		InputTokens:  1000,
+		OutputTokens: 500,
+	}
+	noCacheCost := llm.EstimateCost(noCacheInput)
+	expectedNoCache := 0.0105 // 0.003 + 0.0075
+	if noCacheCost < expectedNoCache-0.001 || noCacheCost > expectedNoCache+0.001 {
+		t.Errorf("EstimateCost without cache = %f, want ~%f", noCacheCost, expectedNoCache)
+	}
+}
+
+// TestEstimateCostWithThinkingTokens verifies thinking tokens are priced at output rate.
+func TestEstimateCostWithThinkingTokens(t *testing.T) {
+	input := llm.CostInput{
+		Model:          "gemini-2.5-flash",
+		InputTokens:    1000,
+		OutputTokens:   500,
+		ThinkingTokens: 2000,
+	}
+	cost := llm.EstimateCost(input)
+
+	// input: 1000 * 0.15 / 1M = 0.00015
+	// output+thinking: (500+2000) * 0.60 / 1M = 0.0015
+	// total: 0.00165
+	expected := 0.00165
+	if cost < expected-0.0005 || cost > expected+0.0005 {
+		t.Errorf("EstimateCost with thinking tokens = %f, want ~%f", cost, expected)
 	}
 }

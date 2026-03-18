@@ -249,7 +249,7 @@ type Request struct {
 	Messages      []Message     `json:"messages"`
 	System        string        `json:"system,omitempty"`
 	MaxTokens     int           `json:"max_tokens"`
-	Temperature   float64       `json:"temperature"`
+	Temperature   *float64      `json:"temperature,omitempty"`
 	Tools         []Tool        `json:"tools,omitempty"`
 	ThinkingLevel  ThinkingLevel `json:"thinking_level,omitempty"`  // low, medium, high (zero value = none)
 	ThinkingBudget int           `json:"thinking_budget,omitempty"` // custom token budget; overrides ThinkingLevel default when > 0

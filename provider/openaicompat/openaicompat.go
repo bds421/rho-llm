@@ -279,8 +279,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		// Omit temperature entirely — these reasoning models only accept default (1).
 	} else {
 		apiReq.MaxTokens = maxTok
-		temp := req.Temperature
-		apiReq.Temperature = &temp
+		apiReq.Temperature = req.Temperature // nil = omit from wire (provider default)
 	}
 
 	// Request usage stats in streaming responses (required since May 2024)
@@ -600,10 +599,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				if tc.Function.Arguments != "" {
 					if inputBuffer.Len()+len(tc.Function.Arguments) > llm.MaxToolInputBytes {
-						if !yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes)) {
-							return
-						}
-						continue
+						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+						return // stop parsing — continuing would corrupt the tool call
 					}
 					inputBuffer.WriteString(tc.Function.Arguments)
 				}

@@ -47,7 +47,14 @@ func (l *LoggingClient) Complete(ctx context.Context, req Request) (*Response, e
 		return resp, err
 	}
 
-	cost := EstimateCost(model, resp.InputTokens, resp.OutputTokens)
+	cost := EstimateCost(CostInput{
+		Model:             model,
+		InputTokens:       resp.InputTokens,
+		OutputTokens:      resp.OutputTokens,
+		ThinkingTokens:    resp.ThinkingTokens,
+		CacheCreateTokens: resp.CacheCreationTokens,
+		CacheReadTokens:   resp.CacheReadTokens,
+	})
 	attrs := []any{
 		"provider", l.inner.Provider(), "model", model,
 		"elapsed", elapsed.Round(time.Millisecond),
@@ -95,7 +102,14 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 					"elapsed", elapsed.Round(time.Millisecond), "chunks", chunks, "error", streamErr)
 				return
 			}
-			cost := EstimateCost(model, lastInputTokens, lastOutputTokens)
+			cost := EstimateCost(CostInput{
+				Model:             model,
+				InputTokens:       lastInputTokens,
+				OutputTokens:      lastOutputTokens,
+				ThinkingTokens:    lastThinkingTokens,
+				CacheCreateTokens: lastCacheCreationTokens,
+				CacheReadTokens:   lastCacheReadTokens,
+			})
 			attrs := []any{
 				"provider", l.inner.Provider(), "model", model,
 				"elapsed", elapsed.Round(time.Millisecond),
