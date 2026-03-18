@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-03-18
+
+### Added
+
+- **Acknowledgements section in README** — Reference to the [pi](https://github.com/badlogic/pi-mono/tree/main/packages/ai) library and explanation that the name rho is a tribute (next Greek letter after pi).
+
 ## [0.1.16] - 2026-03-18
 
 ### Added

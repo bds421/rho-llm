@@ -537,3 +537,7 @@ import _ "github.com/bds421/rho-llm/provider"  // register all provider adapters
 ```
 
 Consumers that only use types (`llm.Client`, `llm.Config`, `llm.Message`, etc.) need no blank import.
+
+## Acknowledgements
+
+The name **rho** is a tribute to [pi](https://github.com/badlogic/pi-mono/tree/main/packages/ai) — rho is the next letter in the Greek alphabet. pi's `ai` package is a great multi-provider LLM library; rho brings the same idea to Go.
