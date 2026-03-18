@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-03-18
+
+### Fixed
+
+- **Ollama reasoning field not parsed** — Ollama (Qwen3) uses `"reasoning"` instead of `"reasoning_content"` for thinking output. The OpenAI-compatible adapter now parses both field names in complete and streaming responses.
+- **Gemini 2.5 thinking tokens starve maxOutputTokens** — Gemini 2.5 models think by default but do not support `thinkingConfig` — the API rejects it. Thinking tokens silently consume the `maxOutputTokens` budget, causing premature `MAX_TOKENS` truncation. The adapter now pads `maxOutputTokens` with a thinking overhead (4096 tokens, capped at model max) for models with intrinsic thinking.
+
+### Changed
+
+- **Gemini 2.5 models marked `Thinking: true`** — `gemini-2.5-pro`, `gemini-2.5-flash`, and `gemini-2.5-flash-lite` now have the `Thinking` flag set in the model registry, reflecting their intrinsic chain-of-thought behavior.
+
 ## [0.1.19] - 2026-03-18
 
 ### Fixed

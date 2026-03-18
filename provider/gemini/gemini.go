@@ -349,6 +349,26 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		}
 	}
 
+	// Gemini 2.5 models think by default but do NOT support thinkingConfig —
+	// the API rejects it. Thinking tokens silently consume maxOutputTokens.
+	// Pad maxOutputTokens so the caller's intended output budget isn't starved.
+	{
+		model := req.Model
+		if model == "" {
+			model = c.config.Model
+		}
+		if info, ok := llm.GetModelInfo(model); ok && info.Thinking {
+			cur := apiReq.GenerationConfig.MaxOutputTokens
+			if cur > 0 {
+				padded := cur + llm.ThinkingBudgetTokens(llm.ThinkingLow, 0)
+				if info.MaxTokens > 0 && padded > info.MaxTokens {
+					padded = info.MaxTokens
+				}
+				apiReq.GenerationConfig.MaxOutputTokens = padded
+			}
+		}
+	}
+
 	// Convert tools
 	if len(req.Tools) > 0 {
 		tool := geminiTool{}

@@ -813,9 +813,20 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 		}
 	}
 
-	// 3. No reasoning
+	// 3. Intrinsic thinking (Gemini 2.5 — API rejects thinkingConfig)
+	gemini25 := []string{
+		"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite",
+	}
+	for _, model := range gemini25 {
+		info, ok := llm.GetModelInfo(model)
+		if !ok || !info.Thinking || info.SupportsThinking {
+			t.Errorf("Model %s should have intrinsic reasoning (Thinking=true, SupportsThinking=false)", model)
+		}
+	}
+
+	// 4. No reasoning
 	none := []string{
-		"gemini-2.5-flash",
+		"gemini-2.0-flash",
 	}
 	for _, model := range none {
 		info, ok := llm.GetModelInfo(model)

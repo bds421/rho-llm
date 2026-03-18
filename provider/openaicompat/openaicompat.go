@@ -198,7 +198,8 @@ type openaiStreamOptions struct {
 type openaiMessage struct {
 	Role             string           `json:"role"`
 	Content          interface{}      `json:"content"`                     // string or array
-	ReasoningContent string           `json:"reasoning_content,omitempty"` // thinking/reasoning output
+	ReasoningContent string           `json:"reasoning_content,omitempty"` // thinking/reasoning output (OpenAI, DeepSeek, etc.)
+	Reasoning        string           `json:"reasoning,omitempty"`         // thinking/reasoning output (Ollama)
 	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 }
@@ -435,9 +436,14 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 			resp.Content = content
 		}
 
-		// Extract reasoning/thinking content
-		if choice.Message.ReasoningContent != "" {
-			resp.Thinking = choice.Message.ReasoningContent
+		// Extract reasoning/thinking content.
+		// Most providers use "reasoning_content"; Ollama uses "reasoning".
+		reasoning := choice.Message.ReasoningContent
+		if reasoning == "" {
+			reasoning = choice.Message.Reasoning
+		}
+		if reasoning != "" {
+			resp.Thinking = reasoning
 		}
 
 		// Extract tool calls
@@ -494,7 +500,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				Index int `json:"index"`
 				Delta struct {
 					Content          string           `json:"content"`
-					ReasoningContent string           `json:"reasoning_content"`
+					ReasoningContent string           `json:"reasoning_content"` // OpenAI, DeepSeek, etc.
+					Reasoning        string           `json:"reasoning"`         // Ollama
 					ToolCalls        []openaiToolCall `json:"tool_calls"`
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
@@ -522,9 +529,14 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
 
-			// Reasoning/thinking delta
-			if choice.Delta.ReasoningContent != "" {
-				if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: choice.Delta.ReasoningContent}, nil) {
+			// Reasoning/thinking delta.
+			// Most providers use "reasoning_content"; Ollama uses "reasoning".
+			reasoningDelta := choice.Delta.ReasoningContent
+			if reasoningDelta == "" {
+				reasoningDelta = choice.Delta.Reasoning
+			}
+			if reasoningDelta != "" {
+				if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: reasoningDelta}, nil) {
 					return
 				}
 			}

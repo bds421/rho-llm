@@ -252,3 +252,65 @@ func TestParseStreamThinkingParts(t *testing.T) {
 		t.Errorf("event[2].Type = %v, want EventDone", events[2].Type)
 	}
 }
+
+// TestBuildRequestMaxOutputTokensPaddedForThinkingModel verifies that the
+// Gemini adapter pads maxOutputTokens for models that think by default
+// (e.g. gemini-2.5-flash). Gemini 2.5 models do NOT support thinkingConfig —
+// thinking tokens silently consume maxOutputTokens. The adapter must increase
+// it so the caller's intended output budget isn't starved.
+func TestBuildRequestMaxOutputTokensPaddedForThinkingModel(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "gemini-2.5-flash"},
+		providerName: "gemini",
+	}
+
+	req := llm.Request{
+		MaxTokens: 50,
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "What is 2+2?"}}},
+		},
+	}
+
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	// With MaxTokens: 50, thinking would consume the budget leaving ~5 output
+	// tokens. The adapter should pad maxOutputTokens with a thinking overhead.
+	if apiReq.GenerationConfig.MaxOutputTokens <= 50 {
+		t.Errorf("MaxOutputTokens = %d, want > 50 (should be padded for thinking model)",
+			apiReq.GenerationConfig.MaxOutputTokens)
+	}
+
+	// thinkingConfig should NOT be set — Gemini 2.5 API rejects it
+	if apiReq.ThinkingConfig != nil {
+		t.Error("ThinkingConfig should be nil for gemini-2.5 (API rejects it)")
+	}
+}
+
+// TestBuildRequestMaxOutputTokensNotPaddedForNonThinkingModel verifies that
+// models that do NOT think by default keep maxOutputTokens as-is.
+func TestBuildRequestMaxOutputTokensNotPaddedForNonThinkingModel(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "gemini-2.0-flash"},
+		providerName: "gemini",
+	}
+
+	req := llm.Request{
+		MaxTokens: 50,
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "hi"}}},
+		},
+	}
+
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	if apiReq.GenerationConfig.MaxOutputTokens != 50 {
+		t.Errorf("MaxOutputTokens = %d, want 50 (should not pad for non-thinking model)",
+			apiReq.GenerationConfig.MaxOutputTokens)
+	}
+}

@@ -54,9 +54,9 @@ var modelRegistry = map[string]ModelInfo{
 	"gemini-3.1-flash-lite-preview": {ID: "gemini-3.1-flash-lite-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, ThoughtSignature: true, Label: "Gemini 3.1 Flash Lite"},
 	"gemini-3-pro-preview":          {ID: "gemini-3-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, ThoughtSignature: true, Label: "Gemini 3 Pro"},
 	"gemini-3-flash-preview":        {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, ThoughtSignature: true, Label: "Gemini 3 Flash"},
-	"gemini-2.5-pro":                {ID: "gemini-2.5-pro", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Label: "Gemini 2.5 Pro"},
-	"gemini-2.5-flash":              {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, Label: "Gemini 2.5 Flash"},
-	"gemini-2.5-flash-lite":         {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.0, OutputPricePer1M: 0.0, Label: "Flash Lite"},
+	"gemini-2.5-pro":                {ID: "gemini-2.5-pro", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "Gemini 2.5 Pro"},
+	"gemini-2.5-flash":              {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, Thinking: true, Label: "Gemini 2.5 Flash"},
+	"gemini-2.5-flash-lite":         {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.0, OutputPricePer1M: 0.0, Thinking: true, Label: "Flash Lite"},
 	"gemini-2.0-flash":              {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
 
 	// OpenAI — GPT-5.x family (2026-03-05)
