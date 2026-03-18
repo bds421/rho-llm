@@ -138,7 +138,7 @@ req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, "location no
 
 Many modern models support reasoning (chain-of-thought) capabilities where they expose their internal thought processes before outputting the final answer. 
 
-You can check if a given model natively supports extended thinking by checking the registry. ThinkingLevel is only supported by the `anthropic` and `gemini` providers — the OpenAI-compatible adapter returns an error if ThinkingLevel is set.
+You can check if a given model natively supports extended thinking by checking the registry. ThinkingLevel is only supported by the `anthropic` and `gemini` providers — the OpenAI-compatible adapter returns an error if ThinkingLevel is set. However, all three adapters **parse** thinking content from responses: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, and OpenAI-compat via the `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.).
 
 ```go
 info, ok := llm.GetModelInfo("claude-opus-4-6")

@@ -196,10 +196,11 @@ type openaiStreamOptions struct {
 }
 
 type openaiMessage struct {
-	Role       string           `json:"role"`
-	Content    interface{}      `json:"content"` // string or array
-	ToolCalls  []openaiToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
+	Role             string           `json:"role"`
+	Content          interface{}      `json:"content"`                     // string or array
+	ReasoningContent string           `json:"reasoning_content,omitempty"` // thinking/reasoning output
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
 }
 
 type openaiTool struct {
@@ -434,6 +435,11 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 			resp.Content = content
 		}
 
+		// Extract reasoning/thinking content
+		if choice.Message.ReasoningContent != "" {
+			resp.Thinking = choice.Message.ReasoningContent
+		}
+
 		// Extract tool calls
 		for _, tc := range choice.Message.ToolCalls {
 			var input any
@@ -487,8 +493,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			Choices []struct {
 				Index int `json:"index"`
 				Delta struct {
-					Content   string           `json:"content"`
-					ToolCalls []openaiToolCall `json:"tool_calls"`
+					Content          string           `json:"content"`
+					ReasoningContent string           `json:"reasoning_content"`
+					ToolCalls        []openaiToolCall `json:"tool_calls"`
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
@@ -514,6 +521,13 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
+
+			// Reasoning/thinking delta
+			if choice.Delta.ReasoningContent != "" {
+				if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: choice.Delta.ReasoningContent}, nil) {
+					return
+				}
+			}
 
 			// Content delta
 			if choice.Delta.Content != "" {

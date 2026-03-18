@@ -194,6 +194,7 @@ type geminiContent struct {
 
 type geminiPart struct {
 	Text             string                  `json:"text,omitempty"`
+	Thought          bool                    `json:"thought,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"` // Gemini 3: part-level thought signature
@@ -238,6 +239,7 @@ type geminiResponse struct {
 		PromptTokenCount        int `json:"promptTokenCount"`
 		CandidatesTokenCount    int `json:"candidatesTokenCount"`
 		TotalTokenCount         int `json:"totalTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
 		CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 	} `json:"usageMetadata"`
 	ModelVersion string `json:"modelVersion"`
@@ -383,7 +385,11 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 		callIndex := 0
 		for _, part := range candidate.Content.Parts {
 			if part.Text != "" {
-				resp.Content += part.Text
+				if part.Thought {
+					resp.Thinking += part.Text
+				} else {
+					resp.Content += part.Text
+				}
 			}
 			if part.FunctionCall != nil {
 				tc := llm.ToolCall{
@@ -432,8 +438,14 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 			for _, part := range candidate.Content.Parts {
 				if part.Text != "" {
-					if !yield(llm.StreamEvent{Type: llm.EventContent, Text: part.Text}, nil) {
-						return
+					if part.Thought {
+						if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: part.Text}, nil) {
+							return
+						}
+					} else {
+						if !yield(llm.StreamEvent{Type: llm.EventContent, Text: part.Text}, nil) {
+							return
+						}
 					}
 				}
 				if part.FunctionCall != nil {

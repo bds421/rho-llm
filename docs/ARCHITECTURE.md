@@ -418,7 +418,7 @@ type ModelInfo struct {
 Different LLM providers implement chain-of-thought reasoning in fundamentally different ways. The registry abstracts these semantic capabilities:
 
 1. **API-Controlled Budgets (`SupportsThinking: true`)**
-   Models like Anthropic's Claude 4 series require the client to explicitly allocate a "thinking budget" in the API request payload. The config `ThinkingLevel` is mapped into this budget. Only the `anthropic` and `gemini` adapters support this — the OpenAI-compatible adapter returns an explicit error if `ThinkingLevel` is set, since the OpenAI chat completions API has no equivalent parameter.
+   Models like Anthropic's Claude 4 series require the client to explicitly allocate a "thinking budget" in the API request payload. The config `ThinkingLevel` is mapped into this budget. Only the `anthropic` and `gemini` adapters support *requesting* thinking — the OpenAI-compatible adapter returns an explicit error if `ThinkingLevel` is set, since the OpenAI chat completions API has no equivalent parameter. However, all three adapters **parse** thinking from responses: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, and OpenAI-compat via the `reasoning_content` field.
 
 2. **Intrinsic Reasoning (`Thinking: true`)**
    Models like DeepSeek-R1 and Grok 4 Reasoning emit chain-of-thought intrinsically inside their standard output streams. They do not require specific API flags to enable this, but the registry flags them so your application knows they will consume output tokens for reasoning before answering.
@@ -490,6 +490,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Auth: `x-goog-api-key` header (moved from URL query parameter in v0.1.9 to prevent key leakage)
 - Streaming: SSE with JSON chunks
 - `ThoughtSignature`: when a model has `ThoughtSignature: true` in the registry, function call responses include a `thought_signature` field that must be preserved and echoed in subsequent `tool_result` parts
+- Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is parsed but not yet exposed separately (OutputTokens maps to `candidatesTokenCount` which excludes thinking tokens).
 - System prompt: mapped to `systemInstruction.parts[0].text`
 - Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`.
 
@@ -502,6 +503,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
   - OpenAI sends `finish_reason` and `usage` in **separate chunks**: the parser accumulates state across chunks and emits `EventDone` with complete data after `[DONE]`
   - Tool calls are flushed before `EventDone` even if `finish_reason` is missing (handles network drops and spec-violating servers like Ollama)
 - Tool use: OpenAI function-calling format, translated to/from the shared `ToolCall` types. Multiple tool results in a single Anthropic-style message are expanded to separate `role: "tool"` messages as OpenAI requires.
+- Thinking: `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.) is parsed into `resp.Thinking` / `EventThinking`. Requesting thinking via `ThinkingLevel` is still rejected — the adapter can *parse* thinking from models that think by default, but cannot *request* it.
 - Works for: OpenAI, xAI/Grok, Groq, Cerebras, Mistral, OpenRouter, Ollama, vLLM, LM Studio, any custom proxy
 
 ---

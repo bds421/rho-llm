@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-03-18
+
+### Fixed
+
+- **Gemini thinking content was lost or mixed into Content** — Gemini models that think by default (e.g. `gemini-2.5-flash`) return `thought: true` parts alongside content parts. The adapter now routes thought parts to `resp.Thinking` (non-streaming) and emits `EventThinking` events (streaming) instead of mixing them into `Content`. Also parses `thoughtsTokenCount` from usage metadata.
+- **OpenAI-compat reasoning models returned empty Content** — Models like Qwen3 (`qwen3:4b`) return `reasoning_content` alongside `content` (which may be null). The adapter now parses `reasoning_content` into `resp.Thinking` (non-streaming) and emits `EventThinking` events (streaming). Null `content` no longer causes empty responses.
+
+### Changed
+
+- **Documentation** — README and ARCHITECTURE.md updated to reflect that all three adapters now parse thinking content from responses (Anthropic via `thinking` blocks, Gemini via `thought: true` parts, OpenAI-compat via `reasoning_content`).
+
 ## [0.1.18] - 2026-03-18
 
 ### Fixed
