@@ -195,9 +195,15 @@ type geminiContent struct {
 type geminiPart struct {
 	Text             string                  `json:"text,omitempty"`
 	Thought          bool                    `json:"thought,omitempty"`
+	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"` // Gemini 3: part-level thought signature
+}
+
+type geminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
 }
 
 type geminiFunctionCall struct {
@@ -299,7 +305,15 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				}
 
 			case llm.ContentImage:
-				return geminiRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
+				if err := llm.ValidateImageSource(part); err != nil {
+					return geminiRequest{}, err
+				}
+				content.Parts = append(content.Parts, geminiPart{
+					InlineData: &geminiInlineData{
+						MimeType: part.Source.MediaType,
+						Data:     part.Source.Data,
+					},
+				})
 
 			case llm.ContentToolUse:
 				gp := geminiPart{

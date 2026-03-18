@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-03-18
+
+### Added
+
+- **Image/vision support for all 3 adapters** — `ContentImage` parts are now fully serialized to the correct wire format for Anthropic (inline `image` blocks with `source`), Gemini (`inlineData` parts), and OpenAI-compatible providers (content array with `image_url` data URIs). Previously all three adapters rejected image content with an error.
+- **`ValidateImageSource()`** — exported validation function checks for nil source, empty data, unsupported media types (`image/jpeg`, `image/png`, `image/gif`, `image/webp` allowed), and unsupported source types (only `base64`). Used by all adapters before serialization.
+- **`NewImageMessage()`** — convenience constructor parallel to `NewTextMessage`, creates a single-image message from role, media type, and base64 data.
+- **Anthropic `cache_control` on image blocks** — image content blocks respect `CacheControl: true` on `ContentPart`, adding `cache_control: {type: "ephemeral"}` to the wire format.
+
 ## [0.1.20] - 2026-03-18
 
 ### Fixed

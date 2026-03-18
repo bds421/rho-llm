@@ -7,6 +7,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
 	"time"
 )
@@ -118,6 +119,50 @@ type ImageSource struct {
 	Type      string `json:"type"`       // base64
 	MediaType string `json:"media_type"` // image/jpeg, image/png, etc.
 	Data      string `json:"data"`       // base64 encoded data
+}
+
+// validImageMediaTypes lists the MIME types accepted for image content.
+var validImageMediaTypes = map[string]bool{
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+// ValidateImageSource checks that a ContentImage part has a valid, non-empty
+// source with a supported media type. Called by adapter buildRequest methods
+// before serializing image content to the wire format.
+func ValidateImageSource(part ContentPart) error {
+	if part.Source == nil {
+		return fmt.Errorf("image source must not be nil")
+	}
+	if part.Source.Data == "" {
+		return fmt.Errorf("image data must not be empty")
+	}
+	if !validImageMediaTypes[part.Source.MediaType] {
+		return fmt.Errorf("unsupported image media type: %s", part.Source.MediaType)
+	}
+	if part.Source.Type != "base64" {
+		return fmt.Errorf("unsupported image source type: %s", part.Source.Type)
+	}
+	return nil
+}
+
+// NewImageMessage creates a single-image message (parallel to NewTextMessage).
+func NewImageMessage(role Role, mediaType, base64Data string) Message {
+	return Message{
+		Role: role,
+		Content: []ContentPart{
+			{
+				Type: ContentImage,
+				Source: &ImageSource{
+					Type:      "base64",
+					MediaType: mediaType,
+					Data:      base64Data,
+				},
+			},
+		},
+	}
 }
 
 // NewTextMessage creates a simple text message.

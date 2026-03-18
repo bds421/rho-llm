@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2837,14 +2838,107 @@ func TestNewPooledClientGetAvailableError(t *testing.T) {
 	}
 }
 
-// TestContentImageErrorAnthropic verifies that sending ContentImage to the
-// Anthropic adapter returns an error rather than silently dropping the content.
-func TestContentImageErrorAnthropic(t *testing.T) {
+// loadTestImage reads a test image from testdata/ and returns its base64 encoding.
+func loadTestImage(t *testing.T, filename string) string {
+	t.Helper()
+	data, err := os.ReadFile("testdata/" + filename)
+	if err != nil {
+		t.Fatalf("failed to read testdata/%s: %v", filename, err)
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// TestContentImageValidation verifies validation across all 3 providers using
+// table-driven tests: nil source, empty data, invalid media type, invalid source type.
+func TestContentImageValidation(t *testing.T) {
+	providers := []struct {
+		name     string
+		provider string
+		model    string
+	}{
+		{"anthropic", "anthropic", "claude-sonnet-4-6"},
+		{"gemini", "gemini", "gemini-2.5-flash"},
+		{"openai", "openai", "gpt-4"},
+	}
+
+	cases := []struct {
+		name    string
+		part    llm.ContentPart
+		wantErr string
+	}{
+		{
+			name:    "nil source",
+			part:    llm.ContentPart{Type: llm.ContentImage, Source: nil},
+			wantErr: "image source must not be nil",
+		},
+		{
+			name:    "empty data",
+			part:    llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: ""}},
+			wantErr: "image data must not be empty",
+		},
+		{
+			name:    "invalid media type",
+			part:    llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "text/plain", Data: "abc"}},
+			wantErr: "unsupported image media type",
+		},
+		{
+			name:    "invalid source type",
+			part:    llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "url", MediaType: "image/png", Data: "abc"}},
+			wantErr: "unsupported image source type",
+		},
+	}
+
+	for _, prov := range providers {
+		for _, tc := range cases {
+			t.Run(prov.name+"/"+tc.name, func(t *testing.T) {
+				cfg := llm.Config{
+					Provider: prov.provider,
+					Model:    prov.model,
+					APIKey:   "test-key",
+					BaseURL:  "http://localhost:1",
+				}
+				client, err := llm.NewClient(cfg)
+				if err != nil {
+					t.Fatalf("NewClient: %v", err)
+				}
+				defer client.Close()
+
+				req := llm.Request{
+					Messages: []llm.Message{{
+						Role:    llm.RoleUser,
+						Content: []llm.ContentPart{tc.part},
+					}},
+				}
+				_, err = client.Complete(context.Background(), req)
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			})
+		}
+	}
+}
+
+// TestContentImageAnthropic verifies the Anthropic wire format for image content.
+func TestContentImageAnthropic(t *testing.T) {
+	imgData := loadTestImage(t, "red.png")
+
+	var captured json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"I see red"}],"model":"claude-sonnet-4-6","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":10}}`)
+	}))
+	defer srv.Close()
+
 	cfg := llm.Config{
 		Provider: "anthropic",
 		Model:    "claude-sonnet-4-6",
 		APIKey:   "test-key",
-		BaseURL:  "http://localhost:1", // won't be reached
+		BaseURL:  srv.URL,
 	}
 	client, err := llm.NewClient(cfg)
 	if err != nil {
@@ -2856,27 +2950,77 @@ func TestContentImageErrorAnthropic(t *testing.T) {
 		Messages: []llm.Message{{
 			Role: llm.RoleUser,
 			Content: []llm.ContentPart{
-				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: imgData}},
 			},
 		}},
 	}
 
-	_, err = client.Complete(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for ContentImage, got nil")
+	resp, err := client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
 	}
-	if !strings.Contains(err.Error(), "image content not yet supported") {
-		t.Errorf("unexpected error: %v", err)
+	if resp.Content != "I see red" {
+		t.Errorf("unexpected content: %s", resp.Content)
+	}
+
+	// Verify wire format
+	var wire struct {
+		Messages []struct {
+			Content []json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(captured, &wire); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	if len(wire.Messages) == 0 || len(wire.Messages[0].Content) == 0 {
+		t.Fatal("no content blocks in wire request")
+	}
+
+	var block struct {
+		Type   string `json:"type"`
+		Source struct {
+			Type      string `json:"type"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(wire.Messages[0].Content[0], &block); err != nil {
+		t.Fatalf("unmarshal content block: %v", err)
+	}
+
+	if block.Type != "image" {
+		t.Errorf("block type = %s, want image", block.Type)
+	}
+	if block.Source.Type != "base64" {
+		t.Errorf("source type = %s, want base64", block.Source.Type)
+	}
+	if block.Source.MediaType != "image/png" {
+		t.Errorf("media_type = %s, want image/png", block.Source.MediaType)
+	}
+	if block.Source.Data != imgData {
+		t.Error("image data mismatch")
 	}
 }
 
-// TestContentImageErrorGemini verifies ContentImage error for gemini adapter.
-func TestContentImageErrorGemini(t *testing.T) {
+// TestContentImageGemini verifies the Gemini wire format for image content.
+func TestContentImageGemini(t *testing.T) {
+	imgData := loadTestImage(t, "red.png")
+
+	var captured json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"I see red"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":10,"totalTokenCount":110}}`)
+	}))
+	defer srv.Close()
+
 	cfg := llm.Config{
 		Provider: "gemini",
 		Model:    "gemini-2.5-flash",
 		APIKey:   "test-key",
-		BaseURL:  "http://localhost:1",
+		BaseURL:  srv.URL,
 	}
 	client, err := llm.NewClient(cfg)
 	if err != nil {
@@ -2888,26 +3032,69 @@ func TestContentImageErrorGemini(t *testing.T) {
 		Messages: []llm.Message{{
 			Role: llm.RoleUser,
 			Content: []llm.ContentPart{
-				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: imgData}},
 			},
 		}},
 	}
 
-	_, err = client.Complete(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for ContentImage, got nil")
+	resp, err := client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
 	}
-	if !strings.Contains(err.Error(), "image content not yet supported") {
-		t.Errorf("unexpected error: %v", err)
+	if resp.Content != "I see red" {
+		t.Errorf("unexpected content: %s", resp.Content)
+	}
+
+	// Verify wire format
+	var wire struct {
+		Contents []struct {
+			Parts []struct {
+				InlineData *struct {
+					MimeType string `json:"mimeType"`
+					Data     string `json:"data"`
+				} `json:"inlineData,omitempty"`
+			} `json:"parts"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(captured, &wire); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	if len(wire.Contents) == 0 || len(wire.Contents[0].Parts) == 0 {
+		t.Fatal("no parts in wire request")
+	}
+
+	part := wire.Contents[0].Parts[0]
+	if part.InlineData == nil {
+		t.Fatal("inlineData is nil")
+	}
+	if part.InlineData.MimeType != "image/png" {
+		t.Errorf("mimeType = %s, want image/png", part.InlineData.MimeType)
+	}
+	if part.InlineData.Data != imgData {
+		t.Error("image data mismatch")
 	}
 }
 
-// TestContentImageErrorOpenAI verifies ContentImage error for openai adapter.
-func TestContentImageErrorOpenAI(t *testing.T) {
+// TestContentImageOpenAI verifies the OpenAI wire format: content switches from
+// string to array when images are present.
+func TestContentImageOpenAI(t *testing.T) {
+	imgData := loadTestImage(t, "blue.jpg")
+
+	var captured json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"chatcmpl-1","object":"chat.completion","model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"I see blue"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`)
+	}))
+	defer srv.Close()
+
 	cfg := llm.Config{
 		Provider: "openai",
 		Model:    "gpt-4",
 		APIKey:   "test-key",
+		BaseURL:  srv.URL,
 	}
 	client, err := llm.NewClient(cfg)
 	if err != nil {
@@ -2919,17 +3106,167 @@ func TestContentImageErrorOpenAI(t *testing.T) {
 		Messages: []llm.Message{{
 			Role: llm.RoleUser,
 			Content: []llm.ContentPart{
-				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/jpeg", Data: imgData}},
 			},
 		}},
 	}
 
-	_, err = client.Complete(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for ContentImage, got nil")
+	resp, err := client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
 	}
-	if !strings.Contains(err.Error(), "image content not yet supported") {
-		t.Errorf("unexpected error: %v", err)
+	if resp.Content != "I see blue" {
+		t.Errorf("unexpected content: %s", resp.Content)
+	}
+
+	// Verify wire format — content must be an array, not a string
+	var wire struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(captured, &wire); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	// Find the user message
+	var userContent json.RawMessage
+	for _, m := range wire.Messages {
+		if m.Role == "user" {
+			userContent = m.Content
+			break
+		}
+	}
+	if userContent == nil {
+		t.Fatal("no user message in wire request")
+	}
+
+	// Content must be an array (not a string)
+	var contentArr []struct {
+		Type     string `json:"type"`
+		ImageURL *struct {
+			URL string `json:"url"`
+		} `json:"image_url,omitempty"`
+	}
+	if err := json.Unmarshal(userContent, &contentArr); err != nil {
+		t.Fatalf("content is not an array: %v", err)
+	}
+
+	found := false
+	for _, item := range contentArr {
+		if item.Type == "image_url" && item.ImageURL != nil {
+			wantPrefix := "data:image/jpeg;base64,"
+			if !strings.HasPrefix(item.ImageURL.URL, wantPrefix) {
+				t.Errorf("image_url prefix = %s..., want %s...", item.ImageURL.URL[:min(len(item.ImageURL.URL), 30)], wantPrefix)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no image_url block found in content array")
+	}
+}
+
+// TestContentImageMixedMessage verifies text + image in one message across all 3 providers.
+func TestContentImageMixedMessage(t *testing.T) {
+	imgData := loadTestImage(t, "red.png")
+
+	providers := []struct {
+		name     string
+		provider string
+		model    string
+		response string
+	}{
+		{
+			"anthropic", "anthropic", "claude-sonnet-4-6",
+			`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"mixed ok"}],"model":"claude-sonnet-4-6","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":5}}`,
+		},
+		{
+			"gemini", "gemini", "gemini-2.5-flash",
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":"mixed ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":5,"totalTokenCount":105}}`,
+		},
+		{
+			"openai", "openai", "gpt-4",
+			`{"id":"chatcmpl-1","object":"chat.completion","model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"mixed ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5}}`,
+		},
+	}
+
+	for _, prov := range providers {
+		t.Run(prov.name, func(t *testing.T) {
+			var captured json.RawMessage
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				captured = body
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, prov.response)
+			}))
+			defer srv.Close()
+
+			cfg := llm.Config{
+				Provider: prov.provider,
+				Model:    prov.model,
+				APIKey:   "test-key",
+				BaseURL:  srv.URL,
+			}
+			client, err := llm.NewClient(cfg)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer client.Close()
+
+			req := llm.Request{
+				Messages: []llm.Message{{
+					Role: llm.RoleUser,
+					Content: []llm.ContentPart{
+						{Type: llm.ContentText, Text: "What is in this image?"},
+						{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: imgData}},
+					},
+				}},
+			}
+
+			resp, err := client.Complete(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if resp.Content != "mixed ok" {
+				t.Errorf("unexpected content: %s", resp.Content)
+			}
+
+			// Verify the wire request was captured (basic sanity)
+			if len(captured) == 0 {
+				t.Fatal("no request captured")
+			}
+		})
+	}
+}
+
+// TestNewImageMessage verifies the NewImageMessage helper function.
+func TestNewImageMessage(t *testing.T) {
+	msg := llm.NewImageMessage(llm.RoleUser, "image/png", "base64data")
+
+	if msg.Role != llm.RoleUser {
+		t.Errorf("role = %s, want user", msg.Role)
+	}
+	if len(msg.Content) != 1 {
+		t.Fatalf("content parts = %d, want 1", len(msg.Content))
+	}
+
+	part := msg.Content[0]
+	if part.Type != llm.ContentImage {
+		t.Errorf("type = %s, want image", part.Type)
+	}
+	if part.Source == nil {
+		t.Fatal("source is nil")
+	}
+	if part.Source.Type != "base64" {
+		t.Errorf("source type = %s, want base64", part.Source.Type)
+	}
+	if part.Source.MediaType != "image/png" {
+		t.Errorf("media type = %s, want image/png", part.Source.MediaType)
+	}
+	if part.Source.Data != "base64data" {
+		t.Errorf("data = %s, want base64data", part.Source.Data)
 	}
 }
 

@@ -310,7 +310,21 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					apiMsg.Content = append(apiMsg.Content, block)
 				}
 			case llm.ContentImage:
-				return anthropicRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
+				if err := llm.ValidateImageSource(part); err != nil {
+					return anthropicRequest{}, err
+				}
+				block := map[string]interface{}{
+					"type": "image",
+					"source": map[string]interface{}{
+						"type":       part.Source.Type,
+						"media_type": part.Source.MediaType,
+						"data":       part.Source.Data,
+					},
+				}
+				if part.CacheControl {
+					block["cache_control"] = map[string]string{"type": "ephemeral"}
+				}
+				apiMsg.Content = append(apiMsg.Content, block)
 			case llm.ContentToolUse:
 				apiMsg.Content = append(apiMsg.Content, map[string]interface{}{
 					"type":  "tool_use",

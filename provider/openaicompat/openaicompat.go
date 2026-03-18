@@ -303,6 +303,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		// each to be a separate message with role="tool".
 		if msg.Role == llm.RoleUser {
 			var textParts []string
+			var imageParts []llm.ContentPart
 			hasToolResults := false
 
 			for _, part := range msg.Content {
@@ -319,8 +320,34 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 						textParts = append(textParts, part.Text)
 					}
 				case llm.ContentImage:
-					return openaiRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
+					if err := llm.ValidateImageSource(part); err != nil {
+						return openaiRequest{}, err
+					}
+					imageParts = append(imageParts, part)
 				}
+			}
+
+			// If images are present, build a multipart content array
+			if len(imageParts) > 0 {
+				var contentArray []interface{}
+				if len(textParts) > 0 {
+					contentArray = append(contentArray, map[string]interface{}{
+						"type": "text",
+						"text": strings.Join(textParts, "\n"),
+					})
+				}
+				for _, img := range imageParts {
+					dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
+					contentArray = append(contentArray, map[string]interface{}{
+						"type":      "image_url",
+						"image_url": map[string]string{"url": dataURI},
+					})
+				}
+				apiReq.Messages = append(apiReq.Messages, openaiMessage{
+					Role:    "user",
+					Content: contentArray,
+				})
+				continue
 			}
 
 			// If there was also text content alongside tool results, emit it as a user message

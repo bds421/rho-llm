@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of March 2026 (v0.1.14).
+> **Status:** Reflects the actual implementation as of March 2026 (v0.1.21).
 
 ---
 
@@ -12,6 +12,7 @@
 - Single `Client` interface for all providers and protocols
 - Streaming via Go 1.23 `iter.Seq2[StreamEvent, error]` iterators
 - Tool use / function calling
+- Image/vision support (base64 images in all 3 adapters)
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
 - Auth pool rotation with exponential backoff and per-profile cooldown
 - Structured error types enabling reliable retry classification
@@ -134,6 +135,8 @@ Message
         ├── {Type: ContentToolUse, ToolUseID, ToolName, ToolInput, ThoughtSignature}
         └── {Type: ContentToolResult, ToolResultID, ToolResultContent, IsError}
 ```
+
+`ContentImage` parts are fully implemented across all three adapters. Each adapter validates images via `ValidateImageSource()` and serializes to its native wire format: Anthropic uses inline `image` blocks with a `source` object; Gemini uses `inlineData` parts; OpenAI-compatible switches content from string to array with `image_url` data URIs. Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
 
 `ThoughtSignature` on `tool_use` parts is a Gemini 3 requirement — the model returns an opaque signature that must be echoed back in the corresponding `tool_result` message. The adapters handle this automatically.
 

@@ -1,6 +1,6 @@
 # rho-llm
 
-Multi-provider LLM client for Go. Streaming, tool use, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
+Multi-provider LLM client for Go. Streaming, tool use, image/vision support, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
 
 **Requires Go 1.26+** (`go 1.26.0` in `go.mod`).
 
@@ -74,6 +74,38 @@ cfg := llm.Config{
     APIKey:     "my-key",
 }
 ```
+
+## Image / Vision Support
+
+Send images to vision-capable models using `ContentImage` parts with base64-encoded data. All three protocol adapters serialize images to the correct wire format automatically.
+
+```go
+import (
+    "encoding/base64"
+    "os"
+)
+
+imgBytes, _ := os.ReadFile("photo.png")
+imgData := base64.StdEncoding.EncodeToString(imgBytes)
+
+req := llm.Request{
+    Messages: []llm.Message{{
+        Role: llm.RoleUser,
+        Content: []llm.ContentPart{
+            {Type: llm.ContentText, Text: "What do you see in this image?"},
+            {Type: llm.ContentImage, Source: &llm.ImageSource{
+                Type: "base64", MediaType: "image/png", Data: imgData,
+            }},
+        },
+    }},
+}
+resp, err := client.Complete(ctx, req)
+
+// Or use the convenience helper for single-image messages:
+msg := llm.NewImageMessage(llm.RoleUser, "image/png", imgData)
+```
+
+Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
 
 ## Streaming
 
