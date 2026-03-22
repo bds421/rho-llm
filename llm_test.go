@@ -3444,16 +3444,16 @@ func TestNegativeTemperatureRejected(t *testing.T) {
 	}
 }
 
-// TestThinkingLevelRejectedForOpenAICompat verifies that setting ThinkingLevel
-// on an OpenAI-compatible provider returns an error instead of silently dropping it.
-func TestThinkingLevelRejectedForOpenAICompat(t *testing.T) {
-	providers := []string{"openai", "xai", "groq", "mistral"}
+// TestThinkingLevelOnOSeriesModels verifies that ThinkingLevel with o-series models
+// sets reasoning.effort in Chat Completions (the request reaches the API, no client-side error).
+func TestThinkingLevelOnOSeriesModels(t *testing.T) {
+	models := []string{"o3", "o3-mini", "o4-mini"}
 
-	for _, provider := range providers {
-		t.Run(provider, func(t *testing.T) {
+	for _, model := range models {
+		t.Run(model, func(t *testing.T) {
 			cfg := llm.Config{
-				Provider:      provider,
-				Model:         "test-model",
+				Provider:      "openai",
+				Model:         model,
 				APIKey:        "test-key",
 				MaxTokens:     100,
 				ThinkingLevel: llm.ThinkingHigh,
@@ -3466,23 +3466,56 @@ func TestThinkingLevelRejectedForOpenAICompat(t *testing.T) {
 			}
 			defer client.Close()
 
+			// Should reach the API (auth error), not be rejected client-side.
+			// The request goes through openai_compat with reasoning.effort set.
 			_, err = client.Complete(context.Background(), llm.Request{
-				Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
-				ThinkingLevel: llm.ThinkingHigh,
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 			})
 			if err == nil {
-				t.Fatal("Complete with ThinkingLevel on openai_compat should fail")
+				t.Fatal("expected API error with test-key")
 			}
-			if !strings.Contains(err.Error(), "ThinkingLevel") {
-				t.Errorf("error = %q, want mention of ThinkingLevel", err.Error())
+			// Should be an API error (401), not a client-side ThinkingLevel rejection
+			if strings.Contains(err.Error(), "ThinkingLevel") {
+				t.Errorf("o-series models should support ThinkingLevel, got: %v", err)
 			}
 		})
 	}
 }
 
-// TestThinkingLevelFromConfigRejectedForOpenAICompat verifies that ThinkingLevel
-// set on Config (not Request) is also rejected.
-func TestThinkingLevelFromConfigRejectedForOpenAICompat(t *testing.T) {
+// TestThinkingLevelSilentlyIgnoredForNonReasoningModels verifies that ThinkingLevel
+// on non-reasoning models with OpenAI-compatible providers is silently ignored.
+func TestThinkingLevelSilentlyIgnoredForNonReasoningModels(t *testing.T) {
+	cfg := llm.Config{
+		Provider:      "openai",
+		Model:         "gpt-4.1",
+		APIKey:        "test-key",
+		MaxTokens:     100,
+		ThinkingLevel: llm.ThinkingHigh,
+		Timeout:       5 * time.Second,
+	}
+
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+	defer client.Close()
+
+	// Should reach the API (auth error), not be rejected client-side.
+	// ThinkingLevel is silently ignored for non-reasoning models.
+	_, err = client.Complete(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	})
+	if err == nil {
+		t.Fatal("expected API error with test-key")
+	}
+	if strings.Contains(err.Error(), "ThinkingLevel") {
+		t.Errorf("non-reasoning models should silently ignore ThinkingLevel, got: %v", err)
+	}
+}
+
+// TestThinkingLevelFromConfigRoutesToResponsesAPI verifies that Config.ThinkingLevel
+// on a ResponsesAPI model auto-routes to the openai_responses provider.
+func TestThinkingLevelFromConfigRoutesToResponsesAPI(t *testing.T) {
 	cfg := llm.Config{
 		Provider:      "openai",
 		Model:         "gpt-5",
@@ -3498,15 +3531,16 @@ func TestThinkingLevelFromConfigRejectedForOpenAICompat(t *testing.T) {
 	}
 	defer client.Close()
 
-	// Request has ThinkingNone, but Config has ThinkingMedium — should still error
+	// Should reach the API via Responses API provider (auth error), not be rejected client-side
 	_, err = client.Complete(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	})
 	if err == nil {
-		t.Fatal("Complete should fail when Config.ThinkingLevel is set for openai_compat")
+		t.Fatal("expected API error with test-key")
 	}
-	if !strings.Contains(err.Error(), "ThinkingLevel") {
-		t.Errorf("error = %q, want mention of ThinkingLevel", err.Error())
+	// Should NOT contain ThinkingLevel error — the request should go through
+	if strings.Contains(err.Error(), "ThinkingLevel") {
+		t.Errorf("ResponsesAPI models should support ThinkingLevel via auto-routing, got: %v", err)
 	}
 }
 

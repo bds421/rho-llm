@@ -9,4 +9,5 @@ import (
 	_ "github.com/bds421/rho-llm/provider/anthropic"
 	_ "github.com/bds421/rho-llm/provider/gemini"
 	_ "github.com/bds421/rho-llm/provider/openaicompat"
+	_ "github.com/bds421/rho-llm/provider/openairesponses"
 )

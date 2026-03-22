@@ -13,9 +13,10 @@ type ModelInfo struct {
 	SupportsThinking bool    // Anthropic extended thinking
 	ThoughtSignature bool    // Gemini 3 models require thought_signature in function call responses
 	Thinking               bool // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
-	SupportsReasoningEffort bool // OpenAI o-series: supports reasoning parameter with effort control (none/low/medium/high)
-	NoToolSupport          bool  // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
-	Label            string  // Short display name
+	SupportsReasoningEffort bool // OpenAI o-series: supports reasoning.effort in Chat Completions API (o3, o4-mini)
+	ResponsesAPI           bool // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
+	NoToolSupport          bool // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
+	Label            string // Short display name
 }
 
 // modelRegistry maps model ID to its metadata.
@@ -65,23 +66,25 @@ var modelRegistry = map[string]ModelInfo{
 	"gemini-2.0-flash":              {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
 
 	// OpenAI — GPT-5.x family (2026-03-05)
-	"gpt-5.4-pro":         {ID: "gpt-5.4-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 30.00, OutputPricePer1M: 180.00, Thinking: true, Label: "GPT-5.4 Pro"},
-	"gpt-5.4":             {ID: "gpt-5.4", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 2.50, OutputPricePer1M: 15.00, Thinking: true, Label: "GPT-5.4"},
-	"gpt-5.4-mini":        {ID: "gpt-5.4-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.75, OutputPricePer1M: 4.50, Thinking: true, Label: "GPT-5.4 Mini"},
-	"gpt-5.4-nano":        {ID: "gpt-5.4-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.20, OutputPricePer1M: 1.25, Thinking: true, Label: "GPT-5.4 Nano"},
+	// Reasoning models use ResponsesAPI: true — reasoning effort is controlled via /v1/responses, not Chat Completions.
+	// Non-reasoning "chat" variants use Chat Completions normally.
+	"gpt-5.4-pro":         {ID: "gpt-5.4-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 30.00, OutputPricePer1M: 180.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Pro"},
+	"gpt-5.4":             {ID: "gpt-5.4", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 2.50, OutputPricePer1M: 15.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4"},
+	"gpt-5.4-mini":        {ID: "gpt-5.4-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.75, OutputPricePer1M: 4.50, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Mini"},
+	"gpt-5.4-nano":        {ID: "gpt-5.4-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.20, OutputPricePer1M: 1.25, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Nano"},
 	"gpt-5.3-chat-latest": {ID: "gpt-5.3-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Label: "GPT-5.3 Chat"},
-	"gpt-5.3-codex":       {ID: "gpt-5.3-codex", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Thinking: true, Label: "GPT-5.3 Codex"},
-	"gpt-5.2":             {ID: "gpt-5.2", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Thinking: true, Label: "GPT-5.2"},
-	"gpt-5.2-pro":         {ID: "gpt-5.2-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 21.00, OutputPricePer1M: 168.00, Thinking: true, Label: "GPT-5.2 Pro"},
+	"gpt-5.3-codex":       {ID: "gpt-5.3-codex", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.3 Codex"},
+	"gpt-5.2":             {ID: "gpt-5.2", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.2"},
+	"gpt-5.2-pro":         {ID: "gpt-5.2-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 21.00, OutputPricePer1M: 168.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.2 Pro"},
 	"gpt-5.2-chat-latest": {ID: "gpt-5.2-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Label: "GPT-5.2 Chat"},
-	"gpt-5.1":             {ID: "gpt-5.1", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "GPT-5.1"},
+	"gpt-5.1":             {ID: "gpt-5.1", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.1"},
 	"gpt-5.1-chat-latest": {ID: "gpt-5.1-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Label: "GPT-5.1 Chat"},
-	"gpt-5":               {ID: "gpt-5", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "GPT-5"},
-	"gpt-5-pro":           {ID: "gpt-5-pro", Provider: "openai", MaxTokens: 272000, ContextWindow: 400000, InputPricePer1M: 15.00, OutputPricePer1M: 120.00, Thinking: true, Label: "GPT-5 Pro"},
+	"gpt-5":               {ID: "gpt-5", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5"},
+	"gpt-5-pro":           {ID: "gpt-5-pro", Provider: "openai", MaxTokens: 272000, ContextWindow: 400000, InputPricePer1M: 15.00, OutputPricePer1M: 120.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Pro"},
 	"gpt-5-chat-latest":   {ID: "gpt-5-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Label: "GPT-5 Chat"},
-	"gpt-5-codex":         {ID: "gpt-5-codex", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "GPT-5 Codex"},
-	"gpt-5-mini":          {ID: "gpt-5-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.25, OutputPricePer1M: 2.00, Thinking: true, Label: "GPT-5 Mini"},
-	"gpt-5-nano":          {ID: "gpt-5-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.05, OutputPricePer1M: 0.40, Thinking: true, Label: "GPT-5 Nano"},
+	"gpt-5-codex":         {ID: "gpt-5-codex", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Codex"},
+	"gpt-5-mini":          {ID: "gpt-5-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.25, OutputPricePer1M: 2.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Mini"},
+	"gpt-5-nano":          {ID: "gpt-5-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.05, OutputPricePer1M: 0.40, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Nano"},
 
 	// OpenAI — GPT-4.1 family (non-reasoning, 1M context)
 	"gpt-4.1":      {ID: "gpt-4.1", Provider: "openai", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Label: "GPT-4.1"},
