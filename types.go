@@ -50,10 +50,11 @@ const (
 type ThinkingLevel string
 
 const (
-	ThinkingNone   ThinkingLevel = ""
-	ThinkingLow    ThinkingLevel = "low"
-	ThinkingMedium ThinkingLevel = "medium"
-	ThinkingHigh   ThinkingLevel = "high"
+	ThinkingNone     ThinkingLevel = ""
+	ThinkingDisabled ThinkingLevel = "none" // OpenAI: explicitly disable reasoning
+	ThinkingLow      ThinkingLevel = "low"
+	ThinkingMedium   ThinkingLevel = "medium"
+	ThinkingHigh     ThinkingLevel = "high"
 )
 
 // ThinkingBudgetTokens returns the default token budget for a thinking level.
