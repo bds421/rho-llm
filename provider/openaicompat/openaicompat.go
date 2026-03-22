@@ -189,11 +189,6 @@ type openaiRequest struct {
 	StreamOptions       *openaiStreamOptions `json:"stream_options,omitempty"`
 	Tools               []openaiTool         `json:"tools,omitempty"`
 	Stop                []string             `json:"stop,omitempty"`
-	Reasoning           *openaiReasoning     `json:"reasoning,omitempty"`
-}
-
-type openaiReasoning struct {
-	Effort string `json:"effort"`
 }
 
 type openaiStreamOptions struct {
@@ -407,18 +402,17 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		apiReq.Messages = append(apiReq.Messages, oaiMsg)
 	}
 
-	// Map ThinkingLevel to OpenAI's reasoning.effort for reasoning models.
-	// For non-reasoning models or providers that don't support it, the field
-	// is silently omitted (omitempty).
+	// Reject ThinkingLevel — OpenAI-compatible providers do not support it.
+	// Without this check, the field is silently dropped and users get no feedback.
 	thinkingLevel := req.ThinkingLevel
 	if thinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
 		thinkingLevel = c.config.ThinkingLevel
 	}
-	// Map ThinkingLevel to reasoning.effort for o-series models (o3, o4-mini, etc.).
-	// GPT-5 family models reason internally but don't support the reasoning parameter —
-	// they use max_completion_tokens to cap total output including reasoning tokens.
-	if thinkingLevel != llm.ThinkingNone && info.Thinking && info.SupportsReasoningEffort {
-		apiReq.Reasoning = &openaiReasoning{Effort: string(thinkingLevel)}
+	if thinkingLevel != llm.ThinkingNone {
+		return openaiRequest{}, fmt.Errorf(
+			"%s adapter does not support ThinkingLevel (set on model %q); "+
+				"ThinkingLevel is only supported by anthropic and gemini providers",
+			c.providerName, apiReq.Model)
 	}
 
 	// Configure stop sequences
@@ -670,4 +664,3 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
 	}
 }
-

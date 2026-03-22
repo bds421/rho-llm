@@ -3444,50 +3444,12 @@ func TestNegativeTemperatureRejected(t *testing.T) {
 	}
 }
 
-// TestThinkingLevelOnOSeriesModels verifies that ThinkingLevel with o-series models
-// sets reasoning.effort in Chat Completions (the request reaches the API, no client-side error).
-func TestThinkingLevelOnOSeriesModels(t *testing.T) {
-	models := []string{"o3", "o3-mini", "o4-mini"}
-
-	for _, model := range models {
-		t.Run(model, func(t *testing.T) {
-			cfg := llm.Config{
-				Provider:      "openai",
-				Model:         model,
-				APIKey:        "test-key",
-				MaxTokens:     100,
-				ThinkingLevel: llm.ThinkingHigh,
-				Timeout:       5 * time.Second,
-			}
-
-			client, err := llm.NewClient(cfg)
-			if err != nil {
-				t.Fatalf("NewClient failed: %v", err)
-			}
-			defer client.Close()
-
-			// Should reach the API (auth error), not be rejected client-side.
-			// The request goes through openai_compat with reasoning.effort set.
-			_, err = client.Complete(context.Background(), llm.Request{
-				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
-			})
-			if err == nil {
-				t.Fatal("expected API error with test-key")
-			}
-			// Should be an API error (401), not a client-side ThinkingLevel rejection
-			if strings.Contains(err.Error(), "ThinkingLevel") {
-				t.Errorf("o-series models should support ThinkingLevel, got: %v", err)
-			}
-		})
-	}
-}
-
-// TestThinkingLevelSilentlyIgnoredForNonReasoningModels verifies that ThinkingLevel
-// on non-reasoning models with OpenAI-compatible providers is silently ignored.
-func TestThinkingLevelSilentlyIgnoredForNonReasoningModels(t *testing.T) {
+// TestThinkingLevelRejectedForOpenAICompat verifies that ThinkingLevel is still
+// rejected for Chat Completions API models (reasoning.effort support is not yet implemented).
+func TestThinkingLevelRejectedForOpenAICompat(t *testing.T) {
 	cfg := llm.Config{
 		Provider:      "openai",
-		Model:         "gpt-4.1",
+		Model:         "o3",
 		APIKey:        "test-key",
 		MaxTokens:     100,
 		ThinkingLevel: llm.ThinkingHigh,
@@ -3500,16 +3462,14 @@ func TestThinkingLevelSilentlyIgnoredForNonReasoningModels(t *testing.T) {
 	}
 	defer client.Close()
 
-	// Should reach the API (auth error), not be rejected client-side.
-	// ThinkingLevel is silently ignored for non-reasoning models.
 	_, err = client.Complete(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	})
 	if err == nil {
-		t.Fatal("expected API error with test-key")
+		t.Fatal("expected ThinkingLevel rejection error")
 	}
-	if strings.Contains(err.Error(), "ThinkingLevel") {
-		t.Errorf("non-reasoning models should silently ignore ThinkingLevel, got: %v", err)
+	if !strings.Contains(err.Error(), "ThinkingLevel") {
+		t.Errorf("expected ThinkingLevel rejection, got: %v", err)
 	}
 }
 
