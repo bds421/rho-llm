@@ -50,9 +50,8 @@ const (
 type ThinkingLevel string
 
 const (
-	ThinkingNone     ThinkingLevel = ""
-	ThinkingDisabled ThinkingLevel = "none"    // OpenAI: explicitly disable reasoning
-	ThinkingMinimal  ThinkingLevel = "minimal" // OpenAI: minimal reasoning effort
+	ThinkingNone    ThinkingLevel = ""
+	ThinkingMinimal ThinkingLevel = "minimal" // OpenAI: minimal reasoning effort
 	ThinkingLow      ThinkingLevel = "low"
 	ThinkingMedium   ThinkingLevel = "medium"
 	ThinkingHigh     ThinkingLevel = "high"
