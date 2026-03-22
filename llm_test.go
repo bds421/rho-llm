@@ -4702,8 +4702,7 @@ func TestReasoningModelMaxTokensWireFormat(t *testing.T) {
 		wantMaxTokens          bool // expect max_tokens in wire request
 		wantMaxCompletionToken bool // expect max_completion_tokens in wire request
 	}{
-		// OpenAI reasoning models → max_completion_tokens
-		{"openai", "gpt-5.2", false, true},
+		// OpenAI reasoning models → max_completion_tokens (gpt-5 family uses Responses API, tested separately)
 		{"openai", "o3-mini", false, true},
 		// xAI reasoning models → max_completion_tokens
 		{"xai", "grok-3-mini", false, true},

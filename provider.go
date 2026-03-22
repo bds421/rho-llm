@@ -57,8 +57,9 @@ func PresetFor(provider string) (ProviderPreset, bool) {
 // to openai_compat (the most common wire format).
 //
 // Auto-detection: when provider is "openai" and the model has ResponsesAPI: true
-// in the registry AND a ThinkingLevel is set, the protocol is automatically
-// upgraded to "openai_responses" so the Responses API provider handles it.
+// in the registry, the protocol is automatically upgraded to "openai_responses".
+// The Responses API is the proper endpoint for GPT-5 family models — it provides
+// reasoning effort control and avoids wasting tokens on hidden reasoning.
 // Users can also explicitly set Provider: "openai_responses".
 func ResolveProtocol(cfg Config) string {
 	// Explicit provider override
@@ -66,8 +67,8 @@ func ResolveProtocol(cfg Config) string {
 		return "openai_responses"
 	}
 
-	// Auto-detect: openai provider + ResponsesAPI model + ThinkingLevel set
-	if cfg.Provider == "openai" && cfg.ThinkingLevel != ThinkingNone {
+	// Auto-detect: openai provider + ResponsesAPI model → always use Responses API
+	if cfg.Provider == "openai" {
 		model := ResolveModelAlias(cfg.Model)
 		if info, ok := GetModelInfo(model); ok && info.ResponsesAPI {
 			return "openai_responses"
