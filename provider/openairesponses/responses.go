@@ -150,7 +150,8 @@ type responsesRequest struct {
 }
 
 type responsesReasoning struct {
-	Effort string `json:"effort"`
+	Effort  string `json:"effort"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type responsesInputMsg struct {
@@ -178,7 +179,7 @@ type responsesResponse struct {
 }
 
 type responsesOutputItem struct {
-	Type    string                  `json:"type"` // message, function_call
+	Type    string                  `json:"type"` // message, function_call, reasoning
 	ID      string                  `json:"id"`
 	Role    string                  `json:"role,omitempty"`
 	Content []responsesContentBlock `json:"content,omitempty"`
@@ -186,6 +187,13 @@ type responsesOutputItem struct {
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	// reasoning fields
+	Summary []responsesSummaryText `json:"summary,omitempty"`
+}
+
+type responsesSummaryText struct {
+	Type string `json:"type"` // summary_text
+	Text string `json:"text"`
 }
 
 type responsesContentBlock struct {
@@ -229,9 +237,16 @@ func (c *Client) buildRequest(req llm.Request) (responsesRequest, error) {
 		Store:           false,
 	}
 
-	// Set reasoning effort
+	// Set reasoning effort and optional summary
 	if thinkingLevel != llm.ThinkingNone {
-		apiReq.Reasoning = &responsesReasoning{Effort: string(thinkingLevel)}
+		reasoning := &responsesReasoning{Effort: string(thinkingLevel)}
+		if req.ReasoningSummary != llm.ReasoningSummaryNone {
+			reasoning.Summary = string(req.ReasoningSummary)
+		}
+		apiReq.Reasoning = reasoning
+	} else if req.ReasoningSummary != llm.ReasoningSummaryNone {
+		// Summary can be set even without an explicit effort level
+		apiReq.Reasoning = &responsesReasoning{Summary: string(req.ReasoningSummary)}
 	}
 
 	// Add system message
@@ -383,8 +398,15 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 
 	// Extract output items
 	var contentParts []string
+	var thinkingParts []string
 	for _, item := range apiResp.Output {
 		switch item.Type {
+		case "reasoning":
+			for _, s := range item.Summary {
+				if s.Type == "summary_text" && s.Text != "" {
+					thinkingParts = append(thinkingParts, s.Text)
+				}
+			}
 		case "function_call":
 			var input any
 			if err := json.Unmarshal([]byte(item.Arguments), &input); err != nil {
@@ -407,6 +429,9 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 		}
 	}
 
+	if len(thinkingParts) > 0 {
+		resp.Thinking = strings.Join(thinkingParts, "\n")
+	}
 	if len(contentParts) > 0 {
 		resp.Content = strings.Join(contentParts, "\n")
 	}

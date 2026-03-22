@@ -51,10 +51,22 @@ type ThinkingLevel string
 
 const (
 	ThinkingNone     ThinkingLevel = ""
-	ThinkingDisabled ThinkingLevel = "none" // OpenAI: explicitly disable reasoning
+	ThinkingDisabled ThinkingLevel = "none"    // OpenAI: explicitly disable reasoning
+	ThinkingMinimal  ThinkingLevel = "minimal" // OpenAI: minimal reasoning effort
 	ThinkingLow      ThinkingLevel = "low"
 	ThinkingMedium   ThinkingLevel = "medium"
 	ThinkingHigh     ThinkingLevel = "high"
+	ThinkingXHigh    ThinkingLevel = "xhigh" // OpenAI: maximum reasoning effort
+)
+
+// ReasoningSummary controls whether reasoning summary text is included in responses.
+type ReasoningSummary string
+
+const (
+	ReasoningSummaryNone     ReasoningSummary = ""         // omit from request
+	ReasoningSummaryAuto     ReasoningSummary = "auto"     // provider decides
+	ReasoningSummaryDetailed ReasoningSummary = "detailed" // detailed summary
+	ReasoningSummaryConcise  ReasoningSummary = "concise"  // concise summary
 )
 
 // ThinkingBudgetTokens returns the default token budget for a thinking level.
@@ -252,9 +264,10 @@ type Request struct {
 	MaxTokens     int           `json:"max_tokens"`
 	Temperature   *float64      `json:"temperature,omitempty"`
 	Tools         []Tool        `json:"tools,omitempty"`
-	ThinkingLevel  ThinkingLevel `json:"thinking_level,omitempty"`  // low, medium, high (zero value = none)
-	ThinkingBudget int           `json:"thinking_budget,omitempty"` // custom token budget; overrides ThinkingLevel default when > 0
-	StopSequences  []string      `json:"stop_sequences,omitempty"`
+	ThinkingLevel    ThinkingLevel    `json:"thinking_level,omitempty"`    // low, medium, high (zero value = none)
+	ThinkingBudget   int              `json:"thinking_budget,omitempty"`   // custom token budget; overrides ThinkingLevel default when > 0
+	ReasoningSummary ReasoningSummary `json:"reasoning_summary,omitempty"` // OpenAI Responses API: auto, detailed, concise
+	StopSequences    []string         `json:"stop_sequences,omitempty"`
 
 	// Caching
 	SystemCacheControl bool   `json:"system_cache_control,omitempty"` // Anthropic: cache the system prompt
