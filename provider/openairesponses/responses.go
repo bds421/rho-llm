@@ -1,9 +1,10 @@
 // Package openairesponses implements the OpenAI Responses API (/v1/responses) adapter.
 // Used for GPT-5 family models that support reasoning effort control only via the
-// Responses API, not the Chat Completions API. Streaming is not supported.
+// Responses API, not the Chat Completions API.
 package openairesponses
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -82,7 +83,7 @@ func (c *Client) Close() error {
 
 // Complete generates a non-streaming completion via the Responses API.
 func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
-	apiReq, err := c.buildRequest(req)
+	apiReq, err := c.buildRequest(req, false)
 	if err != nil {
 		return nil, err
 	}
@@ -125,13 +126,234 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	return c.parseResponse(&apiResp), nil
 }
 
-// Stream is not supported by the Responses API provider and returns an explicit error.
+// Stream returns an iterator of streaming events via the Responses API SSE stream.
 func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
-		yield(llm.StreamEvent{}, fmt.Errorf(
-			"streaming is not supported by the OpenAI Responses API provider (%s); use Complete() instead",
-			c.providerName,
-		))
+		apiReq, err := c.buildRequest(req, true)
+		if err != nil {
+			yield(llm.StreamEvent{}, err)
+			return
+		}
+
+		body, err := json.Marshal(apiReq)
+		if err != nil {
+			yield(llm.StreamEvent{}, fmt.Errorf("failed to marshal request: %w", err))
+			return
+		}
+
+		url := c.baseURL + "/responses"
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			yield(llm.StreamEvent{}, fmt.Errorf("failed to create request: %w", err))
+			return
+		}
+
+		httpReq.Header.Set("Content-Type", "application/json")
+		if c.authHeader != "" && c.config.APIKey != "" {
+			httpReq.Header.Set("Authorization", c.authHeader+" "+c.config.APIKey)
+		}
+
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			yield(llm.StreamEvent{}, fmt.Errorf("request failed: %w", err))
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+			if readErr != nil {
+				slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
+			}
+			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatus(c.providerName, resp.StatusCode, string(errBody)))
+			return
+		}
+
+		c.parseStream(resp.Body, yield)
+	}
+}
+
+// parseStream reads SSE events from the Responses API stream and yields
+// llm.StreamEvent values to the caller's iterator.
+func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(nil, llm.MaxSSELineBytes)
+
+	// Per-tool-call accumulation: the Responses API sends argument deltas
+	// followed by a single "done" event with the full arguments, name, and call_id.
+	// We accumulate deltas as a safety net but prefer the done event's values.
+	var inputBuffer strings.Builder
+	var completed bool
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		// Parse the event type first to decide how to handle it.
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(data), &envelope); err != nil {
+			if !yield(llm.StreamEvent{}, fmt.Errorf("malformed SSE event from %s: %w", c.providerName, err)) {
+				return
+			}
+			continue
+		}
+
+		switch envelope.Type {
+		case "response.output_text.delta":
+			var ev struct {
+				Delta string `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed text delta from %s: %w", c.providerName, err)) {
+					return
+				}
+				continue
+			}
+			if ev.Delta != "" {
+				if !yield(llm.StreamEvent{Type: llm.EventContent, Text: ev.Delta}, nil) {
+					return
+				}
+			}
+
+		case "response.function_call_arguments.delta":
+			var ev struct {
+				Delta string `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed function call delta from %s: %w", c.providerName, err)) {
+					return
+				}
+				continue
+			}
+			if inputBuffer.Len()+len(ev.Delta) > llm.MaxToolInputBytes {
+				yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+				return
+			}
+			inputBuffer.WriteString(ev.Delta)
+
+		case "response.function_call_arguments.done":
+			var ev struct {
+				Name      string `json:"name"`
+				CallID    string `json:"call_id"`
+				Arguments string `json:"arguments"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed function call done from %s: %w", c.providerName, err)) {
+					return
+				}
+				continue
+			}
+			var input any
+			args := ev.Arguments
+			if args == "" {
+				args = inputBuffer.String()
+			}
+			if err := json.Unmarshal([]byte(args), &input); err != nil {
+				slog.Warn("failed to parse tool input JSON", "provider", c.providerName, "tool", ev.Name, "error", err)
+				input = args
+			}
+			if !yield(llm.StreamEvent{
+				Type: llm.EventToolUse,
+				ToolCall: &llm.ToolCall{
+					ID:    ev.CallID,
+					Name:  ev.Name,
+					Input: input,
+				},
+			}, nil) {
+				return
+			}
+			inputBuffer.Reset()
+
+		case "response.reasoning_summary_text.delta":
+			var ev struct {
+				Delta string `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed reasoning delta from %s: %w", c.providerName, err)) {
+					return
+				}
+				continue
+			}
+			if ev.Delta != "" {
+				if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: ev.Delta}, nil) {
+					return
+				}
+			}
+
+		case "response.completed":
+			var ev struct {
+				Response struct {
+					ID     string         `json:"id"`
+					Status string         `json:"status"`
+					Usage  responsesUsage `json:"usage"`
+				} `json:"response"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed completed event from %s: %w", c.providerName, err)) {
+					return
+				}
+				continue
+			}
+			stopReason := "end_turn"
+			if ev.Response.Status == "incomplete" {
+				stopReason = "max_tokens"
+			} else if ev.Response.Status == "failed" {
+				stopReason = "error"
+			}
+			completed = true
+			if !yield(llm.StreamEvent{
+				Type:           llm.EventDone,
+				StopReason:     stopReason,
+				InputTokens:    ev.Response.Usage.InputTokens,
+				OutputTokens:   ev.Response.Usage.OutputTokens,
+				ThinkingTokens: ev.Response.Usage.ReasoningTokens,
+			}, nil) {
+				return
+			}
+
+		case "error":
+			var ev struct {
+				Error struct {
+					Message string `json:"message"`
+					Code    string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				yield(llm.StreamEvent{}, fmt.Errorf("malformed error event from %s: %w", c.providerName, err))
+				return
+			}
+			msg := ev.Error.Message
+			if msg == "" {
+				msg = "unknown error"
+			}
+			if ev.Error.Code != "" {
+				msg = ev.Error.Code + ": " + msg
+			}
+			yield(llm.StreamEvent{}, fmt.Errorf("stream error from %s: %s", c.providerName, msg))
+			return
+
+		default:
+			// Skip events we don't need to handle (response.created,
+			// response.output_item.added, response.output_item.done, etc.)
+		}
+	}
+
+	if !completed && scanner.Err() == nil {
+		slog.Warn("stream ended without response.completed event", "provider", c.providerName)
+	}
+
+	if err := scanner.Err(); err != nil && !completed {
+		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
 	}
 }
 
@@ -147,6 +369,7 @@ type responsesRequest struct {
 	Temperature     *float64            `json:"temperature,omitempty"`
 	Tools           []responsesTool     `json:"tools,omitempty"`
 	Store           bool                `json:"store"`
+	Stream          bool                `json:"stream,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -215,7 +438,7 @@ type responsesIncomplete struct {
 // REQUEST BUILDING
 // =============================================================================
 
-func (c *Client) buildRequest(req llm.Request) (responsesRequest, error) {
+func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, error) {
 	model := req.Model
 	if model == "" {
 		model = c.config.Model
@@ -235,6 +458,7 @@ func (c *Client) buildRequest(req llm.Request) (responsesRequest, error) {
 		Model:           model,
 		MaxOutputTokens: maxTok,
 		Store:           false,
+		Stream:          stream,
 	}
 
 	// Set reasoning effort and optional summary
