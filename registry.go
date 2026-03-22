@@ -12,9 +12,8 @@ type ModelInfo struct {
 	CacheReadPricePer1M  float64 // Anthropic/Gemini: price per 1M cached input tokens (0 = not applicable)
 	SupportsThinking bool    // Anthropic extended thinking
 	ThoughtSignature bool    // Gemini 3 models require thought_signature in function call responses
-	Thinking               bool // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
-	SupportsReasoningEffort bool // OpenAI o-series: supports reasoning.effort in Chat Completions API (o3, o4-mini)
-	ResponsesAPI           bool // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
+	Thinking     bool // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
+	ResponsesAPI bool // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
 	NoToolSupport          bool // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
 	Label            string // Short display name
 }
@@ -92,9 +91,9 @@ var modelRegistry = map[string]ModelInfo{
 	"gpt-4.1-nano": {ID: "gpt-4.1-nano", Provider: "openai", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "GPT-4.1 Nano"},
 
 	// OpenAI — O-series reasoning models
-	"o3":      {ID: "o3", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, SupportsReasoningEffort: true, Label: "O3"},
-	"o3-mini": {ID: "o3-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, SupportsReasoningEffort: true, Label: "O3 Mini"},
-	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, SupportsReasoningEffort: true, Label: "O4 Mini"},
+	"o3":      {ID: "o3", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "O3"},
+	"o3-mini": {ID: "o3-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O3 Mini"},
+	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O4 Mini"},
 
 	// Groq — cloud inference (2026-02-21)
 	"llama-3.3-70b-versatile":       {ID: "llama-3.3-70b-versatile", Provider: "groq", MaxTokens: 32768, ContextWindow: 128000, InputPricePer1M: 0.59, OutputPricePer1M: 0.79, Label: "Llama 3.3 70B"},
