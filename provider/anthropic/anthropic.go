@@ -101,7 +101,7 @@ type anthropicRequest struct {
 	Messages      []anthropicMessage `json:"messages"`
 	System        interface{}        `json:"system,omitempty"`
 	MaxTokens     int                `json:"max_tokens"`
-	Temperature   float64            `json:"temperature"`
+	Temperature   *float64           `json:"temperature,omitempty"`
 	Tools         []anthropicTool    `json:"tools,omitempty"`
 	Stream        bool               `json:"stream,omitempty"`
 	Thinking      *anthropicThinking `json:"thinking,omitempty"`
@@ -265,7 +265,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	apiReq := anthropicRequest{
 		Model:       req.Model,
 		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
+		Temperature: req.Temperature, // nil = omit from wire
 		Stream:      stream,
 	}
 
@@ -310,7 +310,21 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					apiMsg.Content = append(apiMsg.Content, block)
 				}
 			case llm.ContentImage:
-				return anthropicRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
+				if err := llm.ValidateImageSource(part); err != nil {
+					return anthropicRequest{}, err
+				}
+				block := map[string]interface{}{
+					"type": "image",
+					"source": map[string]interface{}{
+						"type":       part.Source.Type,
+						"media_type": part.Source.MediaType,
+						"data":       part.Source.Data,
+					},
+				}
+				if part.CacheControl {
+					block["cache_control"] = map[string]string{"type": "ephemeral"}
+				}
+				apiMsg.Content = append(apiMsg.Content, block)
 			case llm.ContentToolUse:
 				apiMsg.Content = append(apiMsg.Content, map[string]interface{}{
 					"type":  "tool_use",
@@ -375,11 +389,12 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			BudgetTokens: budget,
 		}
 		// Anthropic requires temperature = 1.0 when extended thinking is enabled
-		if req.Temperature != 1.0 {
-			slog.Debug("overriding temperature to 1.0 (required by Anthropic extended thinking)",
-				"requested_temperature", req.Temperature)
+		one := 1.0
+		if req.Temperature != nil && *req.Temperature != 1.0 {
+			slog.Warn("overriding temperature to 1.0 (required by Anthropic extended thinking)",
+				"requested_temperature", *req.Temperature)
 		}
-		apiReq.Temperature = 1.0
+		apiReq.Temperature = &one
 	}
 
 	return apiReq, nil
@@ -499,10 +514,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 			case "input_json_delta":
 				if inputBuffer.Len()+len(event.Delta.PartialJSON) > llm.MaxToolInputBytes {
-					if !yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes)) {
-						return
-					}
-					continue
+					yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+					return // stop parsing — continuing would corrupt the tool call
 				}
 				inputBuffer.WriteString(event.Delta.PartialJSON)
 			}

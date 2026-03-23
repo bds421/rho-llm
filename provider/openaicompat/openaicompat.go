@@ -196,10 +196,12 @@ type openaiStreamOptions struct {
 }
 
 type openaiMessage struct {
-	Role       string           `json:"role"`
-	Content    interface{}      `json:"content"` // string or array
-	ToolCalls  []openaiToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
+	Role             string           `json:"role"`
+	Content          interface{}      `json:"content"`                     // string or array
+	ReasoningContent string           `json:"reasoning_content,omitempty"` // thinking/reasoning output (OpenAI, DeepSeek, etc.)
+	Reasoning        string           `json:"reasoning,omitempty"`         // thinking/reasoning output (Ollama)
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
 }
 
 type openaiTool struct {
@@ -268,17 +270,16 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		Stream: stream,
 	}
 
-	// Reasoning/thinking models (o-series, gpt-5 family) require
-	// max_completion_tokens instead of the legacy max_tokens parameter,
-	// and do not support custom temperature (only default 1 is allowed).
+	// OpenAI and xAI reasoning models require max_completion_tokens instead
+	// of max_tokens, and reject custom temperature. Other providers (Mistral,
+	// Groq, Ollama) use standard max_tokens even for reasoning models.
 	info, _ := llm.GetModelInfo(model)
-	if info.Thinking {
+	if info.Thinking && (info.Provider == "openai" || info.Provider == "xai") {
 		apiReq.MaxCompletionTokens = maxTok
-		// Omit temperature entirely — reasoning models only accept default (1).
+		// Omit temperature entirely — these reasoning models only accept default (1).
 	} else {
 		apiReq.MaxTokens = maxTok
-		temp := req.Temperature
-		apiReq.Temperature = &temp
+		apiReq.Temperature = req.Temperature // nil = omit from wire (provider default)
 	}
 
 	// Request usage stats in streaming responses (required since May 2024)
@@ -301,6 +302,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		// each to be a separate message with role="tool".
 		if msg.Role == llm.RoleUser {
 			var textParts []string
+			var imageParts []llm.ContentPart
 			hasToolResults := false
 
 			for _, part := range msg.Content {
@@ -317,8 +319,34 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 						textParts = append(textParts, part.Text)
 					}
 				case llm.ContentImage:
-					return openaiRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
+					if err := llm.ValidateImageSource(part); err != nil {
+						return openaiRequest{}, err
+					}
+					imageParts = append(imageParts, part)
 				}
+			}
+
+			// If images are present, build a multipart content array
+			if len(imageParts) > 0 {
+				var contentArray []interface{}
+				if len(textParts) > 0 {
+					contentArray = append(contentArray, map[string]interface{}{
+						"type": "text",
+						"text": strings.Join(textParts, "\n"),
+					})
+				}
+				for _, img := range imageParts {
+					dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
+					contentArray = append(contentArray, map[string]interface{}{
+						"type":      "image_url",
+						"image_url": map[string]string{"url": dataURI},
+					})
+				}
+				apiReq.Messages = append(apiReq.Messages, openaiMessage{
+					Role:    "user",
+					Content: contentArray,
+				})
+				continue
 			}
 
 			// If there was also text content alongside tool results, emit it as a user message
@@ -434,6 +462,16 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 			resp.Content = content
 		}
 
+		// Extract reasoning/thinking content.
+		// Most providers use "reasoning_content"; Ollama uses "reasoning".
+		reasoning := choice.Message.ReasoningContent
+		if reasoning == "" {
+			reasoning = choice.Message.Reasoning
+		}
+		if reasoning != "" {
+			resp.Thinking = reasoning
+		}
+
 		// Extract tool calls
 		for _, tc := range choice.Message.ToolCalls {
 			var input any
@@ -487,8 +525,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			Choices []struct {
 				Index int `json:"index"`
 				Delta struct {
-					Content   string           `json:"content"`
-					ToolCalls []openaiToolCall `json:"tool_calls"`
+					Content          string           `json:"content"`
+					ReasoningContent string           `json:"reasoning_content"` // OpenAI, DeepSeek, etc.
+					Reasoning        string           `json:"reasoning"`         // Ollama
+					ToolCalls        []openaiToolCall `json:"tool_calls"`
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
@@ -514,6 +554,18 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
+
+			// Reasoning/thinking delta.
+			// Most providers use "reasoning_content"; Ollama uses "reasoning".
+			reasoningDelta := choice.Delta.ReasoningContent
+			if reasoningDelta == "" {
+				reasoningDelta = choice.Delta.Reasoning
+			}
+			if reasoningDelta != "" {
+				if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: reasoningDelta}, nil) {
+					return
+				}
+			}
 
 			// Content delta
 			if choice.Delta.Content != "" {
@@ -547,10 +599,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				if tc.Function.Arguments != "" {
 					if inputBuffer.Len()+len(tc.Function.Arguments) > llm.MaxToolInputBytes {
-						if !yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes)) {
-							return
-						}
-						continue
+						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+						return // stop parsing — continuing would corrupt the tool call
 					}
 					inputBuffer.WriteString(tc.Function.Arguments)
 				}

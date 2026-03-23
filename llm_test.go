@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,9 @@ import (
 
 // TestPrompt is a simple prompt that all models should handle.
 const TestPrompt = "Reply with exactly one word: Hello"
+
+// floatPtr is a helper to create *float64 for Temperature fields.
+func floatPtr(v float64) *float64 { return &v }
 
 // envKey reads an API key from env, supporting both singular and plural forms.
 // Checks KEY first, then KEYS (returns first comma-separated value).
@@ -631,30 +635,29 @@ func TestBackoffNegativeAttempt(t *testing.T) {
 // TestEstimateCost verifies cost calculation for known models.
 func TestEstimateCost(t *testing.T) {
 	tests := []struct {
-		model        string
-		inputTokens  int
-		outputTokens int
-		wantMin      float64
-		wantMax      float64
+		name    string
+		input   llm.CostInput
+		wantMin float64
+		wantMax float64
 	}{
 		// claude-sonnet-4-6: $3/1M input, $15/1M output
 		// 1000 input: 3 * 1000/1M = 0.003, 500 output: 15 * 500/1M = 0.0075
-		{"claude-sonnet-4-6", 1000, 500, 0.0104, 0.0106},
+		{"sonnet basic", llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: 1000, OutputTokens: 500}, 0.0104, 0.0106},
 		// gemini-2.5-flash-lite: free
-		{"gemini-2.5-flash-lite", 10000, 5000, 0, 0},
+		{"flash-lite free", llm.CostInput{Model: "gemini-2.5-flash-lite", InputTokens: 10000, OutputTokens: 5000}, 0, 0},
 		// unknown model: 0
-		{"unknown-model", 1000, 500, 0, 0},
+		{"unknown", llm.CostInput{Model: "unknown-model", InputTokens: 1000, OutputTokens: 500}, 0, 0},
 		// claude-opus-4-6: $5/1M input, $25/1M output
 		// 10000 input: 0.05, 2000 output: 0.05
-		{"claude-opus-4-6", 10000, 2000, 0.099, 0.101},
+		{"opus basic", llm.CostInput{Model: "claude-opus-4-6", InputTokens: 10000, OutputTokens: 2000}, 0.099, 0.101},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.model, func(t *testing.T) {
-			cost := llm.EstimateCost(tc.model, tc.inputTokens, tc.outputTokens)
+		t.Run(tc.name, func(t *testing.T) {
+			cost := llm.EstimateCost(tc.input)
 			if cost < tc.wantMin || cost > tc.wantMax {
-				t.Errorf("EstimateCost(%s, %d, %d) = %f, want [%f, %f]",
-					tc.model, tc.inputTokens, tc.outputTokens, cost, tc.wantMin, tc.wantMax)
+				t.Errorf("EstimateCost(%+v) = %f, want [%f, %f]",
+					tc.input, cost, tc.wantMin, tc.wantMax)
 			}
 		})
 	}
@@ -813,9 +816,20 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 		}
 	}
 
-	// 3. No reasoning
+	// 3. Intrinsic thinking (Gemini 2.5 — API rejects thinkingConfig)
+	gemini25 := []string{
+		"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite",
+	}
+	for _, model := range gemini25 {
+		info, ok := llm.GetModelInfo(model)
+		if !ok || !info.Thinking || info.SupportsThinking {
+			t.Errorf("Model %s should have intrinsic reasoning (Thinking=true, SupportsThinking=false)", model)
+		}
+	}
+
+	// 4. No reasoning
 	none := []string{
-		"gemini-2.5-flash",
+		"gemini-2.0-flash",
 	}
 	for _, model := range none {
 		info, ok := llm.GetModelInfo(model)
@@ -897,7 +911,7 @@ func TestAllProviders(t *testing.T) {
 				Model:       tc.model,
 				APIKey:      tc.apiKey,
 				MaxTokens:   100,
-				Temperature: 0.0,
+				Temperature: floatPtr(0.0),
 				Timeout:     30 * time.Second,
 			}
 
@@ -918,7 +932,7 @@ func TestAllProviders(t *testing.T) {
 				Model:       tc.model,
 				Messages:    []llm.Message{llm.NewTextMessage("user", TestPrompt)},
 				MaxTokens:   100,
-				Temperature: 0.0,
+				Temperature: floatPtr(0.0),
 			}
 
 			resp, err := client.Complete(ctx, req)
@@ -954,7 +968,7 @@ func TestAnthropicStreaming(t *testing.T) {
 		Model:       "claude-haiku-4-5-20251001",
 		APIKey:      apiKey,
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 		Timeout:     30 * time.Second,
 	}
 
@@ -970,7 +984,7 @@ func TestAnthropicStreaming(t *testing.T) {
 	req := llm.Request{
 		Messages:    []llm.Message{llm.NewTextMessage("user", "Count from 1 to 5")},
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 	}
 
 	var chunks []string
@@ -1013,7 +1027,7 @@ func TestXAIStreaming(t *testing.T) {
 		Model:       "grok-3-mini",
 		APIKey:      apiKey,
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 		Timeout:     30 * time.Second,
 	}
 
@@ -1029,7 +1043,7 @@ func TestXAIStreaming(t *testing.T) {
 	req := llm.Request{
 		Messages:    []llm.Message{llm.NewTextMessage("user", "Count from 1 to 5")},
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 	}
 
 	var chunks []string
@@ -1068,7 +1082,7 @@ func TestGeminiStreaming(t *testing.T) {
 		Model:       "gemini-2.5-flash-lite",
 		APIKey:      apiKey,
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 		Timeout:     30 * time.Second,
 	}
 
@@ -1084,7 +1098,7 @@ func TestGeminiStreaming(t *testing.T) {
 	req := llm.Request{
 		Messages:    []llm.Message{llm.NewTextMessage("user", "Count from 1 to 5")},
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 	}
 
 	var chunks []string
@@ -1122,7 +1136,7 @@ func TestPooledClientWithMultipleKeys(t *testing.T) {
 		Provider:    "anthropic",
 		Model:       "claude-haiku-4-5-20251001",
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 		Timeout:     30 * time.Second,
 	}
 
@@ -1140,7 +1154,7 @@ func TestPooledClientWithMultipleKeys(t *testing.T) {
 	req := llm.Request{
 		Messages:    []llm.Message{llm.NewTextMessage("user", TestPrompt)},
 		MaxTokens:   100,
-		Temperature: 0.0,
+		Temperature: floatPtr(0.0),
 	}
 
 	resp, err := client.Complete(ctx, req)
@@ -1988,7 +2002,7 @@ func TestGetAvailableModelsUnknown(t *testing.T) {
 // TestEstimateCostNegativeTokens verifies negative tokens are clamped to 0.
 func TestEstimateCostNegativeTokens(t *testing.T) {
 	// -1 tokens (sentinel for "not reported") should not produce negative cost
-	cost := llm.EstimateCost("claude-sonnet-4-6", -1, -1)
+	cost := llm.EstimateCost(llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: -1, OutputTokens: -1})
 	if cost < 0 {
 		t.Errorf("EstimateCost with negative tokens = %f, want >= 0", cost)
 	}
@@ -2826,14 +2840,107 @@ func TestNewPooledClientGetAvailableError(t *testing.T) {
 	}
 }
 
-// TestContentImageErrorAnthropic verifies that sending ContentImage to the
-// Anthropic adapter returns an error rather than silently dropping the content.
-func TestContentImageErrorAnthropic(t *testing.T) {
+// loadTestImage reads a test image from testdata/ and returns its base64 encoding.
+func loadTestImage(t *testing.T, filename string) string {
+	t.Helper()
+	data, err := os.ReadFile("testdata/" + filename)
+	if err != nil {
+		t.Fatalf("failed to read testdata/%s: %v", filename, err)
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// TestContentImageValidation verifies validation across all 3 providers using
+// table-driven tests: nil source, empty data, invalid media type, invalid source type.
+func TestContentImageValidation(t *testing.T) {
+	providers := []struct {
+		name     string
+		provider string
+		model    string
+	}{
+		{"anthropic", "anthropic", "claude-sonnet-4-6"},
+		{"gemini", "gemini", "gemini-2.5-flash"},
+		{"openai", "openai", "gpt-4"},
+	}
+
+	cases := []struct {
+		name    string
+		part    llm.ContentPart
+		wantErr string
+	}{
+		{
+			name:    "nil source",
+			part:    llm.ContentPart{Type: llm.ContentImage, Source: nil},
+			wantErr: "image source must not be nil",
+		},
+		{
+			name:    "empty data",
+			part:    llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: ""}},
+			wantErr: "image data must not be empty",
+		},
+		{
+			name:    "invalid media type",
+			part:    llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "text/plain", Data: "abc"}},
+			wantErr: "unsupported image media type",
+		},
+		{
+			name:    "invalid source type",
+			part:    llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "url", MediaType: "image/png", Data: "abc"}},
+			wantErr: "unsupported image source type",
+		},
+	}
+
+	for _, prov := range providers {
+		for _, tc := range cases {
+			t.Run(prov.name+"/"+tc.name, func(t *testing.T) {
+				cfg := llm.Config{
+					Provider: prov.provider,
+					Model:    prov.model,
+					APIKey:   "test-key",
+					BaseURL:  "http://localhost:1",
+				}
+				client, err := llm.NewClient(cfg)
+				if err != nil {
+					t.Fatalf("NewClient: %v", err)
+				}
+				defer client.Close()
+
+				req := llm.Request{
+					Messages: []llm.Message{{
+						Role:    llm.RoleUser,
+						Content: []llm.ContentPart{tc.part},
+					}},
+				}
+				_, err = client.Complete(context.Background(), req)
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			})
+		}
+	}
+}
+
+// TestContentImageAnthropic verifies the Anthropic wire format for image content.
+func TestContentImageAnthropic(t *testing.T) {
+	imgData := loadTestImage(t, "red.png")
+
+	var captured json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"I see red"}],"model":"claude-sonnet-4-6","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":10}}`)
+	}))
+	defer srv.Close()
+
 	cfg := llm.Config{
 		Provider: "anthropic",
 		Model:    "claude-sonnet-4-6",
 		APIKey:   "test-key",
-		BaseURL:  "http://localhost:1", // won't be reached
+		BaseURL:  srv.URL,
 	}
 	client, err := llm.NewClient(cfg)
 	if err != nil {
@@ -2845,27 +2952,77 @@ func TestContentImageErrorAnthropic(t *testing.T) {
 		Messages: []llm.Message{{
 			Role: llm.RoleUser,
 			Content: []llm.ContentPart{
-				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: imgData}},
 			},
 		}},
 	}
 
-	_, err = client.Complete(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for ContentImage, got nil")
+	resp, err := client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
 	}
-	if !strings.Contains(err.Error(), "image content not yet supported") {
-		t.Errorf("unexpected error: %v", err)
+	if resp.Content != "I see red" {
+		t.Errorf("unexpected content: %s", resp.Content)
+	}
+
+	// Verify wire format
+	var wire struct {
+		Messages []struct {
+			Content []json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(captured, &wire); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	if len(wire.Messages) == 0 || len(wire.Messages[0].Content) == 0 {
+		t.Fatal("no content blocks in wire request")
+	}
+
+	var block struct {
+		Type   string `json:"type"`
+		Source struct {
+			Type      string `json:"type"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(wire.Messages[0].Content[0], &block); err != nil {
+		t.Fatalf("unmarshal content block: %v", err)
+	}
+
+	if block.Type != "image" {
+		t.Errorf("block type = %s, want image", block.Type)
+	}
+	if block.Source.Type != "base64" {
+		t.Errorf("source type = %s, want base64", block.Source.Type)
+	}
+	if block.Source.MediaType != "image/png" {
+		t.Errorf("media_type = %s, want image/png", block.Source.MediaType)
+	}
+	if block.Source.Data != imgData {
+		t.Error("image data mismatch")
 	}
 }
 
-// TestContentImageErrorGemini verifies ContentImage error for gemini adapter.
-func TestContentImageErrorGemini(t *testing.T) {
+// TestContentImageGemini verifies the Gemini wire format for image content.
+func TestContentImageGemini(t *testing.T) {
+	imgData := loadTestImage(t, "red.png")
+
+	var captured json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"I see red"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":10,"totalTokenCount":110}}`)
+	}))
+	defer srv.Close()
+
 	cfg := llm.Config{
 		Provider: "gemini",
 		Model:    "gemini-2.5-flash",
 		APIKey:   "test-key",
-		BaseURL:  "http://localhost:1",
+		BaseURL:  srv.URL,
 	}
 	client, err := llm.NewClient(cfg)
 	if err != nil {
@@ -2877,26 +3034,69 @@ func TestContentImageErrorGemini(t *testing.T) {
 		Messages: []llm.Message{{
 			Role: llm.RoleUser,
 			Content: []llm.ContentPart{
-				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: imgData}},
 			},
 		}},
 	}
 
-	_, err = client.Complete(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for ContentImage, got nil")
+	resp, err := client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
 	}
-	if !strings.Contains(err.Error(), "image content not yet supported") {
-		t.Errorf("unexpected error: %v", err)
+	if resp.Content != "I see red" {
+		t.Errorf("unexpected content: %s", resp.Content)
+	}
+
+	// Verify wire format
+	var wire struct {
+		Contents []struct {
+			Parts []struct {
+				InlineData *struct {
+					MimeType string `json:"mimeType"`
+					Data     string `json:"data"`
+				} `json:"inlineData,omitempty"`
+			} `json:"parts"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(captured, &wire); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	if len(wire.Contents) == 0 || len(wire.Contents[0].Parts) == 0 {
+		t.Fatal("no parts in wire request")
+	}
+
+	part := wire.Contents[0].Parts[0]
+	if part.InlineData == nil {
+		t.Fatal("inlineData is nil")
+	}
+	if part.InlineData.MimeType != "image/png" {
+		t.Errorf("mimeType = %s, want image/png", part.InlineData.MimeType)
+	}
+	if part.InlineData.Data != imgData {
+		t.Error("image data mismatch")
 	}
 }
 
-// TestContentImageErrorOpenAI verifies ContentImage error for openai adapter.
-func TestContentImageErrorOpenAI(t *testing.T) {
+// TestContentImageOpenAI verifies the OpenAI wire format: content switches from
+// string to array when images are present.
+func TestContentImageOpenAI(t *testing.T) {
+	imgData := loadTestImage(t, "blue.jpg")
+
+	var captured json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"chatcmpl-1","object":"chat.completion","model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"I see blue"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`)
+	}))
+	defer srv.Close()
+
 	cfg := llm.Config{
 		Provider: "openai",
 		Model:    "gpt-4",
 		APIKey:   "test-key",
+		BaseURL:  srv.URL,
 	}
 	client, err := llm.NewClient(cfg)
 	if err != nil {
@@ -2908,17 +3108,167 @@ func TestContentImageErrorOpenAI(t *testing.T) {
 		Messages: []llm.Message{{
 			Role: llm.RoleUser,
 			Content: []llm.ContentPart{
-				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc"}},
+				{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/jpeg", Data: imgData}},
 			},
 		}},
 	}
 
-	_, err = client.Complete(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for ContentImage, got nil")
+	resp, err := client.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
 	}
-	if !strings.Contains(err.Error(), "image content not yet supported") {
-		t.Errorf("unexpected error: %v", err)
+	if resp.Content != "I see blue" {
+		t.Errorf("unexpected content: %s", resp.Content)
+	}
+
+	// Verify wire format — content must be an array, not a string
+	var wire struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(captured, &wire); err != nil {
+		t.Fatalf("unmarshal captured request: %v", err)
+	}
+
+	// Find the user message
+	var userContent json.RawMessage
+	for _, m := range wire.Messages {
+		if m.Role == "user" {
+			userContent = m.Content
+			break
+		}
+	}
+	if userContent == nil {
+		t.Fatal("no user message in wire request")
+	}
+
+	// Content must be an array (not a string)
+	var contentArr []struct {
+		Type     string `json:"type"`
+		ImageURL *struct {
+			URL string `json:"url"`
+		} `json:"image_url,omitempty"`
+	}
+	if err := json.Unmarshal(userContent, &contentArr); err != nil {
+		t.Fatalf("content is not an array: %v", err)
+	}
+
+	found := false
+	for _, item := range contentArr {
+		if item.Type == "image_url" && item.ImageURL != nil {
+			wantPrefix := "data:image/jpeg;base64,"
+			if !strings.HasPrefix(item.ImageURL.URL, wantPrefix) {
+				t.Errorf("image_url prefix = %s..., want %s...", item.ImageURL.URL[:min(len(item.ImageURL.URL), 30)], wantPrefix)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no image_url block found in content array")
+	}
+}
+
+// TestContentImageMixedMessage verifies text + image in one message across all 3 providers.
+func TestContentImageMixedMessage(t *testing.T) {
+	imgData := loadTestImage(t, "red.png")
+
+	providers := []struct {
+		name     string
+		provider string
+		model    string
+		response string
+	}{
+		{
+			"anthropic", "anthropic", "claude-sonnet-4-6",
+			`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"mixed ok"}],"model":"claude-sonnet-4-6","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":5}}`,
+		},
+		{
+			"gemini", "gemini", "gemini-2.5-flash",
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":"mixed ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":5,"totalTokenCount":105}}`,
+		},
+		{
+			"openai", "openai", "gpt-4",
+			`{"id":"chatcmpl-1","object":"chat.completion","model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"mixed ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":5}}`,
+		},
+	}
+
+	for _, prov := range providers {
+		t.Run(prov.name, func(t *testing.T) {
+			var captured json.RawMessage
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				captured = body
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, prov.response)
+			}))
+			defer srv.Close()
+
+			cfg := llm.Config{
+				Provider: prov.provider,
+				Model:    prov.model,
+				APIKey:   "test-key",
+				BaseURL:  srv.URL,
+			}
+			client, err := llm.NewClient(cfg)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer client.Close()
+
+			req := llm.Request{
+				Messages: []llm.Message{{
+					Role: llm.RoleUser,
+					Content: []llm.ContentPart{
+						{Type: llm.ContentText, Text: "What is in this image?"},
+						{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: imgData}},
+					},
+				}},
+			}
+
+			resp, err := client.Complete(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if resp.Content != "mixed ok" {
+				t.Errorf("unexpected content: %s", resp.Content)
+			}
+
+			// Verify the wire request was captured (basic sanity)
+			if len(captured) == 0 {
+				t.Fatal("no request captured")
+			}
+		})
+	}
+}
+
+// TestNewImageMessage verifies the NewImageMessage helper function.
+func TestNewImageMessage(t *testing.T) {
+	msg := llm.NewImageMessage(llm.RoleUser, "image/png", "base64data")
+
+	if msg.Role != llm.RoleUser {
+		t.Errorf("role = %s, want user", msg.Role)
+	}
+	if len(msg.Content) != 1 {
+		t.Fatalf("content parts = %d, want 1", len(msg.Content))
+	}
+
+	part := msg.Content[0]
+	if part.Type != llm.ContentImage {
+		t.Errorf("type = %s, want image", part.Type)
+	}
+	if part.Source == nil {
+		t.Fatal("source is nil")
+	}
+	if part.Source.Type != "base64" {
+		t.Errorf("source type = %s, want base64", part.Source.Type)
+	}
+	if part.Source.MediaType != "image/png" {
+		t.Errorf("media type = %s, want image/png", part.Source.MediaType)
+	}
+	if part.Source.Data != "base64data" {
+		t.Errorf("data = %s, want base64data", part.Source.Data)
 	}
 }
 
@@ -3082,7 +3432,7 @@ func TestNegativeTemperatureRejected(t *testing.T) {
 		Provider:    "ollama",
 		Model:       "llama3",
 		MaxTokens:   100,
-		Temperature: -0.5,
+		Temperature: floatPtr(-0.5),
 	}
 
 	_, err := llm.NewClient(cfg)
@@ -3130,9 +3480,9 @@ func TestThinkingLevelRejectedForOpenAICompat(t *testing.T) {
 	}
 }
 
-// TestThinkingLevelFromConfigRejectedForOpenAICompat verifies that ThinkingLevel
-// set on Config (not Request) is also rejected.
-func TestThinkingLevelFromConfigRejectedForOpenAICompat(t *testing.T) {
+// TestThinkingLevelFromConfigRoutesToResponsesAPI verifies that ThinkingLevel
+// set on Config for a ResponsesAPI model auto-routes to the Responses API provider.
+func TestThinkingLevelFromConfigRoutesToResponsesAPI(t *testing.T) {
 	cfg := llm.Config{
 		Provider:      "openai",
 		Model:         "gpt-5",
@@ -3148,15 +3498,15 @@ func TestThinkingLevelFromConfigRejectedForOpenAICompat(t *testing.T) {
 	}
 	defer client.Close()
 
-	// Request has ThinkingNone, but Config has ThinkingMedium — should still error
+	// Should route to Responses API and get an auth error (not a ThinkingLevel rejection).
 	_, err = client.Complete(context.Background(), llm.Request{
 		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
 	})
 	if err == nil {
-		t.Fatal("Complete should fail when Config.ThinkingLevel is set for openai_compat")
+		t.Fatal("expected API error with test-key")
 	}
-	if !strings.Contains(err.Error(), "ThinkingLevel") {
-		t.Errorf("error = %q, want mention of ThinkingLevel", err.Error())
+	if strings.Contains(err.Error(), "ThinkingLevel") {
+		t.Errorf("ResponsesAPI model should not reject ThinkingLevel, got: %v", err)
 	}
 }
 
@@ -4339,5 +4689,328 @@ func TestAnthropicCacheTokenUsageZero(t *testing.T) {
 	}
 	if resp.CacheReadTokens != 0 {
 		t.Errorf("CacheReadTokens = %d, want 0 (no caching)", resp.CacheReadTokens)
+	}
+}
+
+// TestReasoningModelMaxTokensWireFormat verifies that reasoning models get the
+// correct max tokens parameter based on their provider: OpenAI/xAI use
+// max_completion_tokens, while Mistral/Groq/Ollama use standard max_tokens.
+func TestReasoningModelMaxTokensWireFormat(t *testing.T) {
+	tests := []struct {
+		provider               string
+		model                  string
+		wantMaxTokens          bool // expect max_tokens in wire request
+		wantMaxCompletionToken bool // expect max_completion_tokens in wire request
+	}{
+		// OpenAI reasoning models → max_completion_tokens (gpt-5 family uses Responses API, tested separately)
+		{"openai", "o3-mini", false, true},
+		// xAI reasoning models → max_completion_tokens
+		{"xai", "grok-3-mini", false, true},
+		// Mistral reasoning models → max_tokens
+		{"mistral", "mistral-small-2603", true, false},
+		{"mistral", "magistral-medium-2509", true, false},
+		{"mistral", "magistral-small-2509", true, false},
+		// Groq reasoning models → max_tokens
+		{"groq", "deepseek-r1-distill-llama-70b", true, false},
+		// Ollama reasoning models → max_tokens
+		{"ollama", "qwen3:8b", true, false},
+		// Non-reasoning models → max_tokens
+		{"openai", "gpt-4.1", true, false},
+		{"mistral", "mistral-large-2512", true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.provider+"/"+tt.model, func(t *testing.T) {
+			var captured []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("read body: %v", err)
+				}
+				captured = body
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{
+					"id": "chatcmpl-test",
+					"object": "chat.completion",
+					"model": "` + tt.model + `",
+					"choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+					"usage": {"prompt_tokens": 10, "completion_tokens": 2}
+				}`))
+			}))
+			defer srv.Close()
+
+			cfg := llm.Config{
+				Provider:  tt.provider,
+				Model:     tt.model,
+				APIKey:    "test-key",
+				BaseURL:   srv.URL,
+				MaxTokens: 1024,
+				Timeout:   5 * time.Second,
+			}
+			client, err := llm.NewClient(cfg)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer client.Close()
+
+			_, err = client.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			wireStr := string(captured)
+
+			hasMaxTokens := strings.Contains(wireStr, `"max_tokens"`)
+			hasMaxCompletionTokens := strings.Contains(wireStr, `"max_completion_tokens"`)
+
+			if hasMaxTokens != tt.wantMaxTokens {
+				t.Errorf("max_tokens present=%v, want %v\nwire: %s", hasMaxTokens, tt.wantMaxTokens, wireStr)
+			}
+			if hasMaxCompletionTokens != tt.wantMaxCompletionToken {
+				t.Errorf("max_completion_tokens present=%v, want %v\nwire: %s", hasMaxCompletionTokens, tt.wantMaxCompletionToken, wireStr)
+			}
+
+			// When temperature is nil (default), it should be omitted from wire.
+			// When explicitly set, non-reasoning models on non-OpenAI/xAI providers should include it.
+		})
+	}
+}
+
+// =============================================================================
+// V0.2.1 TESTS
+// =============================================================================
+
+// TestUnknownProviderRequiresBaseURL verifies that unknown providers without BaseURL fail.
+func TestUnknownProviderRequiresBaseURL(t *testing.T) {
+	// Unknown provider without BaseURL → error
+	cfg := llm.Config{
+		Provider:  "typo-provider",
+		Model:     "some-model",
+		APIKey:    "test-key",
+		MaxTokens: 100,
+	}
+	_, err := llm.NewClient(cfg)
+	if err == nil {
+		t.Fatal("expected error for unknown provider without BaseURL")
+	}
+	if !strings.Contains(err.Error(), "unknown provider") {
+		t.Errorf("error = %q, want mention of 'unknown provider'", err.Error())
+	}
+
+	// Unknown provider WITH BaseURL → succeeds
+	cfg.BaseURL = "http://localhost:9999/v1"
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("unknown provider with BaseURL should succeed: %v", err)
+	}
+	client.Close()
+}
+
+// TestTemperatureNilOmitted verifies that nil temperature is not sent on the wire.
+func TestTemperatureNilOmitted(t *testing.T) {
+	adapters := []struct {
+		provider string
+		model    string
+		checkKey string
+	}{
+		{"openai", "gpt-4.1", `"temperature"`},
+		{"anthropic", "claude-sonnet-4-6", `"temperature"`},
+		{"gemini", "gemini-2.0-flash", `"temperature"`},
+	}
+
+	for _, tt := range adapters {
+		t.Run(tt.provider, func(t *testing.T) {
+			var captured []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				captured = body
+				w.Header().Set("Content-Type", "application/json")
+				switch tt.provider {
+				case "anthropic":
+					_, _ = w.Write([]byte(`{"id":"msg-1","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`))
+				case "gemini":
+					_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}}`))
+				default:
+					_, _ = w.Write([]byte(`{"id":"chatcmpl-1","model":"` + tt.model + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`))
+				}
+			}))
+			defer srv.Close()
+
+			cfg := llm.Config{
+				Provider:  tt.provider,
+				Model:     tt.model,
+				APIKey:    "test-key",
+				BaseURL:   srv.URL,
+				MaxTokens: 100,
+				Timeout:   5 * time.Second,
+				// Temperature is nil (default) — should be omitted
+			}
+			client, err := llm.NewClient(cfg)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer client.Close()
+
+			_, err = client.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			if strings.Contains(string(captured), tt.checkKey) {
+				t.Errorf("nil temperature should be omitted from wire for %s\nwire: %s", tt.provider, string(captured))
+			}
+		})
+	}
+}
+
+// TestTemperatureExplicitZero verifies that *float64(0.0) IS sent on the wire.
+func TestTemperatureExplicitZero(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","model":"gpt-4.1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}`))
+	}))
+	defer srv.Close()
+
+	zero := 0.0
+	cfg := llm.Config{
+		Provider:    "openai",
+		Model:       "gpt-4.1",
+		APIKey:      "test-key",
+		BaseURL:     srv.URL,
+		MaxTokens:   100,
+		Temperature: &zero,
+		Timeout:     5 * time.Second,
+	}
+	client, err := llm.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	_, err = client.Complete(context.Background(), llm.Request{
+		Messages:    []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		Temperature: &zero,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if !strings.Contains(string(captured), `"temperature"`) {
+		t.Errorf("explicit zero temperature should be present on wire\nwire: %s", string(captured))
+	}
+}
+
+// TestContextLengthFalsePositives verifies rate-limit-like messages are NOT classified as context length.
+func TestContextLengthFalsePositives(t *testing.T) {
+	falsePositives := []string{
+		"token limit temporarily reached",
+		"per token limit exceeded",
+		"too many tokens in this request batch",
+	}
+
+	for _, msg := range falsePositives {
+		t.Run(msg, func(t *testing.T) {
+			err := llm.NewAPIErrorFromStatus("test", 400, msg)
+			if llm.IsContextLength(err) {
+				t.Errorf("IsContextLength(%q) = true, should be false (false positive)", msg)
+			}
+		})
+	}
+
+	// Also verify true positives still work
+	truePositives := []string{
+		"context length exceeded",
+		"maximum context window exceeded",
+		"prompt is too long",
+		"input too long for model",
+		"request too large",
+		"input token count exceeds the maximum",
+	}
+
+	for _, msg := range truePositives {
+		t.Run("true_"+msg, func(t *testing.T) {
+			err := llm.NewAPIErrorFromStatus("test", 400, msg)
+			if !llm.IsContextLength(err) {
+				t.Errorf("IsContextLength(%q) = false, should be true", msg)
+			}
+		})
+	}
+}
+
+// TestCircuitBreakerCallbackPanic verifies a panicking callback doesn't crash the caller.
+func TestCircuitBreakerCallbackPanic(t *testing.T) {
+	cb := llm.NewCircuitBreaker(1, time.Second,
+		llm.WithOnStateChange(func(from, to llm.CircuitState) {
+			panic("boom from callback")
+		}),
+	)
+
+	// This should NOT panic — the library recovers
+	cb.RecordFailure() // trips threshold=1, fires callback
+
+	// Circuit should still be in the expected state despite panic
+	if cb.State() != llm.CircuitOpen {
+		t.Errorf("State() = %v, want CircuitOpen", cb.State())
+	}
+}
+
+// TestEstimateCostWithCacheTokens verifies cache pricing is applied correctly.
+func TestEstimateCostWithCacheTokens(t *testing.T) {
+	// claude-sonnet-4-6: input=$3/1M, output=$15/1M, cache_write=$3.75/1M, cache_read=$0.30/1M
+	input := llm.CostInput{
+		Model:             "claude-sonnet-4-6",
+		InputTokens:       1000,
+		OutputTokens:      500,
+		CacheCreateTokens: 10000,
+		CacheReadTokens:   5000,
+	}
+	cost := llm.EstimateCost(input)
+
+	// input: 1000 * 3 / 1M = 0.003
+	// output: 500 * 15 / 1M = 0.0075
+	// cache_write: 10000 * 3.75 / 1M = 0.0375
+	// cache_read: 5000 * 0.30 / 1M = 0.0015
+	// total: 0.003 + 0.0075 + 0.0375 + 0.0015 = 0.0495
+	expected := 0.0495
+	if cost < expected-0.001 || cost > expected+0.001 {
+		t.Errorf("EstimateCost with cache tokens = %f, want ~%f", cost, expected)
+	}
+
+	// Verify zero cache tokens don't affect cost
+	noCacheInput := llm.CostInput{
+		Model:        "claude-sonnet-4-6",
+		InputTokens:  1000,
+		OutputTokens: 500,
+	}
+	noCacheCost := llm.EstimateCost(noCacheInput)
+	expectedNoCache := 0.0105 // 0.003 + 0.0075
+	if noCacheCost < expectedNoCache-0.001 || noCacheCost > expectedNoCache+0.001 {
+		t.Errorf("EstimateCost without cache = %f, want ~%f", noCacheCost, expectedNoCache)
+	}
+}
+
+// TestEstimateCostWithThinkingTokens verifies thinking tokens are priced at output rate.
+func TestEstimateCostWithThinkingTokens(t *testing.T) {
+	input := llm.CostInput{
+		Model:          "gemini-2.5-flash",
+		InputTokens:    1000,
+		OutputTokens:   500,
+		ThinkingTokens: 2000,
+	}
+	cost := llm.EstimateCost(input)
+
+	// input: 1000 * 0.15 / 1M = 0.00015
+	// output+thinking: (500+2000) * 0.60 / 1M = 0.0015
+	// total: 0.00165
+	expected := 0.00165
+	if cost < expected-0.0005 || cost > expected+0.0005 {
+		t.Errorf("EstimateCost with thinking tokens = %f, want ~%f", cost, expected)
 	}
 }

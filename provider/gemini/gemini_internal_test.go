@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	llm "github.com/bds421/rho-llm"
@@ -145,5 +146,178 @@ func TestBuildRequestEmptyTextSystemInstructionOmitted(t *testing.T) {
 				t.Errorf("systemInstruction.parts[%d] serializes to empty {}: %+v", j, part)
 			}
 		}
+	}
+}
+
+// TestParseResponseThinkingParts verifies that parts with thought:true go to
+// resp.Thinking while non-thought parts go to resp.Content.
+func TestParseResponseThinkingParts(t *testing.T) {
+	c := &Client{config: llm.Config{Model: "gemini-2.5-flash"}, providerName: "gemini"}
+
+	apiResp := &geminiResponse{
+		Candidates: []struct {
+			Content       geminiContent `json:"content"`
+			FinishReason  string        `json:"finishReason"`
+			SafetyRatings []struct {
+				Category    string `json:"category"`
+				Probability string `json:"probability"`
+			} `json:"safetyRatings"`
+		}{
+			{
+				Content: geminiContent{
+					Parts: []geminiPart{
+						{Text: "Let me think...", Thought: true},
+						{Text: "More reasoning.", Thought: true},
+						{Text: "The answer is 42."},
+					},
+				},
+				FinishReason: "STOP",
+			},
+		},
+	}
+
+	resp := c.parseResponse(apiResp, "gemini-2.5-flash")
+
+	if resp.Content != "The answer is 42." {
+		t.Errorf("Content = %q, want %q", resp.Content, "The answer is 42.")
+	}
+	if resp.Thinking != "Let me think...More reasoning." {
+		t.Errorf("Thinking = %q, want %q", resp.Thinking, "Let me think...More reasoning.")
+	}
+}
+
+// TestParseResponseThoughtsTokenCount verifies that thoughtsTokenCount is
+// exposed as ThinkingTokens on the response, separate from OutputTokens
+// (which maps to CandidatesTokenCount only).
+func TestParseResponseThoughtsTokenCount(t *testing.T) {
+	raw := `{
+		"candidates": [{
+			"content": {"parts": [{"text": "thinking", "thought": true}, {"text": "answer"}]},
+			"finishReason": "STOP"
+		}],
+		"usageMetadata": {
+			"promptTokenCount": 10,
+			"candidatesTokenCount": 5,
+			"totalTokenCount": 115,
+			"thoughtsTokenCount": 100
+		}
+	}`
+
+	var apiResp geminiResponse
+	if err := json.Unmarshal([]byte(raw), &apiResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if apiResp.UsageMetadata.ThoughtsTokenCount != 100 {
+		t.Errorf("ThoughtsTokenCount = %d, want 100", apiResp.UsageMetadata.ThoughtsTokenCount)
+	}
+
+	c := &Client{config: llm.Config{Model: "gemini-2.5-flash"}, providerName: "gemini"}
+	resp := c.parseResponse(&apiResp, "gemini-2.5-flash")
+
+	// OutputTokens maps to CandidatesTokenCount (excludes thinking)
+	if resp.OutputTokens != 5 {
+		t.Errorf("OutputTokens = %d, want 5 (CandidatesTokenCount)", resp.OutputTokens)
+	}
+	// ThinkingTokens exposes the separate thoughtsTokenCount
+	if resp.ThinkingTokens != 100 {
+		t.Errorf("ThinkingTokens = %d, want 100", resp.ThinkingTokens)
+	}
+}
+
+// TestParseStreamThinkingParts verifies that streaming thought parts emit
+// EventThinking while non-thought parts emit EventContent.
+func TestParseStreamThinkingParts(t *testing.T) {
+	// Simulate two SSE chunks: one with a thought part, one with content + usage
+	sseData := "data: " + `{"candidates":[{"content":{"parts":[{"text":"reasoning...","thought":true}]}}]}` + "\n\n" +
+		"data: " + `{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":80}}` + "\n\n"
+
+	c := &Client{providerName: "gemini"}
+	var events []llm.StreamEvent
+	c.parseStream(strings.NewReader(sseData), func(ev llm.StreamEvent, err error) bool {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		events = append(events, ev)
+		return true
+	})
+
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3 (thinking, content, done)", len(events))
+	}
+
+	if events[0].Type != llm.EventThinking || events[0].Thinking != "reasoning..." {
+		t.Errorf("event[0] = %+v, want EventThinking with 'reasoning...'", events[0])
+	}
+	if events[1].Type != llm.EventContent || events[1].Text != "answer" {
+		t.Errorf("event[1] = %+v, want EventContent with 'answer'", events[1])
+	}
+	if events[2].Type != llm.EventDone {
+		t.Errorf("event[2].Type = %v, want EventDone", events[2].Type)
+	}
+	if events[2].ThinkingTokens != 80 {
+		t.Errorf("EventDone.ThinkingTokens = %d, want 80", events[2].ThinkingTokens)
+	}
+}
+
+// TestBuildRequestMaxOutputTokensPaddedForThinkingModel verifies that the
+// Gemini adapter pads maxOutputTokens for models that think by default
+// (e.g. gemini-2.5-flash). Gemini 2.5 models do NOT support thinkingConfig —
+// thinking tokens silently consume maxOutputTokens. The adapter must increase
+// it so the caller's intended output budget isn't starved.
+func TestBuildRequestMaxOutputTokensPaddedForThinkingModel(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "gemini-2.5-flash"},
+		providerName: "gemini",
+	}
+
+	req := llm.Request{
+		MaxTokens: 50,
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "What is 2+2?"}}},
+		},
+	}
+
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	// With MaxTokens: 50, thinking would consume the budget leaving ~5 output
+	// tokens. The adapter should pad maxOutputTokens with a thinking overhead.
+	if apiReq.GenerationConfig.MaxOutputTokens <= 50 {
+		t.Errorf("MaxOutputTokens = %d, want > 50 (should be padded for thinking model)",
+			apiReq.GenerationConfig.MaxOutputTokens)
+	}
+
+	// thinkingConfig should NOT be set — Gemini 2.5 API rejects it
+	if apiReq.ThinkingConfig != nil {
+		t.Error("ThinkingConfig should be nil for gemini-2.5 (API rejects it)")
+	}
+}
+
+// TestBuildRequestMaxOutputTokensNotPaddedForNonThinkingModel verifies that
+// models that do NOT think by default keep maxOutputTokens as-is.
+func TestBuildRequestMaxOutputTokensNotPaddedForNonThinkingModel(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "gemini-2.0-flash"},
+		providerName: "gemini",
+	}
+
+	req := llm.Request{
+		MaxTokens: 50,
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "hi"}}},
+		},
+	}
+
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	if apiReq.GenerationConfig.MaxOutputTokens != 50 {
+		t.Errorf("MaxOutputTokens = %d, want 50 (should not pad for non-thinking model)",
+			apiReq.GenerationConfig.MaxOutputTokens)
 	}
 }

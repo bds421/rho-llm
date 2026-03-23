@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-03-18
+
+### Breaking Changes
+
+- **`Config.Temperature` / `Request.Temperature` changed to `*float64`** — `nil` means "omit from wire" (use provider default). Previously `float64` with default `1.0`. Callers must use a pointer: `temp := 0.7; req.Temperature = &temp`. `DefaultConfig()` no longer sets `Temperature: 1.0` — it is `nil` (omitted).
+
+- **`EstimateCost` signature changed** — Now accepts a single `CostInput` struct instead of `(model, inputTokens, outputTokens)`. The new struct includes `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware and thinking-aware pricing.
+
+- **Unknown providers require `BaseURL`** — `NewClient` with an unrecognized provider name and no `BaseURL` now returns an error instead of silently defaulting to openai_compat with no endpoint. Set `BaseURL` for custom providers.
+
+### Added
+
+- **`CostInput` struct** — Holds all token types for accurate cost estimation: `InputTokens`, `OutputTokens`, `ThinkingTokens`, `CacheCreateTokens`, `CacheReadTokens`.
+
+- **Cache pricing in `ModelInfo`** — New `CacheWritePricePer1M` and `CacheReadPricePer1M` fields. Populated for all Anthropic models (write = 1.25× input, read = 0.1× input per Anthropic docs). `EstimateCost` now includes cache token costs in its calculation.
+
+- **`EstimateCost` thinking token support** — Thinking tokens (Gemini: separate from output) are priced at the output rate. Anthropic bundles thinking in `OutputTokens`, so `ThinkingTokens` is 0 for Anthropic — no double-counting.
+
+### Fixed
+
+- **Context length false positives** — Removed overly broad `"token limit"` and `"too many tokens"` patterns from `isContextLengthMessage()`. These matched rate-limit messages (e.g. "token limit temporarily reached"), causing `IsContextLength()` to misclassify them. Remaining patterns are specific: `"context length"`, `"context_length"`, `"maximum context"`, `"prompt is too long"`, `"input too long"`, `"request too large"`, `"token count exceeds"`.
+
+- **Tool input overflow corrupted stream** — Anthropic and OpenAI-compatible adapters continued parsing after tool input exceeded `MaxToolInputBytes`, producing corrupted tool JSON. Now the stream terminates cleanly with an error on overflow instead of dropping deltas and continuing.
+
+- **Gemini stream tool input unbounded** — Added explicit `MaxToolInputBytes` check in the Gemini streaming adapter for consistency with Anthropic and OpenAI-compatible adapters.
+
+- **Circuit breaker callback panic crashed caller** — A panicking `OnStateChange` callback propagated to the caller. Now recovered with `slog.Error` logging.
+
+- **Anthropic thinking temperature override logged at wrong level** — Changed from `slog.Debug` to `slog.Warn` when overriding user-requested temperature to 1.0 for extended thinking. A silent override of a user-specified parameter should be visible without enabling debug logging.
+
+## [0.1.22] - 2026-03-18
+
+### Added
+
+- **`Response.ThinkingTokens` / `StreamEvent.ThinkingTokens`** — Gemini models that think by default (gemini-2.5-*) report `thoughtsTokenCount` separately from `candidatesTokenCount`. This was previously parsed but discarded. Now exposed so callers can see the full token breakdown. Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` remains 0.
+- **Logging middleware** now includes `tokens_thinking` when > 0, matching the pattern used for cache tokens.
+
+## [0.1.21] - 2026-03-18
+
+### Added
+
+- **Image/vision support for all 3 adapters** — `ContentImage` parts are now fully serialized to the correct wire format for Anthropic (inline `image` blocks with `source`), Gemini (`inlineData` parts), and OpenAI-compatible providers (content array with `image_url` data URIs). Previously all three adapters rejected image content with an error.
+- **`ValidateImageSource()`** — exported validation function checks for nil source, empty data, unsupported media types (`image/jpeg`, `image/png`, `image/gif`, `image/webp` allowed), and unsupported source types (only `base64`). Used by all adapters before serialization.
+- **`NewImageMessage()`** — convenience constructor parallel to `NewTextMessage`, creates a single-image message from role, media type, and base64 data.
+- **Anthropic `cache_control` on image blocks** — image content blocks respect `CacheControl: true` on `ContentPart`, adding `cache_control: {type: "ephemeral"}` to the wire format.
+
+## [0.1.20] - 2026-03-18
+
+### Fixed
+
+- **Ollama reasoning field not parsed** — Ollama (Qwen3) uses `"reasoning"` instead of `"reasoning_content"` for thinking output. The OpenAI-compatible adapter now parses both field names in complete and streaming responses.
+- **Gemini 2.5 thinking tokens starve maxOutputTokens** — Gemini 2.5 models think by default but do not support `thinkingConfig` — the API rejects it. Thinking tokens silently consume the `maxOutputTokens` budget, causing premature `MAX_TOKENS` truncation. The adapter now pads `maxOutputTokens` with a thinking overhead (4096 tokens, capped at model max) for models with intrinsic thinking.
+
+### Changed
+
+- **Gemini 2.5 models marked `Thinking: true`** — `gemini-2.5-pro`, `gemini-2.5-flash`, and `gemini-2.5-flash-lite` now have the `Thinking` flag set in the model registry, reflecting their intrinsic chain-of-thought behavior.
+
+## [0.1.19] - 2026-03-18
+
+### Fixed
+
+- **Gemini thinking content was lost or mixed into Content** — Gemini models that think by default (e.g. `gemini-2.5-flash`) return `thought: true` parts alongside content parts. The adapter now routes thought parts to `resp.Thinking` (non-streaming) and emits `EventThinking` events (streaming) instead of mixing them into `Content`. Also parses `thoughtsTokenCount` from usage metadata.
+- **OpenAI-compat reasoning models returned empty Content** — Models like Qwen3 (`qwen3:4b`) return `reasoning_content` alongside `content` (which may be null). The adapter now parses `reasoning_content` into `resp.Thinking` (non-streaming) and emits `EventThinking` events (streaming). Null `content` no longer causes empty responses.
+
+### Changed
+
+- **Documentation** — README and ARCHITECTURE.md updated to reflect that all three adapters now parse thinking content from responses (Anthropic via `thinking` blocks, Gemini via `thought: true` parts, OpenAI-compat via `reasoning_content`).
+
+## [0.1.18] - 2026-03-18
+
+### Fixed
+
+- **Mistral/Groq/Ollama reasoning models sent wrong max tokens parameter** — The OpenAI-compatible adapter used `max_completion_tokens` (and omitted temperature) for all reasoning models (`Thinking: true`), but this is an OpenAI/xAI-specific API quirk. Mistral (`mistral-small-2603`, `magistral-medium-2509`, `magistral-small-2509`), Groq (`deepseek-r1-distill-*`), and Ollama (`qwen3:*`, `deepseek-r1:*`) reasoning models use standard `max_tokens` and accept temperature. Now scoped to `info.Provider == "openai" || info.Provider == "xai"` only.
+
 ## [0.1.17] - 2026-03-18
 
 ### Added

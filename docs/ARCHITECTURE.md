@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of March 2026 (v0.1.14).
+> **Status:** Reflects the actual implementation as of March 2026 (v0.2.1).
 
 ---
 
@@ -12,6 +12,7 @@
 - Single `Client` interface for all providers and protocols
 - Streaming via Go 1.23 `iter.Seq2[StreamEvent, error]` iterators
 - Tool use / function calling
+- Image/vision support (base64 images in all 3 adapters)
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
 - Auth pool rotation with exponential backoff and per-profile cooldown
 - Structured error types enabling reliable retry classification
@@ -135,6 +136,8 @@ Message
         └── {Type: ContentToolResult, ToolResultID, ToolResultContent, IsError}
 ```
 
+`ContentImage` parts are fully implemented across all three adapters. Each adapter validates images via `ValidateImageSource()` and serializes to its native wire format: Anthropic uses inline `image` blocks with a `source` object; Gemini uses `inlineData` parts; OpenAI-compatible switches content from string to array with `image_url` data URIs. Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+
 `ThoughtSignature` on `tool_use` parts is a Gemini 3 requirement — the model returns an opaque signature that must be echoed back in the corresponding `tool_result` message. The adapters handle this automatically.
 
 ### Stream Events
@@ -147,9 +150,10 @@ type StreamEvent struct {
     ToolCall *ToolCall  // tool_use
     Thinking string     // thinking (Anthropic extended thinking)
 
-    InputTokens  int    // usage / done (-1 = not reported)
-    OutputTokens int    // usage / done (-1 = not reported)
-    StopReason   string // done: "end_turn" | "tool_use" | "max_tokens"
+    InputTokens    int    // usage / done (-1 = not reported)
+    OutputTokens   int    // usage / done (-1 = not reported)
+    ThinkingTokens int    // Gemini: tokens consumed by thinking (0 for other providers)
+    StopReason     string // done: "end_turn" | "tool_use" | "max_tokens"
 
     CacheCreationTokens int // Anthropic: tokens written to cache (EventDone)
     CacheReadTokens     int // Anthropic/Gemini: tokens read from cache (EventDone)
@@ -197,7 +201,7 @@ type ProviderPreset struct {
 }
 ```
 
-`Config.BaseURL` and `Config.AuthHeader` always take precedence, enabling proxy routing and custom deployments. Any unknown provider with a `BaseURL` is treated as OpenAI-compatible.
+`Config.BaseURL` and `Config.AuthHeader` always take precedence, enabling proxy routing and custom deployments. Unknown providers (not in presets) **must** set `BaseURL` — without it, `NewClient` returns an error to prevent typos from silently defaulting to an incorrect endpoint.
 
 ---
 
@@ -293,6 +297,8 @@ Stream():
 **Pre-data vs mid-stream retry:** A stream that fails on the initial HTTP connection (429/503 before any SSE events) is functionally identical to a failed `Complete` — no data has reached the caller, so retry with rotation is safe. Once any event has been yielded via `for-range`, retrying would replay content from scratch with no way for the caller to detect duplication, so mid-stream errors pass through immediately.
 
 `rotateClient()` does NOT close the replaced client — doing so would race with in-flight requests still holding a reference. Orphaned clients are garbage collected; their `Close()` method (which drains idle HTTP connections via `CloseIdleConnections()`) is called by the `refCountedClient` mechanism when the last reference is released.
+
+**`Close()` limitation:** The `Close()` methods on all three adapters call `httpClient.CloseIdleConnections()`, which only drains idle connections. Active streaming connections are not forcefully terminated — they are cleaned up by context cancellation or HTTP timeout. This is the correct Go pattern: `http.Client` has no API for forceful connection termination. To cleanly abort an in-progress stream, cancel the context passed to `Stream()`.
 
 **Thundering herd prevention:** When 50 goroutines hit a 429 simultaneously, naive single-checked locking would let all 50 create new clients. `PooledClient` uses double-checked locking with a dedicated `rotateMu` mutex:
 
@@ -400,16 +406,18 @@ DefaultModels    map[string]string        — provider → default model ID
 `ModelInfo` fields:
 ```go
 type ModelInfo struct {
-    ID, Provider     string
-    MaxTokens        int     // Model output limit (0 = use config)
-    ContextWindow    int     // Max input tokens
-    InputPricePer1M  float64 // USD pricing
-    OutputPricePer1M float64
-    SupportsThinking bool    // API-controlled thinking budgets (Anthropic)
-    ThoughtSignature bool    // Gemini 3: must echo thought_signature in tool results
-    Thinking         bool    // Intrinsic reasoning models (DeepSeek, Grok)
-    NoToolSupport    bool    // Model lacks function calling capabilities
-    Label            string  // Short display name
+    ID, Provider         string
+    MaxTokens            int     // Model output limit (0 = use config)
+    ContextWindow        int     // Max input tokens
+    InputPricePer1M      float64 // USD pricing
+    OutputPricePer1M     float64
+    CacheWritePricePer1M float64 // Anthropic: per 1M cache creation tokens
+    CacheReadPricePer1M  float64 // Anthropic/Gemini: per 1M cached input tokens
+    SupportsThinking     bool    // API-controlled thinking budgets (Anthropic)
+    ThoughtSignature     bool    // Gemini 3: must echo thought_signature in tool results
+    Thinking             bool    // Intrinsic reasoning models (DeepSeek, Grok)
+    NoToolSupport        bool    // Model lacks function calling capabilities
+    Label                string  // Short display name
 }
 ```
 
@@ -418,7 +426,7 @@ type ModelInfo struct {
 Different LLM providers implement chain-of-thought reasoning in fundamentally different ways. The registry abstracts these semantic capabilities:
 
 1. **API-Controlled Budgets (`SupportsThinking: true`)**
-   Models like Anthropic's Claude 4 series require the client to explicitly allocate a "thinking budget" in the API request payload. The config `ThinkingLevel` is mapped into this budget. Only the `anthropic` and `gemini` adapters support this — the OpenAI-compatible adapter returns an explicit error if `ThinkingLevel` is set, since the OpenAI chat completions API has no equivalent parameter.
+   Models like Anthropic's Claude 4 series require the client to explicitly allocate a "thinking budget" in the API request payload. The config `ThinkingLevel` is mapped into this budget. Only the `anthropic` and `gemini` adapters support *requesting* thinking — the OpenAI-compatible adapter returns an explicit error if `ThinkingLevel` is set, since the OpenAI chat completions API has no equivalent parameter. However, all three adapters **parse** thinking from responses: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, and OpenAI-compat via the `reasoning_content` field.
 
 2. **Intrinsic Reasoning (`Thinking: true`)**
    Models like DeepSeek-R1 and Grok 4 Reasoning emit chain-of-thought intrinsically inside their standard output streams. They do not require specific API flags to enable this, but the registry flags them so your application knows they will consume output tokens for reasoning before answering.
@@ -431,7 +439,7 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 | xAI | grok-4-1-fast-{reasoning,non-reasoning}, grok-4-fast-{reasoning,non-reasoning}, grok-code-fast-1, grok-3, grok-3-mini |
 | Gemini | gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
 
-`EstimateCost(model, inputTokens, outputTokens)` returns a USD float from registry pricing. Returns `0` if the model is unknown.
+`EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0.
 
 ---
 
@@ -490,6 +498,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Auth: `x-goog-api-key` header (moved from URL query parameter in v0.1.9 to prevent key leakage)
 - Streaming: SSE with JSON chunks
 - `ThoughtSignature`: when a model has `ThoughtSignature: true` in the registry, function call responses include a `thought_signature` field that must be preserved and echoed in subsequent `tool_result` parts
+- Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is exposed as `resp.ThinkingTokens` / `event.ThinkingTokens`, separate from `OutputTokens` (which maps to `candidatesTokenCount` only). Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` is 0.
 - System prompt: mapped to `systemInstruction.parts[0].text`
 - Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`.
 
@@ -502,6 +511,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
   - OpenAI sends `finish_reason` and `usage` in **separate chunks**: the parser accumulates state across chunks and emits `EventDone` with complete data after `[DONE]`
   - Tool calls are flushed before `EventDone` even if `finish_reason` is missing (handles network drops and spec-violating servers like Ollama)
 - Tool use: OpenAI function-calling format, translated to/from the shared `ToolCall` types. Multiple tool results in a single Anthropic-style message are expanded to separate `role: "tool"` messages as OpenAI requires.
+- Thinking: `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.) is parsed into `resp.Thinking` / `EventThinking`. Requesting thinking via `ThinkingLevel` is still rejected — the adapter can *parse* thinking from models that think by default, but cannot *request* it.
 - Works for: OpenAI, xAI/Grok, Groq, Cerebras, Mistral, OpenRouter, Ollama, vLLM, LM Studio, any custom proxy
 
 ---
@@ -514,7 +524,7 @@ type Config struct {
     Model            string         // Model ID or alias
     APIKey           string         // API key (empty OK for no-auth providers)
     MaxTokens        int            // Max output tokens (default: 8192)
-    Temperature      float64        // Sampling temperature (default: 1.0)
+    Temperature      *float64       // Sampling temperature (nil = omit from wire, provider default)
     ThinkingLevel    ThinkingLevel  // ThinkingLow | ThinkingMedium | ThinkingHigh (zero = none)
     Timeout          time.Duration  // HTTP timeout (default: 120s)
     BaseURL          string         // Override provider endpoint
@@ -538,7 +548,7 @@ type Config struct {
 Provider:         "anthropic"
 Model:            "claude-sonnet-4-6"
 MaxTokens:        8192
-Temperature:      1.0
+Temperature:      nil (omitted from wire)
 ThinkingLevel:    "" (ThinkingNone)
 Timeout:          120s
 AuthHeader:       "Bearer"

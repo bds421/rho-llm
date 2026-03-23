@@ -35,14 +35,19 @@ func newSingleClient(cfg Config) (Client, error) {
 	if cfg.MaxTokens < 0 {
 		return nil, fmt.Errorf("MaxTokens must be >= 0, got %d", cfg.MaxTokens)
 	}
-	if cfg.Temperature < 0 {
-		return nil, fmt.Errorf("Temperature must be >= 0, got %f", cfg.Temperature)
+	if cfg.Temperature != nil && *cfg.Temperature < 0 {
+		return nil, fmt.Errorf("Temperature must be >= 0, got %f", *cfg.Temperature)
 	}
 
 	// Apply timeout floor — prevents unbounded HTTP clients when callers
 	// construct Config manually without calling DefaultConfig().
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = DefaultTimeout
+	}
+
+	// Unknown providers must specify a BaseURL for custom endpoints.
+	if _, known := PresetFor(cfg.Provider); !known && cfg.BaseURL == "" {
+		return nil, fmt.Errorf("unknown provider %q: set BaseURL for custom providers", cfg.Provider)
 	}
 
 	protocol := ResolveProtocol(cfg)

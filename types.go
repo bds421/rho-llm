@@ -7,6 +7,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
 	"time"
 )
@@ -49,10 +50,22 @@ const (
 type ThinkingLevel string
 
 const (
-	ThinkingNone   ThinkingLevel = ""
-	ThinkingLow    ThinkingLevel = "low"
-	ThinkingMedium ThinkingLevel = "medium"
-	ThinkingHigh   ThinkingLevel = "high"
+	ThinkingNone    ThinkingLevel = ""
+	ThinkingMinimal ThinkingLevel = "minimal" // OpenAI: minimal reasoning effort
+	ThinkingLow      ThinkingLevel = "low"
+	ThinkingMedium   ThinkingLevel = "medium"
+	ThinkingHigh     ThinkingLevel = "high"
+	ThinkingXHigh    ThinkingLevel = "xhigh" // OpenAI: maximum reasoning effort
+)
+
+// ReasoningSummary controls whether reasoning summary text is included in responses.
+type ReasoningSummary string
+
+const (
+	ReasoningSummaryNone     ReasoningSummary = ""         // omit from request
+	ReasoningSummaryAuto     ReasoningSummary = "auto"     // provider decides
+	ReasoningSummaryDetailed ReasoningSummary = "detailed" // detailed summary
+	ReasoningSummaryConcise  ReasoningSummary = "concise"  // concise summary
 )
 
 // ThinkingBudgetTokens returns the default token budget for a thinking level.
@@ -118,6 +131,50 @@ type ImageSource struct {
 	Type      string `json:"type"`       // base64
 	MediaType string `json:"media_type"` // image/jpeg, image/png, etc.
 	Data      string `json:"data"`       // base64 encoded data
+}
+
+// validImageMediaTypes lists the MIME types accepted for image content.
+var validImageMediaTypes = map[string]bool{
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+// ValidateImageSource checks that a ContentImage part has a valid, non-empty
+// source with a supported media type. Called by adapter buildRequest methods
+// before serializing image content to the wire format.
+func ValidateImageSource(part ContentPart) error {
+	if part.Source == nil {
+		return fmt.Errorf("image source must not be nil")
+	}
+	if part.Source.Data == "" {
+		return fmt.Errorf("image data must not be empty")
+	}
+	if !validImageMediaTypes[part.Source.MediaType] {
+		return fmt.Errorf("unsupported image media type: %s", part.Source.MediaType)
+	}
+	if part.Source.Type != "base64" {
+		return fmt.Errorf("unsupported image source type: %s", part.Source.Type)
+	}
+	return nil
+}
+
+// NewImageMessage creates a single-image message (parallel to NewTextMessage).
+func NewImageMessage(role Role, mediaType, base64Data string) Message {
+	return Message{
+		Role: role,
+		Content: []ContentPart{
+			{
+				Type: ContentImage,
+				Source: &ImageSource{
+					Type:      "base64",
+					MediaType: mediaType,
+					Data:      base64Data,
+				},
+			},
+		},
+	}
 }
 
 // NewTextMessage creates a simple text message.
@@ -204,11 +261,12 @@ type Request struct {
 	Messages      []Message     `json:"messages"`
 	System        string        `json:"system,omitempty"`
 	MaxTokens     int           `json:"max_tokens"`
-	Temperature   float64       `json:"temperature"`
+	Temperature   *float64      `json:"temperature,omitempty"`
 	Tools         []Tool        `json:"tools,omitempty"`
-	ThinkingLevel  ThinkingLevel `json:"thinking_level,omitempty"`  // low, medium, high (zero value = none)
-	ThinkingBudget int           `json:"thinking_budget,omitempty"` // custom token budget; overrides ThinkingLevel default when > 0
-	StopSequences  []string      `json:"stop_sequences,omitempty"`
+	ThinkingLevel    ThinkingLevel    `json:"thinking_level,omitempty"`    // low, medium, high (zero value = none)
+	ThinkingBudget   int              `json:"thinking_budget,omitempty"`   // custom token budget; overrides ThinkingLevel default when > 0
+	ReasoningSummary ReasoningSummary `json:"reasoning_summary,omitempty"` // OpenAI Responses API: auto, detailed, concise
+	StopSequences    []string         `json:"stop_sequences,omitempty"`
 
 	// Caching
 	SystemCacheControl bool   `json:"system_cache_control,omitempty"` // Anthropic: cache the system prompt
@@ -223,8 +281,9 @@ type Response struct {
 	ToolCalls    []ToolCall `json:"tool_calls"`  // Tool use requests
 	Thinking     string     `json:"thinking"`    // Extended thinking content
 	StopReason   string     `json:"stop_reason"` // end_turn, tool_use, max_tokens
-	InputTokens  int        `json:"input_tokens"`
-	OutputTokens int        `json:"output_tokens"`
+	InputTokens    int `json:"input_tokens"`
+	OutputTokens   int `json:"output_tokens"`
+	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
 
 	// Cache token usage (Anthropic)
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache
@@ -249,8 +308,9 @@ type StreamEvent struct {
 	Thinking string `json:"thinking,omitempty"`
 
 	// Usage event
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
+	InputTokens    int `json:"input_tokens,omitempty"`
+	OutputTokens   int `json:"output_tokens,omitempty"`
+	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking
 
 	// Done event
 	StopReason string `json:"stop_reason,omitempty"`

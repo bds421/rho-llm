@@ -83,8 +83,8 @@ type Config struct {
 	// Maximum output tokens.
 	MaxTokens int `json:"max_tokens"`
 
-	// Sampling temperature.
-	Temperature float64 `json:"temperature"`
+	// Sampling temperature. nil = omit from wire (provider default).
+	Temperature *float64 `json:"temperature,omitempty"`
 
 	// Extended thinking level: ThinkingLow, ThinkingMedium, ThinkingHigh (zero value = none).
 	ThinkingLevel ThinkingLevel `json:"thinking_level"`
@@ -168,7 +168,6 @@ func DefaultConfig() Config {
 		Provider:         "anthropic",
 		Model:            "claude-sonnet-4-6",
 		MaxTokens:        8192,
-		Temperature:      1.0,
 		ThinkingLevel:    ThinkingNone,
 		Timeout:          DefaultTimeout,
 		AuthHeader:       "Bearer",

@@ -194,9 +194,16 @@ type geminiContent struct {
 
 type geminiPart struct {
 	Text             string                  `json:"text,omitempty"`
+	Thought          bool                    `json:"thought,omitempty"`
+	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
 	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
 	ThoughtSignature string                  `json:"thoughtSignature,omitempty"` // Gemini 3: part-level thought signature
+}
+
+type geminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
 }
 
 type geminiFunctionCall struct {
@@ -210,7 +217,7 @@ type geminiFunctionResponse struct {
 }
 
 type geminiGenerationConfig struct {
-	Temperature     float64  `json:"temperature"`
+	Temperature     *float64 `json:"temperature,omitempty"`
 	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
 	StopSequences   []string `json:"stopSequences,omitempty"`
 }
@@ -238,6 +245,7 @@ type geminiResponse struct {
 		PromptTokenCount        int `json:"promptTokenCount"`
 		CandidatesTokenCount    int `json:"candidatesTokenCount"`
 		TotalTokenCount         int `json:"totalTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
 		CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 	} `json:"usageMetadata"`
 	ModelVersion string `json:"modelVersion"`
@@ -246,7 +254,7 @@ type geminiResponse struct {
 func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	apiReq := geminiRequest{
 		GenerationConfig: &geminiGenerationConfig{
-			Temperature:     req.Temperature,
+			Temperature:     req.Temperature, // nil = omit from wire (provider default)
 			MaxOutputTokens: req.MaxTokens,
 		},
 		CachedContent: req.CachedContent,
@@ -297,7 +305,15 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				}
 
 			case llm.ContentImage:
-				return geminiRequest{}, fmt.Errorf("image content not yet supported by %s adapter", c.providerName)
+				if err := llm.ValidateImageSource(part); err != nil {
+					return geminiRequest{}, err
+				}
+				content.Parts = append(content.Parts, geminiPart{
+					InlineData: &geminiInlineData{
+						MimeType: part.Source.MediaType,
+						Data:     part.Source.Data,
+					},
+				})
 
 			case llm.ContentToolUse:
 				gp := geminiPart{
@@ -347,6 +363,26 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		}
 	}
 
+	// Gemini 2.5 models think by default but do NOT support thinkingConfig —
+	// the API rejects it. Thinking tokens silently consume maxOutputTokens.
+	// Pad maxOutputTokens so the caller's intended output budget isn't starved.
+	{
+		model := req.Model
+		if model == "" {
+			model = c.config.Model
+		}
+		if info, ok := llm.GetModelInfo(model); ok && info.Thinking {
+			cur := apiReq.GenerationConfig.MaxOutputTokens
+			if cur > 0 {
+				padded := cur + llm.ThinkingBudgetTokens(llm.ThinkingLow, 0)
+				if info.MaxTokens > 0 && padded > info.MaxTokens {
+					padded = info.MaxTokens
+				}
+				apiReq.GenerationConfig.MaxOutputTokens = padded
+			}
+		}
+	}
+
 	// Convert tools
 	if len(req.Tools) > 0 {
 		tool := geminiTool{}
@@ -373,6 +409,7 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 		Model:           model,
 		InputTokens:     apiResp.UsageMetadata.PromptTokenCount,
 		OutputTokens:    apiResp.UsageMetadata.CandidatesTokenCount,
+		ThinkingTokens:  apiResp.UsageMetadata.ThoughtsTokenCount,
 		CacheReadTokens: apiResp.UsageMetadata.CachedContentTokenCount,
 	}
 
@@ -383,7 +420,11 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 		callIndex := 0
 		for _, part := range candidate.Content.Parts {
 			if part.Text != "" {
-				resp.Content += part.Text
+				if part.Thought {
+					resp.Thinking += part.Text
+				} else {
+					resp.Content += part.Text
+				}
 			}
 			if part.FunctionCall != nil {
 				tc := llm.ToolCall{
@@ -432,11 +473,22 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 			for _, part := range candidate.Content.Parts {
 				if part.Text != "" {
-					if !yield(llm.StreamEvent{Type: llm.EventContent, Text: part.Text}, nil) {
-						return
+					if part.Thought {
+						if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: part.Text}, nil) {
+							return
+						}
+					} else {
+						if !yield(llm.StreamEvent{Type: llm.EventContent, Text: part.Text}, nil) {
+							return
+						}
 					}
 				}
 				if part.FunctionCall != nil {
+					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+					if len(argsJSON) > llm.MaxToolInputBytes {
+						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+						return
+					}
 					tc := &llm.ToolCall{
 						ID:    makeToolCallID(callIndex, part.FunctionCall.Name),
 						Name:  part.FunctionCall.Name,
@@ -463,6 +515,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					StopReason:      normalizeStopReason(candidate.FinishReason),
 					InputTokens:     event.UsageMetadata.PromptTokenCount,
 					OutputTokens:    event.UsageMetadata.CandidatesTokenCount,
+					ThinkingTokens:  event.UsageMetadata.ThoughtsTokenCount,
 					CacheReadTokens: event.UsageMetadata.CachedContentTokenCount,
 				}, nil) {
 					return

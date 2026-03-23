@@ -1,6 +1,6 @@
 # rho-llm
 
-Multi-provider LLM client for Go. Streaming, tool use, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
+Multi-provider LLM client for Go. Streaming, tool use, image/vision support, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
 
 **Requires Go 1.26+** (`go 1.26.0` in `go.mod`).
 
@@ -67,13 +67,48 @@ cfg := llm.Config{
 ```
 
 #### Custom OpenAI-compatible endpoint
+
+Unknown providers (not in the presets list) **must** set `BaseURL`. Without it, `NewClient` returns an error to prevent typos from silently defaulting to an incorrect endpoint.
+
 ```go
 cfg := llm.Config{
     Provider:   "custom",
-    BaseURL:    "http://my-proxy:8080/v1",
+    BaseURL:    "http://my-proxy:8080/v1", // required for unknown providers
     APIKey:     "my-key",
 }
 ```
+
+## Image / Vision Support
+
+Send images to vision-capable models using `ContentImage` parts with base64-encoded data. All three protocol adapters serialize images to the correct wire format automatically.
+
+```go
+import (
+    "encoding/base64"
+    "os"
+)
+
+imgBytes, _ := os.ReadFile("photo.png")
+imgData := base64.StdEncoding.EncodeToString(imgBytes)
+
+req := llm.Request{
+    Messages: []llm.Message{{
+        Role: llm.RoleUser,
+        Content: []llm.ContentPart{
+            {Type: llm.ContentText, Text: "What do you see in this image?"},
+            {Type: llm.ContentImage, Source: &llm.ImageSource{
+                Type: "base64", MediaType: "image/png", Data: imgData,
+            }},
+        },
+    }},
+}
+resp, err := client.Complete(ctx, req)
+
+// Or use the convenience helper for single-image messages:
+msg := llm.NewImageMessage(llm.RoleUser, "image/png", imgData)
+```
+
+Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
 
 ## Streaming
 
@@ -138,7 +173,7 @@ req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, "location no
 
 Many modern models support reasoning (chain-of-thought) capabilities where they expose their internal thought processes before outputting the final answer. 
 
-You can check if a given model natively supports extended thinking by checking the registry. ThinkingLevel is only supported by the `anthropic` and `gemini` providers — the OpenAI-compatible adapter returns an error if ThinkingLevel is set.
+You can check if a given model natively supports extended thinking by checking the registry. ThinkingLevel is only supported by the `anthropic` and `gemini` providers — the OpenAI-compatible adapter returns an error if ThinkingLevel is set. However, all three adapters **parse** thinking content from responses: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, and OpenAI-compat via the `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.).
 
 ```go
 info, ok := llm.GetModelInfo("claude-opus-4-6")
@@ -171,7 +206,7 @@ req := llm.Request{
 }
 ```
 
-**Note:** Anthropic's API requires `temperature = 1.0` when extended thinking is enabled. The adapter enforces this automatically. A debug-level log is emitted when a temperature override occurs.
+**Note:** Anthropic's API requires `temperature = 1.0` when extended thinking is enabled. The adapter enforces this automatically. A warning-level log is emitted when a temperature override occurs.
 
 If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
 
@@ -340,7 +375,14 @@ if err != nil {
 Estimate cost from token counts using registry pricing data:
 
 ```go
-cost := llm.EstimateCost("claude-sonnet-4-6", resp.InputTokens, resp.OutputTokens)
+cost := llm.EstimateCost(llm.CostInput{
+    Model:             "claude-sonnet-4-6",
+    InputTokens:       resp.InputTokens,
+    OutputTokens:      resp.OutputTokens,
+    ThinkingTokens:    resp.ThinkingTokens,
+    CacheCreateTokens: resp.CacheCreationTokens,
+    CacheReadTokens:   resp.CacheReadTokens,
+})
 fmt.Printf("Cost: $%.6f\n", cost)
 
 // Access pricing data directly
@@ -391,7 +433,7 @@ delay = p.Delay(attempt)
 | Model | string | "claude-sonnet-4-6" | Model identifier |
 | APIKey | string | "" | API key (empty OK for local providers) |
 | MaxTokens | int | 8192 | Max output tokens |
-| Temperature | float64 | 1.0 | Sampling temperature |
+| Temperature | *float64 | nil | Sampling temperature (nil = provider default, omitted from wire) |
 | ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingLow/ThinkingMedium/ThinkingHigh |
 | Timeout | Duration | 120s | HTTP timeout |
 | BaseURL | string | "" | Override provider endpoint |
@@ -498,8 +540,8 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 ### Cost and metadata
 
 ```go
-// Estimate cost from token counts
-cost := llm.EstimateCost("claude-sonnet-4-6", inputTokens, outputTokens)
+// Estimate cost from token counts (cache-aware)
+cost := llm.EstimateCost(llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: inputTokens, OutputTokens: outputTokens})
 
 // Query per-model metadata (context window, pricing, thinking support)
 info, ok := llm.GetModelInfo("grok-4.20-beta")
