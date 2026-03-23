@@ -5,6 +5,7 @@
 *.so
 *.dylib
 .env
+.claude
 
 # Test binary
 *.test
