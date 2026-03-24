@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-03-24
+
+### Fixed
+
+- **Gemini `thinkingConfig` at wrong JSON level** — Was a top-level field on the request body; Gemini API expects it nested inside `generationConfig`. Caused `400: Unknown name "thinkingConfig"` on any request with `ThinkingLevel` set.
+
+- **Gemini `thinkingConfig` sent to native thinking models** — Gemini 2.5 models (`Thinking: true`) think natively and reject explicit `thinkingConfig`. Setting `ThinkingLevel` on these models now correctly skips `thinkingConfig` while still padding `MaxOutputTokens`.
+
+### Added
+
+- **Gemini `thinkingLevel` string support** — Standard levels (`low`, `medium`, `high`) now send Gemini 3's native `thinkingLevel` string instead of converting to `thinkingBudget` tokens. Non-standard levels (`minimal`, `xhigh`) and custom budgets fall back to `thinkingBudget`. The two fields are mutually exclusive per Gemini API requirements.
+
 ## [0.2.2] - 2026-03-24
 
 ### Fixed

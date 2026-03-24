@@ -291,8 +291,41 @@ func TestBuildRequestMaxOutputTokensPaddedForThinkingModel(t *testing.T) {
 	}
 
 	// thinkingConfig should NOT be set — Gemini 2.5 API rejects it
-	if apiReq.ThinkingConfig != nil {
+	if apiReq.GenerationConfig.ThinkingConfig != nil {
 		t.Error("ThinkingConfig should be nil for gemini-2.5 (API rejects it)")
+	}
+}
+
+// TestBuildRequestThinkingConfigSkippedForNativeThinkingModel verifies that
+// setting ThinkingLevel on a Gemini 2.5 model (Thinking: true) does NOT
+// produce thinkingConfig — the API rejects it.
+func TestBuildRequestThinkingConfigSkippedForNativeThinkingModel(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "gemini-2.5-flash"},
+		providerName: "gemini",
+	}
+
+	req := llm.Request{
+		MaxTokens:     100,
+		ThinkingLevel: llm.ThinkingHigh,
+		Messages: []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "think"),
+		},
+	}
+
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	if apiReq.GenerationConfig.ThinkingConfig != nil {
+		t.Error("ThinkingConfig should be nil for gemini-2.5-flash (native thinking model)")
+	}
+
+	// MaxOutputTokens should still be padded
+	if apiReq.GenerationConfig.MaxOutputTokens <= 100 {
+		t.Errorf("MaxOutputTokens = %d, want > 100 (should be padded)",
+			apiReq.GenerationConfig.MaxOutputTokens)
 	}
 }
 
@@ -322,13 +355,120 @@ func TestBuildRequestMaxOutputTokensNotPaddedForNonThinkingModel(t *testing.T) {
 	}
 }
 
+// TestBuildRequestThinkingConfigInsideGenerationConfig verifies that
+// thinkingConfig is nested inside generationConfig (not top-level).
+func TestBuildRequestThinkingConfigInsideGenerationConfig(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "gemini-3-pro-preview"},
+		providerName: "gemini",
+	}
+
+	req := llm.Request{
+		MaxTokens:     1024,
+		ThinkingLevel: llm.ThinkingMedium,
+		Messages: []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "reason about this"),
+		},
+	}
+
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	tc := apiReq.GenerationConfig.ThinkingConfig
+	if tc == nil {
+		t.Fatal("GenerationConfig.ThinkingConfig is nil, want non-nil")
+	}
+
+	// Standard level → string-based thinkingLevel, not thinkingBudget
+	if tc.ThinkingLevel != "medium" {
+		t.Errorf("ThinkingLevel = %q, want %q", tc.ThinkingLevel, "medium")
+	}
+	if tc.ThinkingBudget != 0 {
+		t.Errorf("ThinkingBudget = %d, want 0 (should use ThinkingLevel string)", tc.ThinkingBudget)
+	}
+
+	// Verify JSON nesting via marshal
+	data, err := json.Marshal(apiReq)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, ok := raw["thinkingConfig"]; ok {
+		t.Error("thinkingConfig found at top level — must be nested inside generationConfig")
+	}
+	var gc map[string]json.RawMessage
+	if err := json.Unmarshal(raw["generationConfig"], &gc); err != nil {
+		t.Fatalf("Unmarshal generationConfig: %v", err)
+	}
+	if _, ok := gc["thinkingConfig"]; !ok {
+		t.Error("thinkingConfig not found inside generationConfig")
+	}
+}
+
+// TestBuildRequestThinkingLevelStringMapping verifies the ThinkingLevel →
+// Gemini thinkingLevel/thinkingBudget mapping.
+func TestBuildRequestThinkingLevelStringMapping(t *testing.T) {
+	tests := []struct {
+		name       string
+		level      llm.ThinkingLevel
+		wantLevel  string // expected thinkingLevel string (empty = use budget)
+		wantBudget bool   // true if thinkingBudget should be set instead
+	}{
+		{"low", llm.ThinkingLow, "low", false},
+		{"medium", llm.ThinkingMedium, "medium", false},
+		{"high", llm.ThinkingHigh, "high", false},
+		{"minimal_fallback", llm.ThinkingMinimal, "", true},
+		{"xhigh_fallback", llm.ThinkingXHigh, "", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Client{
+				config:       llm.Config{Model: "gemini-3-pro-preview"},
+				providerName: "gemini",
+			}
+			apiReq, err := c.buildRequest(llm.Request{
+				MaxTokens:     1024,
+				ThinkingLevel: tc.level,
+				Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			})
+			if err != nil {
+				t.Fatalf("buildRequest: %v", err)
+			}
+			cfg := apiReq.GenerationConfig.ThinkingConfig
+			if cfg == nil {
+				t.Fatal("ThinkingConfig is nil")
+			}
+			if tc.wantLevel != "" {
+				if cfg.ThinkingLevel != tc.wantLevel {
+					t.Errorf("ThinkingLevel = %q, want %q", cfg.ThinkingLevel, tc.wantLevel)
+				}
+				if cfg.ThinkingBudget != 0 {
+					t.Errorf("ThinkingBudget = %d, want 0", cfg.ThinkingBudget)
+				}
+			} else {
+				if cfg.ThinkingBudget == 0 {
+					t.Error("ThinkingBudget = 0, want > 0 (fallback to token budget)")
+				}
+				if cfg.ThinkingLevel != "" {
+					t.Errorf("ThinkingLevel = %q, want empty", cfg.ThinkingLevel)
+				}
+			}
+		})
+	}
+}
+
 // TestBuildRequestThinkingBudgetClampedToModelMax verifies that a thinking
 // budget exceeding the model's MaxTokens is clamped.
 func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
-	// gemini-2.5-flash has MaxTokens=65536 in the registry — ThinkingXHigh
-	// (128000) exceeds it and must be clamped.
+	// gemini-3-pro-preview has MaxTokens=65536 — ThinkingXHigh (128000) exceeds it.
 	c := &Client{
-		config:       llm.Config{Model: "gemini-2.5-flash"},
+		config:       llm.Config{Model: "gemini-3-pro-preview"},
 		providerName: "gemini",
 	}
 
@@ -345,16 +485,51 @@ func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
 		t.Fatalf("buildRequest: %v", err)
 	}
 
-	info, ok := llm.GetModelInfo("gemini-2.5-flash")
+	info, ok := llm.GetModelInfo("gemini-3-pro-preview")
 	if !ok {
-		t.Fatal("gemini-2.5-flash not in registry")
+		t.Fatal("gemini-3-pro-preview not in registry")
 	}
 
-	if apiReq.ThinkingConfig == nil {
+	tc := apiReq.GenerationConfig.ThinkingConfig
+	if tc == nil {
 		t.Fatal("ThinkingConfig is nil, want non-nil")
 	}
-	if apiReq.ThinkingConfig.ThinkingBudget > info.MaxTokens {
+	if tc.ThinkingBudget > info.MaxTokens {
 		t.Errorf("ThinkingBudget = %d, want <= %d (model MaxTokens)",
-			apiReq.ThinkingConfig.ThinkingBudget, info.MaxTokens)
+			tc.ThinkingBudget, info.MaxTokens)
+	}
+}
+
+// TestBuildRequestCustomThinkingBudget verifies that a custom ThinkingBudget
+// overrides the level and uses thinkingBudget (not thinkingLevel).
+func TestBuildRequestCustomThinkingBudget(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "gemini-3-pro-preview"},
+		providerName: "gemini",
+	}
+
+	req := llm.Request{
+		MaxTokens:      1024,
+		ThinkingLevel:  llm.ThinkingMedium,
+		ThinkingBudget: 8192,
+		Messages: []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "hi"),
+		},
+	}
+
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	tc := apiReq.GenerationConfig.ThinkingConfig
+	if tc == nil {
+		t.Fatal("ThinkingConfig is nil")
+	}
+	if tc.ThinkingBudget != 8192 {
+		t.Errorf("ThinkingBudget = %d, want 8192", tc.ThinkingBudget)
+	}
+	if tc.ThinkingLevel != "" {
+		t.Errorf("ThinkingLevel = %q, want empty (custom budget overrides)", tc.ThinkingLevel)
 	}
 }

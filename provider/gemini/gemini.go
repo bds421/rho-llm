@@ -179,12 +179,12 @@ type geminiRequest struct {
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 	Tools             []geminiTool            `json:"tools,omitempty"`
-	ThinkingConfig    *geminiThinkingConfig   `json:"thinkingConfig,omitempty"`
 	CachedContent     string                  `json:"cachedContent,omitempty"` // pre-created cache resource name
 }
 
 type geminiThinkingConfig struct {
-	ThinkingBudget int `json:"thinkingBudget,omitempty"`
+	ThinkingBudget int    `json:"thinkingBudget,omitempty"` // token count (mutually exclusive with ThinkingLevel)
+	ThinkingLevel  string `json:"thinkingLevel,omitempty"`  // Gemini 3: "low", "medium", "high"
 }
 
 type geminiContent struct {
@@ -217,9 +217,10 @@ type geminiFunctionResponse struct {
 }
 
 type geminiGenerationConfig struct {
-	Temperature     *float64 `json:"temperature,omitempty"`
-	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
-	StopSequences   []string `json:"stopSequences,omitempty"`
+	Temperature     *float64              `json:"temperature,omitempty"`
+	MaxOutputTokens int                   `json:"maxOutputTokens,omitempty"`
+	StopSequences   []string              `json:"stopSequences,omitempty"`
+	ThinkingConfig  *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
 }
 
 type geminiTool struct {
@@ -351,46 +352,66 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		apiReq.GenerationConfig.StopSequences = req.StopSequences
 	}
 
-	// Configure thinking budget
+	// Configure thinking
 	thinkingLevel := req.ThinkingLevel
 	if thinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
 		thinkingLevel = c.config.ThinkingLevel
 	}
-	if thinkingLevel != llm.ThinkingNone {
-		budget := llm.ThinkingBudgetTokens(thinkingLevel, req.ThinkingBudget)
-		// Clamp budget to model's max output tokens to avoid API rejection.
-		model := req.Model
-		if model == "" {
-			model = c.config.Model
+
+	model := req.Model
+	if model == "" {
+		model = c.config.Model
+	}
+	info, hasInfo := llm.GetModelInfo(model)
+
+	if thinkingLevel != llm.ThinkingNone && !(hasInfo && info.Thinking) {
+		// Gemini 3+ models accept thinkingConfig inside generationConfig.
+		// Gemini 2.5 models (info.Thinking == true) think natively and
+		// reject thinkingConfig — skip for those.
+		tc := &geminiThinkingConfig{}
+
+		// Prefer string-based thinkingLevel for standard levels (Gemini 3);
+		// fall back to thinkingBudget for custom budgets or non-standard levels.
+		if req.ThinkingBudget > 0 {
+			budget := req.ThinkingBudget
+			if hasInfo && info.MaxTokens > 0 && budget > info.MaxTokens {
+				slog.Warn("clamping thinking budget to model max_tokens",
+					"provider", c.providerName, "model", model,
+					"requested", budget, "max", info.MaxTokens)
+				budget = info.MaxTokens
+			}
+			tc.ThinkingBudget = budget
+		} else {
+			switch thinkingLevel {
+			case llm.ThinkingLow, llm.ThinkingMedium, llm.ThinkingHigh:
+				tc.ThinkingLevel = string(thinkingLevel)
+			default:
+				// ThinkingMinimal, ThinkingXHigh — no matching Gemini string,
+				// fall back to token budget.
+				budget := llm.ThinkingBudgetTokens(thinkingLevel, 0)
+				if hasInfo && info.MaxTokens > 0 && budget > info.MaxTokens {
+					slog.Warn("clamping thinking budget to model max_tokens",
+						"provider", c.providerName, "model", model,
+						"requested", budget, "max", info.MaxTokens)
+					budget = info.MaxTokens
+				}
+				tc.ThinkingBudget = budget
+			}
 		}
-		if info, ok := llm.GetModelInfo(model); ok && info.MaxTokens > 0 && budget > info.MaxTokens {
-			slog.Warn("clamping thinking budget to model max_tokens",
-				"provider", c.providerName, "model", model,
-				"requested", budget, "max", info.MaxTokens)
-			budget = info.MaxTokens
-		}
-		apiReq.ThinkingConfig = &geminiThinkingConfig{
-			ThinkingBudget: budget,
-		}
+		apiReq.GenerationConfig.ThinkingConfig = tc
 	}
 
 	// Gemini 2.5 models think by default but do NOT support thinkingConfig —
 	// the API rejects it. Thinking tokens silently consume maxOutputTokens.
 	// Pad maxOutputTokens so the caller's intended output budget isn't starved.
-	{
-		model := req.Model
-		if model == "" {
-			model = c.config.Model
-		}
-		if info, ok := llm.GetModelInfo(model); ok && info.Thinking {
-			cur := apiReq.GenerationConfig.MaxOutputTokens
-			if cur > 0 {
-				padded := cur + llm.ThinkingBudgetTokens(llm.ThinkingLow, 0)
-				if info.MaxTokens > 0 && padded > info.MaxTokens {
-					padded = info.MaxTokens
-				}
-				apiReq.GenerationConfig.MaxOutputTokens = padded
+	if hasInfo && info.Thinking {
+		cur := apiReq.GenerationConfig.MaxOutputTokens
+		if cur > 0 {
+			padded := cur + llm.ThinkingBudgetTokens(llm.ThinkingLow, 0)
+			if info.MaxTokens > 0 && padded > info.MaxTokens {
+				padded = info.MaxTokens
 			}
+			apiReq.GenerationConfig.MaxOutputTokens = padded
 		}
 	}
 
