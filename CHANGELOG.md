@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-03-24
+
+### Fixed
+
+- **`ThinkingXHigh` budget exceeded Anthropic max** — Changed from 131,072 to 128,000 tokens. The previous value exceeded Anthropic's `max_tokens` limit for `claude-opus-4-6` (128,000) and would be rejected by the API.
+
+- **Thinking budget not clamped to model limits** — Anthropic and Gemini adapters now clamp `budget_tokens` / `ThinkingBudget` to the model's `MaxTokens` with a `slog.Warn` when clamping occurs. Previously, using `ThinkingXHigh` (128,000) with a model like `claude-opus-4-5` (max 64,000) or any Gemini model (max 65,536) would cause an API rejection.
+
+- **Temperature silently ignored by Responses API and Chat Completions adapters** — Both `openairesponses` and `openaicompat` adapters now emit `slog.Warn` when a caller-provided `Temperature` is dropped for reasoning models, matching the Anthropic adapter's existing warning pattern.
+
+### Added
+
+- **`TestThinkingBudgetTokens` coverage for all levels** — Added missing `ThinkingMinimal` (1,024) and `ThinkingXHigh` (128,000) cases to the table-driven test in `llm_test.go`.
+
+- **Anthropic adapter unit tests** — New `anthropic_internal_test.go` with budget clamping tests (`TestBuildRequestThinkingBudgetClampedToModelMax`, `TestBuildRequestThinkingBudgetNotClampedWhenWithinLimit`).
+
+- **Gemini adapter budget clamping test** — `TestBuildRequestThinkingBudgetClampedToModelMax` in `gemini_internal_test.go`.
+
+- **Responses API temperature warning test** — `TestBuildRequestTemperatureWarning` now verifies both the wire format (Temperature omitted) and the `slog.Warn` output.
+
 ## [0.2.1] - 2026-03-18
 
 ### Breaking Changes

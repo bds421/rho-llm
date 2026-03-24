@@ -384,6 +384,14 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	// Configure thinking
 	if req.ThinkingLevel != llm.ThinkingNone {
 		budget := llm.ThinkingBudgetTokens(req.ThinkingLevel, req.ThinkingBudget)
+		// Clamp budget to model's max output tokens — budget_tokens cannot
+		// exceed max_tokens, which itself cannot exceed the model's limit.
+		if info, ok := llm.GetModelInfo(apiReq.Model); ok && info.MaxTokens > 0 && budget > info.MaxTokens {
+			slog.Warn("clamping thinking budget to model max_tokens",
+				"provider", "anthropic", "model", apiReq.Model,
+				"requested", budget, "max", info.MaxTokens)
+			budget = info.MaxTokens
+		}
 		apiReq.Thinking = &anthropicThinking{
 			Type:         "enabled",
 			BudgetTokens: budget,

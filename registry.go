@@ -12,10 +12,10 @@ type ModelInfo struct {
 	CacheReadPricePer1M  float64 // Anthropic/Gemini: price per 1M cached input tokens (0 = not applicable)
 	SupportsThinking bool    // Anthropic extended thinking
 	ThoughtSignature bool    // Gemini 3 models require thought_signature in function call responses
-	Thinking     bool // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
-	ResponsesAPI bool // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
-	NoToolSupport          bool // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
-	Label            string // Short display name
+	Thinking         bool    // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
+	ResponsesAPI     bool    // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
+	NoToolSupport    bool    // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
+	Label            string  // Short display name
 }
 
 // modelRegistry maps model ID to its metadata.

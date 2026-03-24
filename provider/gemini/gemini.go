@@ -358,6 +358,17 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	}
 	if thinkingLevel != llm.ThinkingNone {
 		budget := llm.ThinkingBudgetTokens(thinkingLevel, req.ThinkingBudget)
+		// Clamp budget to model's max output tokens to avoid API rejection.
+		model := req.Model
+		if model == "" {
+			model = c.config.Model
+		}
+		if info, ok := llm.GetModelInfo(model); ok && info.MaxTokens > 0 && budget > info.MaxTokens {
+			slog.Warn("clamping thinking budget to model max_tokens",
+				"provider", c.providerName, "model", model,
+				"requested", budget, "max", info.MaxTokens)
+			budget = info.MaxTokens
+		}
 		apiReq.ThinkingConfig = &geminiThinkingConfig{
 			ThinkingBudget: budget,
 		}

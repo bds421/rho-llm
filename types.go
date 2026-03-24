@@ -52,10 +52,10 @@ type ThinkingLevel string
 const (
 	ThinkingNone    ThinkingLevel = ""
 	ThinkingMinimal ThinkingLevel = "minimal" // OpenAI: minimal reasoning effort
-	ThinkingLow      ThinkingLevel = "low"
-	ThinkingMedium   ThinkingLevel = "medium"
-	ThinkingHigh     ThinkingLevel = "high"
-	ThinkingXHigh    ThinkingLevel = "xhigh" // OpenAI: maximum reasoning effort
+	ThinkingLow     ThinkingLevel = "low"
+	ThinkingMedium  ThinkingLevel = "medium"
+	ThinkingHigh    ThinkingLevel = "high"
+	ThinkingXHigh   ThinkingLevel = "xhigh" // OpenAI: maximum reasoning effort
 )
 
 // ReasoningSummary controls whether reasoning summary text is included in responses.
@@ -75,12 +75,16 @@ func ThinkingBudgetTokens(level ThinkingLevel, customBudget int) int {
 		return customBudget
 	}
 	switch level {
+	case ThinkingMinimal:
+		return 1024
 	case ThinkingLow:
 		return 4096
 	case ThinkingMedium:
 		return 16384
 	case ThinkingHigh:
 		return 65536
+	case ThinkingXHigh:
+		return 128000
 	default:
 		return 0
 	}

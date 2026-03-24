@@ -321,3 +321,40 @@ func TestBuildRequestMaxOutputTokensNotPaddedForNonThinkingModel(t *testing.T) {
 			apiReq.GenerationConfig.MaxOutputTokens)
 	}
 }
+
+// TestBuildRequestThinkingBudgetClampedToModelMax verifies that a thinking
+// budget exceeding the model's MaxTokens is clamped.
+func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
+	// gemini-2.5-flash has MaxTokens=65536 in the registry — ThinkingXHigh
+	// (128000) exceeds it and must be clamped.
+	c := &Client{
+		config:       llm.Config{Model: "gemini-2.5-flash"},
+		providerName: "gemini",
+	}
+
+	req := llm.Request{
+		MaxTokens:     100,
+		ThinkingLevel: llm.ThinkingXHigh,
+		Messages: []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "think hard"),
+		},
+	}
+
+	apiReq, err := c.buildRequest(req)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+
+	info, ok := llm.GetModelInfo("gemini-2.5-flash")
+	if !ok {
+		t.Fatal("gemini-2.5-flash not in registry")
+	}
+
+	if apiReq.ThinkingConfig == nil {
+		t.Fatal("ThinkingConfig is nil, want non-nil")
+	}
+	if apiReq.ThinkingConfig.ThinkingBudget > info.MaxTokens {
+		t.Errorf("ThinkingBudget = %d, want <= %d (model MaxTokens)",
+			apiReq.ThinkingConfig.ThinkingBudget, info.MaxTokens)
+	}
+}

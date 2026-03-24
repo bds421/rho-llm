@@ -3518,9 +3518,11 @@ func TestThinkingBudgetTokens(t *testing.T) {
 		want         int
 	}{
 		{llm.ThinkingNone, 0, 0},
+		{llm.ThinkingMinimal, 0, 1024},
 		{llm.ThinkingLow, 0, 4096},
 		{llm.ThinkingMedium, 0, 16384},
 		{llm.ThinkingHigh, 0, 65536},
+		{llm.ThinkingXHigh, 0, 128000},
 		// Custom budget overrides level default
 		{llm.ThinkingLow, 8000, 8000},
 		{llm.ThinkingHigh, 1000, 1000},

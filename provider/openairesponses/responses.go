@@ -362,8 +362,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 // =============================================================================
 
 type responsesRequest struct {
-	Model           string              `json:"model"`
-	Input           []responsesInputMsg `json:"input"`
+	Model           string  `json:"model"`
+	Input           []any   `json:"input"` // mix of responsesInputMsg, responsesFunctionCall, responsesFunctionCallOutput
 	Reasoning       *responsesReasoning `json:"reasoning,omitempty"`
 	MaxOutputTokens int                 `json:"max_output_tokens,omitempty"`
 	Temperature     *float64            `json:"temperature,omitempty"`
@@ -377,10 +377,25 @@ type responsesReasoning struct {
 	Summary string `json:"summary,omitempty"`
 }
 
+// responsesInputMsg represents a conversation message (user, assistant, system).
 type responsesInputMsg struct {
-	Role       string      `json:"role"`
-	Content    interface{} `json:"content"`                  // string or array of content parts
-	ToolCallID string      `json:"tool_call_id,omitempty"`   // Required for tool result messages
+	Role    string `json:"role"`
+	Content any    `json:"content"` // string or array of content parts
+}
+
+// responsesFunctionCall represents an assistant-issued function call re-submitted as context.
+type responsesFunctionCall struct {
+	Type      string `json:"type"`      // "function_call"
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// responsesFunctionCallOutput represents a tool result for the Responses API.
+type responsesFunctionCallOutput struct {
+	Type   string `json:"type"`    // "function_call_output"
+	CallID string `json:"call_id"`
+	Output string `json:"output"`
 }
 
 type responsesTool struct {
@@ -461,6 +476,14 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 		Stream:          stream,
 	}
 
+	// Temperature: all ResponsesAPI models are reasoning models that reject
+	// custom temperature (they only accept the default). Omit it entirely,
+	// matching the openaicompat adapter's behavior for reasoning models.
+	if req.Temperature != nil {
+		slog.Warn("ignoring Temperature for reasoning model (Responses API)",
+			"provider", c.providerName, "model", model)
+	}
+
 	// Set reasoning effort and optional summary
 	if thinkingLevel != llm.ThinkingNone {
 		reasoning := &responsesReasoning{Effort: string(thinkingLevel)}
@@ -483,81 +506,30 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 
 	// Convert messages
 	for _, msg := range req.Messages {
-		if msg.Role == llm.RoleUser {
+		switch msg.Role {
+		case llm.RoleUser:
+			if err := c.buildUserMessage(&apiReq, msg); err != nil {
+				return responsesRequest{}, err
+			}
+
+		case llm.RoleAssistant:
+			c.buildAssistantMessage(&apiReq, msg)
+
+		default:
+			// System or other roles passed as plain messages
 			var textParts []string
-			var imageParts []llm.ContentPart
-			hasToolResults := false
-
 			for _, part := range msg.Content {
-				switch part.Type {
-				case llm.ContentToolResult:
-					hasToolResults = true
-					// Responses API tool results require tool_call_id
-					apiReq.Input = append(apiReq.Input, responsesInputMsg{
-						Role:       "tool",
-						Content:    part.ToolResultContent,
-						ToolCallID: part.ToolResultID,
-					})
-				case llm.ContentText:
-					if part.Text != "" {
-						textParts = append(textParts, part.Text)
-					}
-				case llm.ContentImage:
-					if err := llm.ValidateImageSource(part); err != nil {
-						return responsesRequest{}, err
-					}
-					imageParts = append(imageParts, part)
+				if part.Type == llm.ContentText && part.Text != "" {
+					textParts = append(textParts, part.Text)
 				}
 			}
-
-			// Build multipart content for images
-			if len(imageParts) > 0 {
-				var contentArray []interface{}
-				if len(textParts) > 0 {
-					contentArray = append(contentArray, map[string]interface{}{
-						"type": "input_text",
-						"text": strings.Join(textParts, "\n"),
-					})
-				}
-				for _, img := range imageParts {
-					dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
-					contentArray = append(contentArray, map[string]interface{}{
-						"type":      "input_image",
-						"image_url": dataURI,
-					})
-				}
-				apiReq.Input = append(apiReq.Input, responsesInputMsg{
-					Role:    "user",
-					Content: contentArray,
-				})
-				continue
-			}
-
 			if len(textParts) > 0 {
 				apiReq.Input = append(apiReq.Input, responsesInputMsg{
-					Role:    "user",
+					Role:    string(msg.Role),
 					Content: strings.Join(textParts, "\n"),
 				})
 			}
-
-			if hasToolResults || len(textParts) > 0 {
-				continue
-			}
 		}
-
-		inputMsg := responsesInputMsg{Role: string(msg.Role)}
-
-		var textParts []string
-		for _, part := range msg.Content {
-			if part.Type == llm.ContentText && part.Text != "" {
-				textParts = append(textParts, part.Text)
-			}
-		}
-		if len(textParts) > 0 {
-			inputMsg.Content = strings.Join(textParts, "\n")
-		}
-
-		apiReq.Input = append(apiReq.Input, inputMsg)
 	}
 
 	// Convert tools
@@ -580,6 +552,109 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 	}
 
 	return apiReq, nil
+}
+
+// buildUserMessage handles user messages: text, images, and tool results.
+// Tool results are emitted as function_call_output items (Responses API format).
+func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) error {
+	var textParts []string
+	var imageParts []llm.ContentPart
+
+	for _, part := range msg.Content {
+		switch part.Type {
+		case llm.ContentToolResult:
+			// Responses API uses function_call_output items, not role="tool" messages
+			apiReq.Input = append(apiReq.Input, responsesFunctionCallOutput{
+				Type:   "function_call_output",
+				CallID: part.ToolResultID,
+				Output: part.ToolResultContent,
+			})
+		case llm.ContentText:
+			if part.Text != "" {
+				textParts = append(textParts, part.Text)
+			}
+		case llm.ContentImage:
+			if err := llm.ValidateImageSource(part); err != nil {
+				return err
+			}
+			imageParts = append(imageParts, part)
+		}
+	}
+
+	// Build multipart content for images
+	if len(imageParts) > 0 {
+		var contentArray []interface{}
+		if len(textParts) > 0 {
+			contentArray = append(contentArray, map[string]interface{}{
+				"type": "input_text",
+				"text": strings.Join(textParts, "\n"),
+			})
+		}
+		for _, img := range imageParts {
+			dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
+			contentArray = append(contentArray, map[string]interface{}{
+				"type":      "input_image",
+				"image_url": dataURI,
+			})
+		}
+		apiReq.Input = append(apiReq.Input, responsesInputMsg{
+			Role:    "user",
+			Content: contentArray,
+		})
+		return nil
+	}
+
+	if len(textParts) > 0 {
+		apiReq.Input = append(apiReq.Input, responsesInputMsg{
+			Role:    "user",
+			Content: strings.Join(textParts, "\n"),
+		})
+	}
+	return nil
+}
+
+// buildAssistantMessage handles assistant messages: text content and tool-use
+// parts. Tool-use parts are emitted as function_call items (Responses API format).
+func (c *Client) buildAssistantMessage(apiReq *responsesRequest, msg llm.Message) {
+	var textParts []string
+
+	for _, part := range msg.Content {
+		switch part.Type {
+		case llm.ContentText:
+			if part.Text != "" {
+				textParts = append(textParts, part.Text)
+			}
+		case llm.ContentToolUse:
+			// Emit text accumulated so far before the function call
+			if len(textParts) > 0 {
+				apiReq.Input = append(apiReq.Input, responsesInputMsg{
+					Role:    "assistant",
+					Content: strings.Join(textParts, "\n"),
+				})
+				textParts = nil
+			}
+			// Serialize tool input to JSON string
+			inputJSON, err := json.Marshal(part.ToolInput)
+			if err != nil {
+				slog.Warn("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
+				inputJSON = []byte("{}")
+			}
+			apiReq.Input = append(apiReq.Input, responsesFunctionCall{
+				Type:      "function_call",
+				CallID:    part.ToolUseID,
+				Name:      part.ToolName,
+				Arguments: string(inputJSON),
+			})
+		}
+	}
+
+	// Emit any remaining text
+	if len(textParts) > 0 {
+		apiReq.Input = append(apiReq.Input, responsesInputMsg{
+			Role:    "assistant",
+			Content: strings.Join(textParts, "\n"),
+		})
+	}
 }
 
 // =============================================================================

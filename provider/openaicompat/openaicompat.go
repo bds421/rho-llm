@@ -277,6 +277,10 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 	if info.Thinking && (info.Provider == "openai" || info.Provider == "xai") {
 		apiReq.MaxCompletionTokens = maxTok
 		// Omit temperature entirely — these reasoning models only accept default (1).
+		if req.Temperature != nil {
+			slog.Warn("ignoring Temperature for reasoning model (Chat Completions)",
+				"provider", c.providerName, "model", model)
+		}
 	} else {
 		apiReq.MaxTokens = maxTok
 		apiReq.Temperature = req.Temperature // nil = omit from wire (provider default)
