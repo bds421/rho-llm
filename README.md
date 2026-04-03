@@ -16,20 +16,20 @@ go get github.com/bds421/rho-llm
 |----------|----------|------|-----------------|
 | Anthropic/Claude | Native | x-api-key | api.anthropic.com |
 | Google Gemini | Native | x-goog-api-key | generativelanguage.googleapis.com |
-| OpenAI | OpenAI-compat | Bearer | api.openai.com/v1 |
+| OpenAI | OpenAI-compat / Responses | Bearer | api.openai.com/v1 |
 | xAI/Grok | OpenAI-compat | Bearer | api.x.ai/v1 |
 | Groq | OpenAI-compat | Bearer | api.groq.com/openai/v1 |
 | Cerebras | OpenAI-compat | Bearer | api.cerebras.ai/v1 |
 | Mistral | OpenAI-compat | Bearer | api.mistral.ai/v1 |
 | OpenRouter | OpenAI-compat | Bearer | openrouter.ai/api/v1 |
-| DashScope/Qwen | OpenAI-compat | Bearer | dashscope-intl.aliyuncs.com |
+| DashScope/Qwen | OpenAI-compat | Bearer | dashscope-intl.aliyuncs.com/compatible-mode/v1 |
 | Ollama | OpenAI-compat | None | localhost:11434/v1 |
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
 ## Quick Start
 
-This example demonstrates a complete request using Google Gemini, but the code is identical for all 12 providers.
+This example demonstrates a complete request using Google Gemini, but the code is identical for all 13 providers.
 
 ```go
 import _ "github.com/bds421/rho-llm/provider" // required: register adapters
@@ -174,7 +174,7 @@ req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, "location no
 
 Many modern models support reasoning (chain-of-thought) capabilities where they expose their internal thought processes before outputting the final answer. 
 
-You can check if a given model natively supports extended thinking by checking the registry. ThinkingLevel is only supported by the `anthropic` and `gemini` providers — the OpenAI-compatible adapter returns an error if ThinkingLevel is set. However, all three adapters **parse** thinking content from responses: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, and OpenAI-compat via the `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.).
+You can check if a given model natively supports extended thinking by checking the registry. ThinkingLevel is supported by `anthropic`, `gemini`, and `openai` (via the Responses API for GPT-5 family models, where it maps to reasoning effort). The OpenAI Chat Completions adapter (`openai_compat`) returns an error if ThinkingLevel is set — use the `openai` provider instead, which auto-routes GPT-5 models to the Responses API. All four adapters **parse** thinking content from responses: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, OpenAI Responses via `reasoning_summary`, and OpenAI-compat via the `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.).
 
 ```go
 info, ok := llm.GetModelInfo("claude-opus-4-6")
@@ -450,6 +450,12 @@ delay = p.Delay(attempt)
 | RetryHook | RetryHook | nil | Observability hook for retry lifecycle events |
 | MaxRetries | int | 10 | Cap on retry/rotation iterations (min effective: 3) |
 | BetaFeatures | []string | ["interleaved-thinking-..."] | Provider beta flags (Anthropic: anthropic-beta header) |
+| AnthropicVersion | string | "2023-06-01" | Override Anthropic API version header |
+| MaxErrorBodyBytes | int | 1 MB | Cap on error response body reads |
+| MaxSSELineBytes | int | 256 KB | Cap on per-line SSE buffer |
+| MaxResponseBodyBytes | int | 32 MB | Cap on success response body reads |
+| MaxToolInputBytes | int | 1 MB | Cap on accumulated tool input JSON |
+| MaxErrorMessageLen | int | 4096 | Cap on stored error message length |
 
 ## Model Registry
 
