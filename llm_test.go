@@ -643,8 +643,9 @@ func TestEstimateCost(t *testing.T) {
 		// claude-sonnet-4-6: $3/1M input, $15/1M output
 		// 1000 input: 3 * 1000/1M = 0.003, 500 output: 15 * 500/1M = 0.0075
 		{"sonnet basic", llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: 1000, OutputTokens: 500}, 0.0104, 0.0106},
-		// gemini-2.5-flash-lite: free
-		{"flash-lite free", llm.CostInput{Model: "gemini-2.5-flash-lite", InputTokens: 10000, OutputTokens: 5000}, 0, 0},
+		// gemini-2.5-flash-lite: $0.10/1M input, $0.40/1M output
+		// 10000 input: 0.001, 5000 output: 0.002 = 0.003
+		{"flash-lite", llm.CostInput{Model: "gemini-2.5-flash-lite", InputTokens: 10000, OutputTokens: 5000}, 0.002, 0.004},
 		// unknown model: 0
 		{"unknown", llm.CostInput{Model: "unknown-model", InputTokens: 1000, OutputTokens: 500}, 0, 0},
 		// claude-opus-4-6: $5/1M input, $25/1M output
@@ -5008,10 +5009,10 @@ func TestEstimateCostWithThinkingTokens(t *testing.T) {
 	}
 	cost := llm.EstimateCost(input)
 
-	// input: 1000 * 0.15 / 1M = 0.00015
-	// output+thinking: (500+2000) * 0.60 / 1M = 0.0015
-	// total: 0.00165
-	expected := 0.00165
+	// input: 1000 * 0.30 / 1M = 0.0003
+	// output+thinking: (500+2000) * 2.50 / 1M = 0.00625
+	// total: 0.00655
+	expected := 0.00655
 	if cost < expected-0.0005 || cost > expected+0.0005 {
 		t.Errorf("EstimateCost with thinking tokens = %f, want ~%f", cost, expected)
 	}

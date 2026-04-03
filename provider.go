@@ -27,6 +27,8 @@ var presets = map[string]ProviderPreset{
 	"cerebras":   {BaseURL: "https://api.cerebras.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"mistral":    {BaseURL: "https://api.mistral.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"openrouter": {BaseURL: "https://openrouter.ai/api/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"dashscope":  {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"qwen":       {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 
 	// OpenAI-compatible: local providers (no auth)
 	"ollama":   {BaseURL: "http://localhost:11434/v1", AuthHeader: "", Protocol: "openai_compat"},

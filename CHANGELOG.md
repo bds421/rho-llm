@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-04-03
+
+### Added
+
+- **DashScope/Qwen cloud provider** — New `dashscope` and `qwen` provider presets pointing to `dashscope-intl.aliyuncs.com/compatible-mode/v1` (OpenAI-compatible). Requires `DASHSCOPE_API_KEY`.
+
+- **Qwen 3.6 Plus** — `qwen3.6-plus` in the model registry. 1M context, 65K max output, intrinsic thinking. Default model for the `dashscope`/`qwen` provider.
+
+- **OpenAI o3-pro** — `o3-pro` added to the O-series reasoning models. $20/$80 per 1M tokens, 200K context, 100K max output.
+
+- **Gemma 4 Ollama models** — `gemma4:31b` (dense, max quality), `gemma4:26b` (MoE, 3.8B active), `gemma4:e4b` (edge). All three support native tool/function calling and configurable thinking — a significant upgrade from Gemma 3 which had `NoToolSupport: true`.
+
+- **Qwen 3.5 Ollama models** — `qwen3.5:latest` (9B default), `qwen3.5:27b` (dense). Both support intrinsic thinking.
+
+### Fixed
+
+- **Gemini pricing errors** — Five models had incorrect pricing copied from older Gemini 2.5 entries when they were first added. Corrected to match official `ai.google.dev/gemini-api/docs/pricing`:
+  - `gemini-3.1-pro-preview`: $1.25/$10.00 → **$2.00/$12.00**
+  - `gemini-3-pro-preview`: $1.25/$10.00 → **$2.00/$12.00**
+  - `gemini-3-flash-preview`: $0.15/$0.60 → **$0.50/$3.00**
+  - `gemini-2.5-flash`: $0.15/$0.60 → **$0.30/$2.50**
+  - `gemini-2.5-flash-lite`: $0.00/$0.00 → **$0.10/$0.40**
+
+### Changed
+
+- **Alias updates** — `gemma` now resolves to `gemma4:e4b` (was `gemma3:12b`). New aliases: `gemma3` → `gemma3:12b`, `gemma4` → `gemma4:e4b`, `qwen-local` → `qwen3:8b`, `qwen-cloud` → `qwen3.6-plus`. The `qwen` default model is now `qwen3.6-plus` (cloud API) instead of `qwen3:8b` (Ollama).
+
 ## [0.2.3] - 2026-03-24
 
 ### Fixed

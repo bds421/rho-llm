@@ -22,13 +22,14 @@ go get github.com/bds421/rho-llm
 | Cerebras | OpenAI-compat | Bearer | api.cerebras.ai/v1 |
 | Mistral | OpenAI-compat | Bearer | api.mistral.ai/v1 |
 | OpenRouter | OpenAI-compat | Bearer | openrouter.ai/api/v1 |
+| DashScope/Qwen | OpenAI-compat | Bearer | dashscope-intl.aliyuncs.com |
 | Ollama | OpenAI-compat | None | localhost:11434/v1 |
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
 ## Quick Start
 
-This example demonstrates a complete request using Google Gemini, but the code is identical for all 11 providers.
+This example demonstrates a complete request using Google Gemini, but the code is identical for all 12 providers.
 
 ```go
 import _ "github.com/bds421/rho-llm/provider" // required: register adapters
@@ -514,15 +515,22 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | `devstral` | `devstral-2512` |
 | `ministral` | `ministral-8b-2512` |
 
+### DashScope/Qwen aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `qwen-cloud` | `qwen3.6-plus` |
+
 ### Ollama aliases
 
 | Alias | Resolves to |
 |-------|-------------|
 | `deepseek` | `deepseek-r1:14b` |
 | `mistral-local` | `mistral-small3.2:24b` |
-| `qwen` | `qwen3:8b` |
+| `qwen-local` | `qwen3:8b` |
 | `qwen-code` | `qwen3-coder:30b` |
-| `gemma` | `gemma3:12b` |
+| `gemma`, `gemma4` | `gemma4:e4b` |
+| `gemma3` | `gemma3:12b` |
 
 ### Gemini aliases
 

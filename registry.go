@@ -54,14 +54,15 @@ var modelRegistry = map[string]ModelInfo{
 	"grok-3":                              {ID: "grok-3", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 3"},
 	"grok-3-mini":                         {ID: "grok-3-mini", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 3 Mini"},
 
-	// Gemini — from GET https://generativelanguage.googleapis.com/v1beta/models (2026-03-05)
-	"gemini-3.1-pro-preview":        {ID: "gemini-3.1-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, ThoughtSignature: true, Label: "Gemini 3.1 Pro"},
+	// Gemini — from ai.google.dev/gemini-api/docs/pricing (2026-04-03)
+	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
+	"gemini-3.1-pro-preview":        {ID: "gemini-3.1-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, ThoughtSignature: true, Label: "Gemini 3.1 Pro"},
 	"gemini-3.1-flash-lite-preview": {ID: "gemini-3.1-flash-lite-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, ThoughtSignature: true, Label: "Gemini 3.1 Flash Lite"},
-	"gemini-3-pro-preview":          {ID: "gemini-3-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, ThoughtSignature: true, Label: "Gemini 3 Pro"},
-	"gemini-3-flash-preview":        {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, ThoughtSignature: true, Label: "Gemini 3 Flash"},
+	"gemini-3-pro-preview":          {ID: "gemini-3-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, ThoughtSignature: true, Label: "Gemini 3 Pro"},
+	"gemini-3-flash-preview":        {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, ThoughtSignature: true, Label: "Gemini 3 Flash"},
 	"gemini-2.5-pro":                {ID: "gemini-2.5-pro", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "Gemini 2.5 Pro"},
-	"gemini-2.5-flash":              {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, Thinking: true, Label: "Gemini 2.5 Flash"},
-	"gemini-2.5-flash-lite":         {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.0, OutputPricePer1M: 0.0, Thinking: true, Label: "Flash Lite"},
+	"gemini-2.5-flash":              {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, Thinking: true, Label: "Gemini 2.5 Flash"},
+	"gemini-2.5-flash-lite":         {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Thinking: true, Label: "Flash Lite"},
 	"gemini-2.0-flash":              {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
 
 	// OpenAI — GPT-5.x family (2026-03-05)
@@ -93,6 +94,7 @@ var modelRegistry = map[string]ModelInfo{
 	// OpenAI — O-series reasoning models
 	"o3":      {ID: "o3", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "O3"},
 	"o3-mini": {ID: "o3-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O3 Mini"},
+	"o3-pro":  {ID: "o3-pro", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 20.00, OutputPricePer1M: 80.00, Thinking: true, Label: "O3 Pro"},
 	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O4 Mini"},
 
 	// Groq — cloud inference (2026-02-21)
@@ -115,12 +117,20 @@ var modelRegistry = map[string]ModelInfo{
 	"ministral-8b-2512":     {ID: "ministral-8b-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.15, OutputPricePer1M: 0.15, Label: "Ministral 8B"},
 	"ministral-14b-2512":    {ID: "ministral-14b-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.20, OutputPricePer1M: 0.20, Label: "Ministral 14B"},
 
+	// DashScope (Alibaba) — OpenAI-compatible API (2026-04-03)
+	"qwen3.6-plus": {ID: "qwen3.6-plus", Provider: "dashscope", MaxTokens: 65536, ContextWindow: 1000000, InputPricePer1M: 0.29, OutputPricePer1M: 1.74, Thinking: true, Label: "Qwen 3.6 Plus"},
+
 	// Ollama — popular local models (no pricing, context varies by quantization)
 	"deepseek-r1:14b":      {ID: "deepseek-r1:14b", Provider: "ollama", Thinking: true, NoToolSupport: true, Label: "DeepSeek R1 14B"},
 	"mistral-small3.2:24b": {ID: "mistral-small3.2:24b", Provider: "ollama", Label: "Mistral Small 3.2 24B"},
 	"qwen3-coder:30b":      {ID: "qwen3-coder:30b", Provider: "ollama", Label: "Qwen3 Coder 30B"},
+	"qwen3.5:latest":       {ID: "qwen3.5:latest", Provider: "ollama", Thinking: true, Label: "Qwen3.5 9B"},
+	"qwen3.5:27b":          {ID: "qwen3.5:27b", Provider: "ollama", Thinking: true, Label: "Qwen3.5 27B"},
 	"qwen3:8b":             {ID: "qwen3:8b", Provider: "ollama", Thinking: true, Label: "Qwen3 8B"},
 	"qwen3:4b":             {ID: "qwen3:4b", Provider: "ollama", Thinking: true, Label: "Qwen3 4B"},
+	"gemma4:31b":           {ID: "gemma4:31b", Provider: "ollama", Thinking: true, Label: "Gemma4 31B"},
+	"gemma4:26b":           {ID: "gemma4:26b", Provider: "ollama", Thinking: true, Label: "Gemma4 26B MoE"},
+	"gemma4:e4b":           {ID: "gemma4:e4b", Provider: "ollama", Thinking: true, Label: "Gemma4 E4B"},
 	"gemma3:12b":           {ID: "gemma3:12b", Provider: "ollama", NoToolSupport: true, Label: "Gemma3 12B"},
 	"gemma3:4b":            {ID: "gemma3:4b", Provider: "ollama", NoToolSupport: true, Label: "Gemma3 4B"},
 	"gemma2:2b":            {ID: "gemma2:2b", Provider: "ollama", NoToolSupport: true, Label: "Gemma2 2B"},
@@ -137,6 +147,8 @@ var defaultModels = map[string]string{
 	"gpt":       "gpt-5.4",
 	"groq":      "llama-3.3-70b-versatile",
 	"mistral":   "mistral-small-2603",
+	"dashscope": "qwen3.6-plus",
+	"qwen":      "qwen3.6-plus",
 	"ollama":    "qwen3:8b",
 }
 
@@ -197,6 +209,7 @@ var availableModels = map[string][]string{
 		"gpt-4.1",
 		"gpt-4.1-mini",
 		"gpt-4.1-nano",
+		"o3-pro",
 		"o3",
 		"o3-mini",
 		"o4-mini",
@@ -221,12 +234,20 @@ var availableModels = map[string][]string{
 		"ministral-8b-2512",
 		"ministral-14b-2512",
 	},
+	"dashscope": {
+		"qwen3.6-plus",
+	},
 	"ollama": {
 		"deepseek-r1:14b",
 		"mistral-small3.2:24b",
 		"qwen3-coder:30b",
+		"qwen3.5:latest",
+		"qwen3.5:27b",
 		"qwen3:8b",
 		"qwen3:4b",
+		"gemma4:31b",
+		"gemma4:26b",
+		"gemma4:e4b",
 		"gemma3:12b",
 		"gemma3:4b",
 		"gemma2:2b",
@@ -271,12 +292,17 @@ var modelAliases = map[string]string{
 	"devstral":       "devstral-2512",
 	"ministral":      "ministral-8b-2512",
 
+	// DashScope aliases
+	"qwen-cloud": "qwen3.6-plus",
+
 	// Ollama aliases
 	"deepseek":      "deepseek-r1:14b",
 	"mistral-local": "mistral-small3.2:24b",
-	"qwen":          "qwen3:8b",
+	"qwen-local":    "qwen3:8b",
 	"qwen-code":     "qwen3-coder:30b",
-	"gemma":         "gemma3:12b",
+	"gemma":         "gemma4:e4b",
+	"gemma4":        "gemma4:e4b",
+	"gemma3":        "gemma3:12b",
 
 	// OpenAI aliases
 	"gpt":         "gpt-5.4",
