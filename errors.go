@@ -63,17 +63,12 @@ func NewContextLengthError(provider, message string) *APIError {
 	}
 }
 
-// maxErrorMessageLen caps the length of error messages stored in APIError.Message.
-// Without this, a malicious or broken endpoint could return a multi-GB error body
-// that propagates through error chains and log systems.
-const maxErrorMessageLen = 4096
-
-// truncateErrorBody caps s at maxErrorMessageLen, appending a truncation marker if cut.
+// truncateErrorBody caps s at DefaultMaxErrorMessageLen, appending a truncation marker if cut.
 func truncateErrorBody(s string) string {
-	if len(s) <= maxErrorMessageLen {
+	if len(s) <= DefaultMaxErrorMessageLen {
 		return s
 	}
-	return s[:maxErrorMessageLen] + "... [truncated]"
+	return s[:DefaultMaxErrorMessageLen] + "... [truncated]"
 }
 
 // NewAPIErrorFromStatus constructs the appropriate APIError from an HTTP status code and body.

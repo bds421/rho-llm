@@ -8,24 +8,23 @@ import (
 	"time"
 )
 
+// Default safety limits. Used when the corresponding Config field is zero.
 const (
-	// MaxErrorBodyBytes caps the number of bytes read from an error response body.
-	// Prevents OOM from malicious or broken endpoints returning enormous error messages.
-	MaxErrorBodyBytes = 1 << 20 // 1 MB
+	DefaultMaxErrorBodyBytes    = 1 << 20    // 1 MB — caps error response body reads
+	DefaultMaxSSELineBytes     = 256 * 1024  // 256 KB — caps per-line SSE buffer
+	DefaultMaxResponseBodyBytes = 32 << 20   // 32 MB — caps success response body reads
+	DefaultMaxToolInputBytes   = 1 << 20     // 1 MB — caps accumulated tool input JSON
+	DefaultMaxErrorMessageLen  = 4096        // bytes — caps stored error message length
+	DefaultAnthropicVersion    = "2023-06-01"
+)
 
-	// MaxSSELineBytes caps the per-line buffer for SSE stream parsing.
-	// Limits per-stream memory usage from malicious endpoints.
-	MaxSSELineBytes = 256 * 1024 // 256 KB
-
-	// MaxResponseBodyBytes caps the number of bytes read from a success response
-	// body before JSON decoding. Prevents OOM from malicious endpoints returning
-	// enormous JSON payloads. 32 MB is generous for any real LLM response.
-	MaxResponseBodyBytes = 32 << 20 // 32 MB
-
-	// MaxToolInputBytes caps accumulated tool input JSON during streaming.
-	// Prevents OOM from malicious endpoints sending thousands of input_json_delta
-	// or argument chunks that accumulate without bound.
-	MaxToolInputBytes = 1 << 20 // 1 MB
+// Backward-compatible package-level vars — adapters reference these.
+// Values come from the Default* constants. Override via Config fields for per-client control.
+var (
+	MaxErrorBodyBytes    int64 = DefaultMaxErrorBodyBytes
+	MaxSSELineBytes      int   = DefaultMaxSSELineBytes
+	MaxResponseBodyBytes int64 = DefaultMaxResponseBodyBytes
+	MaxToolInputBytes    int   = DefaultMaxToolInputBytes
 )
 
 // sensitiveHeaders are stripped on cross-domain redirects to prevent key leakage.
@@ -145,6 +144,17 @@ type Config struct {
 	// Other providers ignore this field.
 	// Default: []string{"interleaved-thinking-2025-05-14"} (set by DefaultConfig).
 	BetaFeatures []string `json:"beta_features,omitempty"`
+
+	// AnthropicVersion overrides the Anthropic API version header.
+	// Default: DefaultAnthropicVersion ("2023-06-01").
+	AnthropicVersion string `json:"anthropic_version,omitempty"`
+
+	// Safety limits — zero values use the corresponding Default* constants.
+	MaxErrorBodyBytes    int `json:"max_error_body_bytes,omitempty"`
+	MaxSSELineBytes      int `json:"max_sse_line_bytes,omitempty"`
+	MaxResponseBodyBytes int `json:"max_response_body_bytes,omitempty"`
+	MaxToolInputBytes    int `json:"max_tool_input_bytes,omitempty"`
+	MaxErrorMessageLen   int `json:"max_error_message_len,omitempty"`
 }
 
 // DefaultTimeout is applied when Config.Timeout is zero (the time.Duration zero value).
@@ -187,6 +197,54 @@ func DefaultConfig() Config {
 		MaxRetries:       DefaultMaxRetries,
 		BetaFeatures:     []string{"interleaved-thinking-2025-05-14"},
 	}
+}
+
+// EffectiveMaxErrorBodyBytes returns the configured or default limit.
+func (c Config) EffectiveMaxErrorBodyBytes() int64 {
+	if c.MaxErrorBodyBytes > 0 {
+		return int64(c.MaxErrorBodyBytes)
+	}
+	return int64(DefaultMaxErrorBodyBytes)
+}
+
+// EffectiveMaxSSELineBytes returns the configured or default limit.
+func (c Config) EffectiveMaxSSELineBytes() int {
+	if c.MaxSSELineBytes > 0 {
+		return c.MaxSSELineBytes
+	}
+	return DefaultMaxSSELineBytes
+}
+
+// EffectiveMaxResponseBodyBytes returns the configured or default limit.
+func (c Config) EffectiveMaxResponseBodyBytes() int64 {
+	if c.MaxResponseBodyBytes > 0 {
+		return int64(c.MaxResponseBodyBytes)
+	}
+	return int64(DefaultMaxResponseBodyBytes)
+}
+
+// EffectiveMaxToolInputBytes returns the configured or default limit.
+func (c Config) EffectiveMaxToolInputBytes() int {
+	if c.MaxToolInputBytes > 0 {
+		return c.MaxToolInputBytes
+	}
+	return DefaultMaxToolInputBytes
+}
+
+// EffectiveMaxErrorMessageLen returns the configured or default limit.
+func (c Config) EffectiveMaxErrorMessageLen() int {
+	if c.MaxErrorMessageLen > 0 {
+		return c.MaxErrorMessageLen
+	}
+	return DefaultMaxErrorMessageLen
+}
+
+// EffectiveAnthropicVersion returns the configured or default API version.
+func (c Config) EffectiveAnthropicVersion() string {
+	if c.AnthropicVersion != "" {
+		return c.AnthropicVersion
+	}
+	return DefaultAnthropicVersion
 }
 
 // MarshalJSON implements json.Marshaler. Redacts APIKey to prevent accidental

@@ -16,10 +16,7 @@ import (
 	"github.com/bds421/rho-llm"
 )
 
-const (
-	defaultAnthropicBase = "https://api.anthropic.com/v1"
-	anthropicVersion     = "2023-06-01"
-)
+const defaultAnthropicBase = "https://api.anthropic.com/v1"
 
 func init() {
 	llm.RegisterProvider("anthropic", func(cfg llm.Config) (llm.Client, error) {
@@ -187,7 +184,7 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", c.config.APIKey)
-	httpReq.Header.Set("anthropic-version", anthropicVersion)
+	httpReq.Header.Set("anthropic-version", c.config.EffectiveAnthropicVersion())
 
 	// Beta features from config (e.g., extended thinking).
 	c.setBetaHeader(httpReq, req)
@@ -240,7 +237,7 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", c.config.APIKey)
-	httpReq.Header.Set("anthropic-version", anthropicVersion)
+	httpReq.Header.Set("anthropic-version", c.config.EffectiveAnthropicVersion())
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	// Beta features from config.

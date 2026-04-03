@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`Config.BetaFeatures`** — Configurable provider beta feature flags. For Anthropic, joined with `,` and sent as the `anthropic-beta` header. Default: `["interleaved-thinking-2025-05-14"]`. Other providers ignore this field.
 
+- **`Config.AnthropicVersion`** — Override the Anthropic API version header. Default: `DefaultAnthropicVersion` (`"2023-06-01"`).
+
+- **Configurable safety limits** — `Config.MaxErrorBodyBytes`, `Config.MaxSSELineBytes`, `Config.MaxResponseBodyBytes`, `Config.MaxToolInputBytes`, `Config.MaxErrorMessageLen` — all zero by default (use `Default*` constants). Override per-client for custom deployments.
+
 - **`NewSystemMessage(text)`** — Convenience constructor for system messages, completing the symmetry with `NewTextMessage`, `NewImageMessage`, `NewToolResultMessage`, and `NewAssistantMessage`.
 
 - **`ClampThinkingBudget(provider, model, budget, maxTokens)`** — Centralized thinking budget clamping with `slog.Warn` on clamp. Used by Anthropic and Gemini adapters (replaces duplicated inline clamping).
@@ -29,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`interface{}` → `any`** — All production Go files now use the modern `any` alias. Test files unchanged.
 
-- **`maxRetryAttempts` constant removed** — Replaced by `Config.MaxRetries` and `DefaultMaxRetries`. Pool retry logic reads from config, never from a hardcoded constant.
+- **All hardcoded production constants → configurable** — `maxRetryAttempts`, `maxErrorMessageLen`, `anthropicVersion`, and the `Max*Bytes` safety limits are now configurable via `Config` fields with `Default*` constants. No production-relevant value remains as a hardcoded constant.
 
 ## [0.2.4] - 2026-04-03
 
