@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-04-03
+
+### Added
+
+- **`Config.MaxRetries`** — Configurable retry cap for `PooledClient`. Replaces the hardcoded `maxRetryAttempts = 10` constant. `DefaultConfig()` sets it to `DefaultMaxRetries` (10). Minimum effective value is 3.
+
+- **`Config.BetaFeatures`** — Configurable provider beta feature flags. For Anthropic, joined with `,` and sent as the `anthropic-beta` header. Default: `["interleaved-thinking-2025-05-14"]`. Other providers ignore this field.
+
+- **`NewSystemMessage(text)`** — Convenience constructor for system messages, completing the symmetry with `NewTextMessage`, `NewImageMessage`, `NewToolResultMessage`, and `NewAssistantMessage`.
+
+- **`ClampThinkingBudget(provider, model, budget, maxTokens)`** — Centralized thinking budget clamping with `slog.Warn` on clamp. Used by Anthropic and Gemini adapters (replaces duplicated inline clamping).
+
+### Fixed
+
+- **Anthropic sends empty tools array** — The Anthropic adapter sent `"tools": []` when no tools were provided. Now guarded with `len(req.Tools) > 0`, matching Gemini and OpenAI adapters.
+
+- **Gemini output token padding silent** — Gemini 2.5 models silently padded `maxOutputTokens` for native thinking. Now logs `slog.Warn` with original and padded values.
+
+### Changed
+
+- **`interface{}` → `any`** — All production Go files now use the modern `any` alias. Test files unchanged.
+
+- **`maxRetryAttempts` constant removed** — Replaced by `Config.MaxRetries` and `DefaultMaxRetries`. Pool retry logic reads from config, never from a hardcoded constant.
+
 ## [0.2.4] - 2026-04-03
 
 ### Added

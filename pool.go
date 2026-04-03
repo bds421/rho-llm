@@ -364,15 +364,25 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 	return pc, nil
 }
 
+// maxRetries returns the effective retry cap, reading from config.
+func (pc *PooledClient) maxRetries() int {
+	cap := pc.cfg.MaxRetries
+	if cap <= 0 {
+		cap = DefaultMaxRetries
+	}
+	n := pc.pool.HealthyCount()
+	if n < 3 {
+		n = 3 // Minimum 3 retries for single-key resilience
+	}
+	if n > cap {
+		n = cap
+	}
+	return n
+}
+
 // Complete implements Client.Complete with retry/rotation and exponential backoff.
 func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, error) {
-	maxRetries := pc.pool.HealthyCount()
-	if maxRetries < 3 {
-		maxRetries = 3 // Minimum 3 retries for single-key resilience
-	}
-	if maxRetries > maxRetryAttempts {
-		maxRetries = maxRetryAttempts // Prevent pathological retry storms with large key pools
-	}
+	maxRetries := pc.maxRetries()
 
 	rp := pc.retryPolicy()
 
@@ -470,13 +480,7 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 // mid-stream errors are passed through immediately.
 func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
-		maxRetries := pc.pool.HealthyCount()
-		if maxRetries < 3 {
-			maxRetries = 3 // Minimum 3 retries for single-key resilience
-		}
-		if maxRetries > maxRetryAttempts {
-			maxRetries = maxRetryAttempts // Prevent pathological retry storms with large key pools
-		}
+		maxRetries := pc.maxRetries()
 
 		rp := pc.retryPolicy()
 

@@ -230,7 +230,7 @@ type geminiTool struct {
 type geminiFunctionDeclaration struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 type geminiResponse struct {
@@ -374,11 +374,8 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		// fall back to thinkingBudget for custom budgets or non-standard levels.
 		if req.ThinkingBudget > 0 {
 			budget := req.ThinkingBudget
-			if hasInfo && info.MaxTokens > 0 && budget > info.MaxTokens {
-				slog.Warn("clamping thinking budget to model max_tokens",
-					"provider", c.providerName, "model", model,
-					"requested", budget, "max", info.MaxTokens)
-				budget = info.MaxTokens
+			if hasInfo && info.MaxTokens > 0 {
+				budget = llm.ClampThinkingBudget(c.providerName, model, budget, info.MaxTokens)
 			}
 			tc.ThinkingBudget = budget
 		} else {
@@ -389,11 +386,8 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				// ThinkingMinimal, ThinkingXHigh — no matching Gemini string,
 				// fall back to token budget.
 				budget := llm.ThinkingBudgetTokens(thinkingLevel, 0)
-				if hasInfo && info.MaxTokens > 0 && budget > info.MaxTokens {
-					slog.Warn("clamping thinking budget to model max_tokens",
-						"provider", c.providerName, "model", model,
-						"requested", budget, "max", info.MaxTokens)
-					budget = info.MaxTokens
+				if hasInfo && info.MaxTokens > 0 {
+					budget = llm.ClampThinkingBudget(c.providerName, model, budget, info.MaxTokens)
 				}
 				tc.ThinkingBudget = budget
 			}
@@ -411,6 +405,9 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 			if info.MaxTokens > 0 && padded > info.MaxTokens {
 				padded = info.MaxTokens
 			}
+			slog.Warn("padding maxOutputTokens for native thinking model",
+				"provider", c.providerName, "model", model,
+				"original", cur, "padded", padded)
 			apiReq.GenerationConfig.MaxOutputTokens = padded
 		}
 	}

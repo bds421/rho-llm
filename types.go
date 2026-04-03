@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"log/slog"
 	"time"
 )
 
@@ -88,6 +89,18 @@ func ThinkingBudgetTokens(level ThinkingLevel, customBudget int) int {
 	default:
 		return 0
 	}
+}
+
+// ClampThinkingBudget clamps a thinking budget to the model's max output tokens.
+// Returns the clamped value and logs a warning if clamping occurred.
+func ClampThinkingBudget(provider, model string, budget, maxTokens int) int {
+	if maxTokens > 0 && budget > maxTokens {
+		slog.Warn("clamping thinking budget to model max_tokens",
+			"provider", provider, "model", model,
+			"requested", budget, "max", maxTokens)
+		return maxTokens
+	}
+	return budget
 }
 
 // TokensNotReported is the sentinel value for token counts when the provider
@@ -206,6 +219,16 @@ func NewToolResultMessage(toolUseID, result string, isError bool) Message {
 	}
 }
 
+// NewSystemMessage creates a system message with text content.
+func NewSystemMessage(text string) Message {
+	return Message{
+		Role: RoleSystem,
+		Content: []ContentPart{
+			{Type: ContentText, Text: text},
+		},
+	}
+}
+
 // NewAssistantMessage creates an assistant message from a Response, preserving
 // both text content and tool_use blocks. Use this instead of NewTextMessage
 // when the response contains tool calls — NewTextMessage would lose them.
@@ -241,7 +264,7 @@ func NewAssistantMessage(resp *Response) Message {
 type Tool struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"input_schema"`
+	InputSchema map[string]any `json:"input_schema"`
 
 	// Caching (Anthropic): mark this tool definition as cacheable
 	CacheControl bool `json:"cache_control,omitempty"`

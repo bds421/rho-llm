@@ -406,6 +406,20 @@ func TestNewTextMessage(t *testing.T) {
 	}
 }
 
+// TestNewSystemMessage verifies system message construction.
+func TestNewSystemMessage(t *testing.T) {
+	msg := llm.NewSystemMessage("You are a helpful assistant.")
+	if msg.Role != llm.RoleSystem {
+		t.Errorf("Expected role 'system', got %q", msg.Role)
+	}
+	if len(msg.Content) != 1 {
+		t.Fatalf("Expected 1 content part, got %d", len(msg.Content))
+	}
+	if msg.Content[0].Type != llm.ContentText || msg.Content[0].Text != "You are a helpful assistant." {
+		t.Errorf("Unexpected content: %+v", msg.Content[0])
+	}
+}
+
 // TestNewToolResultMessage verifies tool result message construction.
 func TestNewToolResultMessage(t *testing.T) {
 	msg := llm.NewToolResultMessage("tool-123", "result data", false)
@@ -3536,6 +3550,43 @@ func TestThinkingBudgetTokens(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("ThinkingBudgetTokens(%q, %d) = %d, want %d", tc.level, tc.customBudget, got, tc.want)
 		}
+	}
+}
+
+// TestClampThinkingBudget verifies centralized budget clamping.
+func TestClampThinkingBudget(t *testing.T) {
+	// No clamping needed
+	got := llm.ClampThinkingBudget("test", "model", 1000, 65536)
+	if got != 1000 {
+		t.Errorf("ClampThinkingBudget(1000, 65536) = %d, want 1000", got)
+	}
+
+	// Clamping needed
+	got = llm.ClampThinkingBudget("test", "model", 200000, 65536)
+	if got != 65536 {
+		t.Errorf("ClampThinkingBudget(200000, 65536) = %d, want 65536", got)
+	}
+
+	// Zero maxTokens = no clamping
+	got = llm.ClampThinkingBudget("test", "model", 200000, 0)
+	if got != 200000 {
+		t.Errorf("ClampThinkingBudget(200000, 0) = %d, want 200000", got)
+	}
+}
+
+// TestConfigMaxRetriesDefault verifies DefaultConfig sets MaxRetries.
+func TestConfigMaxRetriesDefault(t *testing.T) {
+	cfg := llm.DefaultConfig()
+	if cfg.MaxRetries != llm.DefaultMaxRetries {
+		t.Errorf("DefaultConfig().MaxRetries = %d, want %d", cfg.MaxRetries, llm.DefaultMaxRetries)
+	}
+}
+
+// TestConfigBetaFeaturesDefault verifies DefaultConfig sets BetaFeatures.
+func TestConfigBetaFeaturesDefault(t *testing.T) {
+	cfg := llm.DefaultConfig()
+	if len(cfg.BetaFeatures) != 1 || cfg.BetaFeatures[0] != "interleaved-thinking-2025-05-14" {
+		t.Errorf("DefaultConfig().BetaFeatures = %v, want [interleaved-thinking-2025-05-14]", cfg.BetaFeatures)
 	}
 }
 

@@ -134,6 +134,17 @@ type Config struct {
 
 	// RetryHook receives retry lifecycle events for observability. Not serialized.
 	RetryHook RetryHook `json:"-"`
+
+	// MaxRetries caps the number of retry/rotation iterations. Zero uses the
+	// default (DefaultMaxRetries). Minimum effective value is 3 (for single-key
+	// resilience against transient errors).
+	MaxRetries int `json:"max_retries,omitempty"`
+
+	// BetaFeatures lists provider-specific beta feature flags.
+	// For Anthropic, these are joined with "," and sent as the "anthropic-beta" header.
+	// Other providers ignore this field.
+	// Default: []string{"interleaved-thinking-2025-05-14"} (set by DefaultConfig).
+	BetaFeatures []string `json:"beta_features,omitempty"`
 }
 
 // DefaultTimeout is applied when Config.Timeout is zero (the time.Duration zero value).
@@ -141,9 +152,9 @@ type Config struct {
 // calling DefaultConfig().
 const DefaultTimeout = 120 * time.Second
 
-// maxRetryAttempts caps the number of retry/rotation iterations in PooledClient
-// regardless of pool size. Prevents pathological retry storms with large key pools.
-const maxRetryAttempts = 10
+// DefaultMaxRetries is the default cap on retry/rotation iterations in PooledClient.
+// Prevents pathological retry storms with large key pools.
+const DefaultMaxRetries = 10
 
 const (
 	// DefaultCooldownRateLimit is the cooldown applied to profiles after a 429 rate-limit error.
@@ -173,6 +184,8 @@ func DefaultConfig() Config {
 		AuthHeader:       "Bearer",
 		CircuitThreshold: DefaultCircuitThreshold,
 		CircuitCooldown:  DefaultCircuitCooldown,
+		MaxRetries:       DefaultMaxRetries,
+		BetaFeatures:     []string{"interleaved-thinking-2025-05-14"},
 	}
 }
 

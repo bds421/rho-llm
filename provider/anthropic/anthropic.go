@@ -94,12 +94,12 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 // =============================================================================
 
 // anthropicRequest is the Anthropic API request format.
-// System is interface{} to support both plain string and structured content blocks
+// System is any to support both plain string and structured content blocks
 // (required for cache_control on system prompts).
 type anthropicRequest struct {
 	Model         string             `json:"model"`
 	Messages      []anthropicMessage `json:"messages"`
-	System        interface{}        `json:"system,omitempty"`
+	System        any        `json:"system,omitempty"`
 	MaxTokens     int                `json:"max_tokens"`
 	Temperature   *float64           `json:"temperature,omitempty"`
 	Tools         []anthropicTool    `json:"tools,omitempty"`
@@ -110,13 +110,13 @@ type anthropicRequest struct {
 
 type anthropicMessage struct {
 	Role    string        `json:"role"`
-	Content []interface{} `json:"content"`
+	Content []any `json:"content"`
 }
 
 type anthropicTool struct {
 	Name         string                 `json:"name"`
 	Description  string                 `json:"description"`
-	InputSchema  map[string]interface{} `json:"input_schema"`
+	InputSchema  map[string]any `json:"input_schema"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
@@ -154,6 +154,16 @@ type anthropicResponse struct {
 	} `json:"usage"`
 }
 
+// setBetaHeader sets the anthropic-beta header from config when thinking is active.
+func (c *Client) setBetaHeader(httpReq *http.Request, req llm.Request) {
+	if req.ThinkingLevel == llm.ThinkingNone {
+		return
+	}
+	if len(c.config.BetaFeatures) > 0 {
+		httpReq.Header.Set("anthropic-beta", strings.Join(c.config.BetaFeatures, ","))
+	}
+}
+
 func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*llm.Response, error) {
 	// Fall back to config-level ThinkingLevel if not set on the request
 	if req.ThinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
@@ -179,12 +189,8 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 	httpReq.Header.Set("x-api-key", c.config.APIKey)
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 
-	// Extended thinking requires a beta feature flag. This header will become
-	// unnecessary when Anthropic promotes interleaved thinking to GA.
-	// Track: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
-	if req.ThinkingLevel != llm.ThinkingNone {
-		httpReq.Header.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
-	}
+	// Beta features from config (e.g., extended thinking).
+	c.setBetaHeader(httpReq, req)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -237,10 +243,8 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 	httpReq.Header.Set("anthropic-version", anthropicVersion)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	// Extended thinking requires a beta feature flag (see doRequest for details).
-	if req.ThinkingLevel != llm.ThinkingNone {
-		httpReq.Header.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
-	}
+	// Beta features from config.
+	c.setBetaHeader(httpReq, req)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -300,7 +304,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			switch part.Type {
 			case llm.ContentText:
 				if part.Text != "" {
-					block := map[string]interface{}{
+					block := map[string]any{
 						"type": "text",
 						"text": part.Text,
 					}
@@ -313,9 +317,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				if err := llm.ValidateImageSource(part); err != nil {
 					return anthropicRequest{}, err
 				}
-				block := map[string]interface{}{
+				block := map[string]any{
 					"type": "image",
-					"source": map[string]interface{}{
+					"source": map[string]any{
 						"type":       part.Source.Type,
 						"media_type": part.Source.MediaType,
 						"data":       part.Source.Data,
@@ -326,14 +330,14 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				}
 				apiMsg.Content = append(apiMsg.Content, block)
 			case llm.ContentToolUse:
-				apiMsg.Content = append(apiMsg.Content, map[string]interface{}{
+				apiMsg.Content = append(apiMsg.Content, map[string]any{
 					"type":  "tool_use",
 					"id":    part.ToolUseID,
 					"name":  part.ToolName,
 					"input": part.ToolInput,
 				})
 			case llm.ContentToolResult:
-				apiMsg.Content = append(apiMsg.Content, map[string]interface{}{
+				apiMsg.Content = append(apiMsg.Content, map[string]any{
 					"type":        "tool_result",
 					"tool_use_id": part.ToolResultID,
 					"content":     part.ToolResultContent,
@@ -347,9 +351,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	// Set system field: structured blocks (with cache_control) or plain string
 	if req.SystemCacheControl && len(systemTexts) > 0 {
 		// Send as array of content blocks with cache_control on the last block
-		var blocks []interface{}
+		var blocks []any
 		for i, text := range systemTexts {
-			block := map[string]interface{}{
+			block := map[string]any{
 				"type": "text",
 				"text": text,
 			}
@@ -363,17 +367,19 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		apiReq.System = strings.Join(systemTexts, "\n")
 	}
 
-	// Convert tools
-	for _, tool := range req.Tools {
-		at := anthropicTool{
-			Name:        tool.Name,
-			Description: tool.Description,
-			InputSchema: tool.InputSchema,
+	// Convert tools (omit empty array — matches Gemini and OpenAI adapters)
+	if len(req.Tools) > 0 {
+		for _, tool := range req.Tools {
+			at := anthropicTool{
+				Name:        tool.Name,
+				Description: tool.Description,
+				InputSchema: tool.InputSchema,
+			}
+			if tool.CacheControl {
+				at.CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+			}
+			apiReq.Tools = append(apiReq.Tools, at)
 		}
-		if tool.CacheControl {
-			at.CacheControl = &anthropicCacheControl{Type: "ephemeral"}
-		}
-		apiReq.Tools = append(apiReq.Tools, at)
 	}
 
 	// Configure stop sequences
@@ -386,11 +392,8 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		budget := llm.ThinkingBudgetTokens(req.ThinkingLevel, req.ThinkingBudget)
 		// Clamp budget to model's max output tokens — budget_tokens cannot
 		// exceed max_tokens, which itself cannot exceed the model's limit.
-		if info, ok := llm.GetModelInfo(apiReq.Model); ok && info.MaxTokens > 0 && budget > info.MaxTokens {
-			slog.Warn("clamping thinking budget to model max_tokens",
-				"provider", "anthropic", "model", apiReq.Model,
-				"requested", budget, "max", info.MaxTokens)
-			budget = info.MaxTokens
+		if info, ok := llm.GetModelInfo(apiReq.Model); ok && info.MaxTokens > 0 {
+			budget = llm.ClampThinkingBudget("anthropic", apiReq.Model, budget, info.MaxTokens)
 		}
 		apiReq.Thinking = &anthropicThinking{
 			Type:         "enabled",

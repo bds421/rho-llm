@@ -448,6 +448,8 @@ delay = p.Delay(attempt)
 | CooldownOverload | Duration | 30s | Profile cooldown for 503 errors |
 | CooldownDefault | Duration | 10s | Profile cooldown for other transient errors |
 | RetryHook | RetryHook | nil | Observability hook for retry lifecycle events |
+| MaxRetries | int | 10 | Cap on retry/rotation iterations (min effective: 3) |
+| BetaFeatures | []string | ["interleaved-thinking-..."] | Provider beta flags (Anthropic: anthropic-beta header) |
 
 ## Model Registry
 

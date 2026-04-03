@@ -2,10 +2,12 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // closeSpy is a minimal Client that tracks whether Close was called.
@@ -51,6 +53,70 @@ func (c *closeSpy) Stream(_ context.Context, _ Request) iter.Seq2[StreamEvent, e
 func (c *closeSpy) Provider() string { return c.provider }
 func (c *closeSpy) Model() string    { return c.model }
 func (c *closeSpy) Close() error     { c.closed.Store(true); return nil }
+
+// --- AuthPool.GetAvailable edge case tests ---
+
+func TestGetAvailableExpiredCooldownReturnsProfile(t *testing.T) {
+	// A profile with IsHealthy=true and Cooldown in the past (or zero)
+	// should be available, not reported as "in cooldown".
+	pool := &AuthPool{
+		profiles: []*AuthProfile{
+			{
+				Name:      "key-1",
+				APIKey:    "k1",
+				IsHealthy: true,
+				Cooldown:  time.Now().Add(-5 * time.Second), // expired cooldown
+			},
+		},
+	}
+
+	profile, err := pool.GetAvailable()
+	if err != nil {
+		t.Fatalf("GetAvailable() returned error for expired cooldown: %v", err)
+	}
+	if profile.Name != "key-1" {
+		t.Fatalf("got profile %q, want key-1", profile.Name)
+	}
+}
+
+func TestGetAvailableMixedHealthyDisabledReturnsCooldownWait(t *testing.T) {
+	// One permanently disabled profile, one healthy profile in future cooldown.
+	// Should return CooldownError with positive wait time, NOT a garbage value.
+	futureTime := time.Now().Add(30 * time.Second)
+	pool := &AuthPool{
+		profiles: []*AuthProfile{
+			{
+				Name:      "disabled",
+				APIKey:    "k1",
+				IsHealthy: false, // permanently disabled
+			},
+			{
+				Name:      "cooling",
+				APIKey:    "k2",
+				IsHealthy: true,
+				Cooldown:  futureTime, // 30s from now
+			},
+		},
+	}
+
+	_, err := pool.GetAvailable()
+	if err == nil {
+		t.Fatal("expected CooldownError, got nil")
+	}
+
+	var cooldownErr *CooldownError
+	if !errors.As(err, &cooldownErr) {
+		t.Fatalf("expected *CooldownError, got %T: %v", err, err)
+	}
+
+	// Wait time should be ~30s, definitely positive and less than 60s
+	if cooldownErr.Wait <= 0 {
+		t.Errorf("CooldownError.Wait = %v, want positive", cooldownErr.Wait)
+	}
+	if cooldownErr.Wait > 60*time.Second {
+		t.Errorf("CooldownError.Wait = %v, want <= 60s (got garbage value)", cooldownErr.Wait)
+	}
+}
 
 // --- refCountedClient unit tests ---
 

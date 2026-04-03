@@ -403,7 +403,7 @@ type responsesTool struct {
 	Function struct {
 		Name        string                 `json:"name"`
 		Description string                 `json:"description"`
-		Parameters  map[string]interface{} `json:"parameters"`
+		Parameters  map[string]any `json:"parameters"`
 	} `json:"function"`
 }
 
@@ -541,7 +541,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 				Function: struct {
 					Name        string                 `json:"name"`
 					Description string                 `json:"description"`
-					Parameters  map[string]interface{} `json:"parameters"`
+					Parameters  map[string]any `json:"parameters"`
 				}{
 					Name:        tool.Name,
 					Description: tool.Description,
@@ -583,16 +583,16 @@ func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) err
 
 	// Build multipart content for images
 	if len(imageParts) > 0 {
-		var contentArray []interface{}
+		var contentArray []any
 		if len(textParts) > 0 {
-			contentArray = append(contentArray, map[string]interface{}{
+			contentArray = append(contentArray, map[string]any{
 				"type": "input_text",
 				"text": strings.Join(textParts, "\n"),
 			})
 		}
 		for _, img := range imageParts {
 			dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
-			contentArray = append(contentArray, map[string]interface{}{
+			contentArray = append(contentArray, map[string]any{
 				"type":      "input_image",
 				"image_url": dataURI,
 			})

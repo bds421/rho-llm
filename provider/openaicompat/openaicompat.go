@@ -197,7 +197,7 @@ type openaiStreamOptions struct {
 
 type openaiMessage struct {
 	Role             string           `json:"role"`
-	Content          interface{}      `json:"content"`                     // string or array
+	Content          any      `json:"content"`                     // string or array
 	ReasoningContent string           `json:"reasoning_content,omitempty"` // thinking/reasoning output (OpenAI, DeepSeek, etc.)
 	Reasoning        string           `json:"reasoning,omitempty"`         // thinking/reasoning output (Ollama)
 	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
@@ -209,7 +209,7 @@ type openaiTool struct {
 	Function struct {
 		Name        string                 `json:"name"`
 		Description string                 `json:"description"`
-		Parameters  map[string]interface{} `json:"parameters"`
+		Parameters  map[string]any `json:"parameters"`
 	} `json:"function"`
 }
 
@@ -332,16 +332,16 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 
 			// If images are present, build a multipart content array
 			if len(imageParts) > 0 {
-				var contentArray []interface{}
+				var contentArray []any
 				if len(textParts) > 0 {
-					contentArray = append(contentArray, map[string]interface{}{
+					contentArray = append(contentArray, map[string]any{
 						"type": "text",
 						"text": strings.Join(textParts, "\n"),
 					})
 				}
 				for _, img := range imageParts {
 					dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
-					contentArray = append(contentArray, map[string]interface{}{
+					contentArray = append(contentArray, map[string]any{
 						"type":      "image_url",
 						"image_url": map[string]string{"url": dataURI},
 					})
@@ -435,7 +435,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 					Function: struct {
 						Name        string                 `json:"name"`
 						Description string                 `json:"description"`
-						Parameters  map[string]interface{} `json:"parameters"`
+						Parameters  map[string]any `json:"parameters"`
 					}{
 						Name:        tool.Name,
 						Description: tool.Description,
