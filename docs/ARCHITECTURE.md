@@ -1,12 +1,12 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of March 2026 (v0.2.1).
+> **Status:** Reflects the actual implementation as of April 2026 (v0.2.7).
 
 ---
 
 ## 1. Overview
 
-`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers eleven providers across three distinct wire protocols.
+`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers fifteen providers across three distinct wire protocols.
 
 **Key capabilities:**
 - Single `Client` interface for all providers and protocols
@@ -44,7 +44,7 @@ github.com/bds421/rho-llm/
     ├── all.go                       # Blank-imports all sub-packages
     ├── anthropic/anthropic.go       # Native Anthropic API adapter
     ├── gemini/gemini.go             # Native Google Gemini API adapter
-    └── openaicompat/openaicompat.go # OpenAI-compatible adapter (11+ providers)
+    └── openaicompat/openaicompat.go # OpenAI-compatible adapter (13+ providers)
 ```
 
 Provider implementations register themselves via `init()` using `llm.RegisterProvider()`. Consumers that call `llm.NewClient()` must add a blank import: `_ "github.com/bds421/rho-llm/provider"`.

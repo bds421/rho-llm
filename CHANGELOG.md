@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-04-04
+
+### Added
+
+- **DeepSeek provider preset** — New `deepseek` provider pointing to `api.deepseek.com` (OpenAI-compatible). Default model: `deepseek-chat`. Requires `DEEPSEEK_API_KEY`. Aliases: `deepseek-cloud`, `deepseek-v4`.
+
+- **Cohere provider preset** — New `cohere` provider pointing to `api.cohere.ai/compatibility/v1` (OpenAI-compatible). Default model: `command-a-03-2025`. Requires `COHERE_API_KEY`. Aliases: `cohere`, `command-a`.
+
+- **DeepSeek V4 (`deepseek-chat`)** — Flagship DeepSeek model with hybrid reasoning. 1M context, 16K max output, intrinsic thinking. $0.30/$0.50 per 1M tokens.
+
+- **Cohere Command A (`command-a-03-2025`)** — Latest Cohere generation with reasoning support. 256K context, 4K max output. $2.50/$10.00 per 1M tokens.
+
+- **Meta Llama 4 Scout (`meta-llama/llama-4-scout-17b-16e-instruct`)** — 17B active params, 16 experts (MoE). Available on Groq. 327K context, 16K max output. $0.11/$0.34 per 1M tokens. Aliases: `llama4`, `llama-4-scout`.
+
+- **Mistral Devstral Small 2 (`devstral-small-2-2512`)** — Compact 24B coding model. 262K context. $0.10/$0.30 per 1M tokens. Alias: `devstral-small`.
+
+- **Qwen 3.5 Omni variants** — Three multimodal models added to DashScope provider: `qwen3.5-omni-plus`, `qwen3.5-omni-flash`, `qwen3.5-omni-light`. All support 256K context and intrinsic thinking. Pricing in free preview (not yet published). Alias: `qwen-omni` resolves to `qwen3.5-omni-plus`.
+
 ## [0.2.5] - 2026-04-03
 
 ### Added

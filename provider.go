@@ -29,6 +29,8 @@ var presets = map[string]ProviderPreset{
 	"openrouter": {BaseURL: "https://openrouter.ai/api/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"dashscope":  {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"qwen":       {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"deepseek":   {BaseURL: "https://api.deepseek.com", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"cohere":     {BaseURL: "https://api.cohere.ai/compatibility/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 
 	// OpenAI-compatible: local providers (no auth)
 	"ollama":   {BaseURL: "http://localhost:11434/v1", AuthHeader: "", Protocol: "openai_compat"},

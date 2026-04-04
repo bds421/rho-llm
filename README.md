@@ -23,13 +23,15 @@ go get github.com/bds421/rho-llm
 | Mistral | OpenAI-compat | Bearer | api.mistral.ai/v1 |
 | OpenRouter | OpenAI-compat | Bearer | openrouter.ai/api/v1 |
 | DashScope/Qwen | OpenAI-compat | Bearer | dashscope-intl.aliyuncs.com/compatible-mode/v1 |
+| DeepSeek | OpenAI-compat | Bearer | api.deepseek.com |
+| Cohere | OpenAI-compat | Bearer | api.cohere.ai/compatibility/v1 |
 | Ollama | OpenAI-compat | None | localhost:11434/v1 |
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
 ## Quick Start
 
-This example demonstrates a complete request using Google Gemini, but the code is identical for all 13 providers.
+This example demonstrates a complete request using Google Gemini, but the code is identical for all 15 providers.
 
 ```go
 import _ "github.com/bds421/rho-llm/provider" // required: register adapters
@@ -508,6 +510,7 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | `groq` | `llama-3.3-70b-versatile` |
 | `llama`, `llama-70b` | `llama-3.3-70b-versatile` |
 | `llama-8b` | `llama-3.1-8b-instant` |
+| `llama4`, `llama-4-scout` | `meta-llama/llama-4-scout-17b-16e-instruct` |
 | `gpt-oss` | `openai/gpt-oss-120b` |
 | `gpt-oss-20b` | `openai/gpt-oss-20b` |
 
@@ -521,13 +524,27 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | `magistral` | `magistral-medium-2509` |
 | `codestral` | `codestral-2508` |
 | `devstral` | `devstral-2512` |
+| `devstral-small` | `devstral-small-2-2512` |
 | `ministral` | `ministral-8b-2512` |
+
+### DeepSeek aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `deepseek-cloud`, `deepseek-v4` | `deepseek-chat` |
+
+### Cohere aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `cohere`, `command-a` | `command-a-03-2025` |
 
 ### DashScope/Qwen aliases
 
 | Alias | Resolves to |
 |-------|-------------|
 | `qwen-cloud` | `qwen3.6-plus` |
+| `qwen-omni` | `qwen3.5-omni-plus` |
 
 ### Ollama aliases
 
@@ -585,7 +602,7 @@ llm/
     all.go                               # Blank-imports all sub-packages
     anthropic/anthropic.go               # Anthropic Claude adapter
     gemini/gemini.go                     # Google Gemini adapter
-    openaicompat/openaicompat.go         # OpenAI-compatible adapter (11+ providers)
+    openaicompat/openaicompat.go         # OpenAI-compatible adapter (13+ providers)
 ```
 
 Consumers that call `llm.NewClient()` must add a blank import in their `main.go`:
