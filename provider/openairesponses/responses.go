@@ -578,6 +578,11 @@ func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) err
 				return err
 			}
 			imageParts = append(imageParts, part)
+		case llm.ContentDocument:
+			// The Responses API expects PDFs as input_file items (file_id or
+			// file_data), which this adapter does not yet build. Fail loudly
+			// rather than silently dropping the document.
+			return fmt.Errorf("%s adapter does not support document content (ContentDocument); use the gemini or anthropic provider for PDFs", c.providerName)
 		}
 	}
 

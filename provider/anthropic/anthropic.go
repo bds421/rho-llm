@@ -326,6 +326,23 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					block["cache_control"] = map[string]string{"type": "ephemeral"}
 				}
 				apiMsg.Content = append(apiMsg.Content, block)
+			case llm.ContentDocument:
+				// Anthropic parses PDFs natively via the "document" content block.
+				if err := llm.ValidateDocumentSource(part); err != nil {
+					return anthropicRequest{}, err
+				}
+				block := map[string]any{
+					"type": "document",
+					"source": map[string]any{
+						"type":       part.Document.Type,
+						"media_type": part.Document.MediaType,
+						"data":       part.Document.Data,
+					},
+				}
+				if part.CacheControl {
+					block["cache_control"] = map[string]string{"type": "ephemeral"}
+				}
+				apiMsg.Content = append(apiMsg.Content, block)
 			case llm.ContentToolUse:
 				apiMsg.Content = append(apiMsg.Content, map[string]any{
 					"type":  "tool_use",

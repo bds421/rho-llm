@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-06-02
+
+### Added
+
+- **Document / PDF content support** — New `ContentDocument` content type with a `DocumentSource{Type, MediaType, Data}` payload, `ValidateDocumentSource()`, and a `NewDocumentMessage()` constructor. Lets callers pass PDFs inline as base64 (supported media type: `application/pdf`).
+  - **Gemini** serializes documents as `inlineData` parts (native PDF parsing — text layout preserved).
+  - **Anthropic** serializes documents as native `document` content blocks (with `cache_control` support).
+  - **OpenAI-compatible** (xAI Grok, etc.) emits an `image_url` data URI so vision models read the PDF, matching the legacy decoder's behavior.
+  - **OpenAI Responses** returns an explicit error for document content instead of silently dropping it.
+
 ## [0.2.7] - 2026-04-04
 
 ### Added

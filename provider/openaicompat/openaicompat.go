@@ -307,6 +307,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		if msg.Role == llm.RoleUser {
 			var textParts []string
 			var imageParts []llm.ContentPart
+			var docParts []llm.ContentPart
 			hasToolResults := false
 
 			for _, part := range msg.Content {
@@ -327,11 +328,18 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 						return openaiRequest{}, err
 					}
 					imageParts = append(imageParts, part)
+				case llm.ContentDocument:
+					if err := llm.ValidateDocumentSource(part); err != nil {
+						return openaiRequest{}, err
+					}
+					docParts = append(docParts, part)
 				}
 			}
 
-			// If images are present, build a multipart content array
-			if len(imageParts) > 0 {
+			// If images or documents are present, build a multipart content array.
+			// Documents (PDFs) are passed as image_url data URIs — vision models
+			// such as Grok read them the same way the legacy decoder did.
+			if len(imageParts) > 0 || len(docParts) > 0 {
 				var contentArray []any
 				if len(textParts) > 0 {
 					contentArray = append(contentArray, map[string]any{
@@ -341,6 +349,13 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 				}
 				for _, img := range imageParts {
 					dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
+					contentArray = append(contentArray, map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]string{"url": dataURI},
+					})
+				}
+				for _, doc := range docParts {
+					dataURI := fmt.Sprintf("data:%s;base64,%s", doc.Document.MediaType, doc.Document.Data)
 					contentArray = append(contentArray, map[string]any{
 						"type":      "image_url",
 						"image_url": map[string]string{"url": dataURI},

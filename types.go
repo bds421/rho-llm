@@ -32,6 +32,7 @@ type ContentType string
 const (
 	ContentText       ContentType = "text"
 	ContentImage      ContentType = "image"
+	ContentDocument   ContentType = "document"
 	ContentToolUse    ContentType = "tool_use"
 	ContentToolResult ContentType = "tool_result"
 )
@@ -128,6 +129,9 @@ type ContentPart struct {
 	// Image content
 	Source *ImageSource `json:"source,omitempty"`
 
+	// Document content (e.g. PDFs passed inline as base64)
+	Document *DocumentSource `json:"document,omitempty"`
+
 	// Tool use (from assistant)
 	ToolUseID        string `json:"id,omitempty"`
 	ToolName         string `json:"name,omitempty"`
@@ -185,6 +189,56 @@ func NewImageMessage(role Role, mediaType, base64Data string) Message {
 			{
 				Type: ContentImage,
 				Source: &ImageSource{
+					Type:      "base64",
+					MediaType: mediaType,
+					Data:      base64Data,
+				},
+			},
+		},
+	}
+}
+
+// DocumentSource represents an inline document (e.g. a PDF) passed as base64.
+type DocumentSource struct {
+	Type      string `json:"type"`       // base64
+	MediaType string `json:"media_type"` // application/pdf, etc.
+	Data      string `json:"data"`       // base64 encoded data
+}
+
+// validDocumentMediaTypes lists the MIME types accepted for document content.
+// Gemini and Anthropic natively parse PDFs; OpenAI-compatible providers receive
+// them as image_url data URIs (vision models).
+var validDocumentMediaTypes = map[string]bool{
+	"application/pdf": true,
+}
+
+// ValidateDocumentSource checks that a ContentDocument part has a valid,
+// non-empty document with a supported media type. Called by adapter
+// buildRequest methods before serializing document content to the wire format.
+func ValidateDocumentSource(part ContentPart) error {
+	if part.Document == nil {
+		return fmt.Errorf("document source must not be nil")
+	}
+	if part.Document.Data == "" {
+		return fmt.Errorf("document data must not be empty")
+	}
+	if !validDocumentMediaTypes[part.Document.MediaType] {
+		return fmt.Errorf("unsupported document media type: %s", part.Document.MediaType)
+	}
+	if part.Document.Type != "base64" {
+		return fmt.Errorf("unsupported document source type: %s", part.Document.Type)
+	}
+	return nil
+}
+
+// NewDocumentMessage creates a single-document message (parallel to NewImageMessage).
+func NewDocumentMessage(role Role, mediaType, base64Data string) Message {
+	return Message{
+		Role: role,
+		Content: []ContentPart{
+			{
+				Type: ContentDocument,
+				Document: &DocumentSource{
 					Type:      "base64",
 					MediaType: mediaType,
 					Data:      base64Data,

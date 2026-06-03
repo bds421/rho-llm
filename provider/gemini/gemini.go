@@ -316,6 +316,18 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 					},
 				})
 
+			case llm.ContentDocument:
+				// Gemini parses PDFs natively via inlineData (same wire shape as images).
+				if err := llm.ValidateDocumentSource(part); err != nil {
+					return geminiRequest{}, err
+				}
+				content.Parts = append(content.Parts, geminiPart{
+					InlineData: &geminiInlineData{
+						MimeType: part.Document.MediaType,
+						Data:     part.Document.Data,
+					},
+				})
+
 			case llm.ContentToolUse:
 				gp := geminiPart{
 					FunctionCall: &geminiFunctionCall{

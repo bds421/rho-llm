@@ -1,6 +1,6 @@
 # rho-llm
 
-Multi-provider LLM client for Go. Streaming, tool use, image/vision support, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
+Multi-provider LLM client for Go. Streaming, tool use, image/vision support, PDF/document support, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
 
 **Requires Go 1.26+** (`go 1.26.0` in `go.mod`).
 
@@ -112,6 +112,33 @@ msg := llm.NewImageMessage(llm.RoleUser, "image/png", imgData)
 ```
 
 Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+
+## Document / PDF Support
+
+Send PDFs to document-capable models using `ContentDocument` parts with base64-encoded data. Gemini and Anthropic parse PDFs natively (preserving text layout); OpenAI-compatible vision models (e.g. xAI Grok) receive the PDF as an `image_url` data URI. The Responses API adapter returns an explicit error rather than silently dropping a document.
+
+```go
+pdfBytes, _ := os.ReadFile("invoice.pdf")
+pdfData := base64.StdEncoding.EncodeToString(pdfBytes)
+
+req := llm.Request{
+    Messages: []llm.Message{{
+        Role: llm.RoleUser,
+        Content: []llm.ContentPart{
+            {Type: llm.ContentText, Text: "Extract the invoice total and date."},
+            {Type: llm.ContentDocument, Document: &llm.DocumentSource{
+                Type: "base64", MediaType: "application/pdf", Data: pdfData,
+            }},
+        },
+    }},
+}
+resp, err := client.Complete(ctx, req)
+
+// Or use the convenience helper for single-document messages:
+msg := llm.NewDocumentMessage(llm.RoleUser, "application/pdf", pdfData)
+```
+
+Supported media types: `application/pdf`.
 
 ## Streaming
 

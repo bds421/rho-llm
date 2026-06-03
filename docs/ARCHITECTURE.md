@@ -13,6 +13,7 @@
 - Streaming via Go 1.23 `iter.Seq2[StreamEvent, error]` iterators
 - Tool use / function calling
 - Image/vision support (base64 images in all 3 adapters)
+- Document/PDF support (`ContentDocument`: native on Gemini/Anthropic, data URI on OpenAI-compatible)
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
 - Auth pool rotation with exponential backoff and per-profile cooldown
 - Structured error types enabling reliable retry classification
@@ -132,11 +133,14 @@ Message
   └── Content: []ContentPart
         ├── {Type: ContentText, Text: "..."}
         ├── {Type: ContentImage, Source: ImageSource{base64, media_type}}
+        ├── {Type: ContentDocument, Document: DocumentSource{base64, media_type}}
         ├── {Type: ContentToolUse, ToolUseID, ToolName, ToolInput, ThoughtSignature}
         └── {Type: ContentToolResult, ToolResultID, ToolResultContent, IsError}
 ```
 
 `ContentImage` parts are fully implemented across all three adapters. Each adapter validates images via `ValidateImageSource()` and serializes to its native wire format: Anthropic uses inline `image` blocks with a `source` object; Gemini uses `inlineData` parts; OpenAI-compatible switches content from string to array with `image_url` data URIs. Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+
+`ContentDocument` parts carry inline PDFs (base64), validated via `ValidateDocumentSource()`. Gemini serializes them as `inlineData` and Anthropic as native `document` blocks (both parse the PDF text layer); OpenAI-compatible adapters emit an `image_url` data URI for vision models such as xAI Grok. The OpenAI Responses adapter returns an explicit error for documents rather than dropping them silently. Supported media types: `application/pdf`.
 
 `ThoughtSignature` on `tool_use` parts is a Gemini 3 requirement — the model returns an opaque signature that must be echoed back in the corresponding `tool_result` message. The adapters handle this automatically.
 
