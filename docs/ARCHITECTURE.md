@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of April 2026 (v0.2.7).
+> **Status:** Reflects the actual implementation as of June 2026 (v0.2.9).
 
 ---
 
@@ -439,9 +439,9 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 
 | Provider | Models |
 |---|---|
-| Anthropic | claude-opus-4-6, claude-sonnet-4-6, claude-sonnet-4-5, claude-haiku-4-5 |
-| xAI | grok-4-1-fast-{reasoning,non-reasoning}, grok-4-fast-{reasoning,non-reasoning}, grok-code-fast-1, grok-3, grok-3-mini |
-| Gemini | gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
+| Anthropic | claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 |
+| xAI | grok-4.3, grok-4.20-beta, grok-4-1-fast-{reasoning,non-reasoning}, grok-4-fast-{reasoning,non-reasoning}, grok-code-fast-1, grok-3, grok-3-mini |
+| Gemini | gemini-3.5-flash, gemini-3.1-{pro,flash-lite}-preview, gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
 
 `EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0.
 

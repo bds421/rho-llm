@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-06-03
+
+### Added
+
+- **Claude Opus 4.8 (`claude-opus-4-8`)** — Anthropic's most capable model for complex reasoning and agentic coding. 1M context, 128K max output, extended thinking. $5.00/$25.00 per 1M tokens (cache write $6.25, cache read $0.50). The `opus` alias now resolves to this model.
+
+- **Claude Opus 4.7 (`claude-opus-4-7`)** — Previous Opus generation, still available. 1M context, 128K max output. $5.00/$25.00 per 1M tokens.
+
+- **OpenAI GPT-5.5 (`gpt-5.5`)** — Flagship GPT-5.5 reasoning model (Responses API). 1M context, 128K max output. $5.00/$30.00 per 1M tokens. Alias: `gpt5.5`.
+
+- **OpenAI GPT-5.5 Pro (`gpt-5.5-pro`)** — Highest-effort GPT-5.5 variant (Responses API). 1M context, 128K max output. $30.00/$180.00 per 1M tokens. Alias: `gpt5.5-pro`.
+
+- **Google Gemini 3.5 Flash (`gemini-3.5-flash`)** — GA Flash model that surpasses 3.1 Pro on coding and agentic benchmarks. 1M context, 64K max output, `ThoughtSignature`. $1.50/$9.00 per 1M tokens (cache read $0.15). Alias: `gemini3.5`.
+
+- **xAI Grok 4.3 (`grok-4.3`)** — xAI's cost-efficient flagship with built-in reasoning. 1M context. $1.25/$2.50 per 1M tokens. Aliases: `grok4.3`, `grok-4-3`.
+
 ## [0.2.8] - 2026-06-02
 
 ### Added

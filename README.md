@@ -491,7 +491,7 @@ delay = p.Delay(attempt)
 Use `ResolveModelAlias()` for short aliases:
 
 ```go
-model := llm.ResolveModelAlias("opus")   // -> "claude-opus-4-6"
+model := llm.ResolveModelAlias("opus")   // -> "claude-opus-4-8"
 model = llm.ResolveModelAlias("grok")    // -> "grok-4.20-beta"
 model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 ```
@@ -500,7 +500,7 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `opus` | `claude-opus-4-6` |
+| `opus` | `claude-opus-4-8` |
 | `sonnet` | `claude-sonnet-4-6` |
 | `haiku` | `claude-haiku-4-5-20251001` |
 | `claude` | `claude-sonnet-4-6` |
@@ -509,6 +509,7 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
+| `grok4.3`, `grok-4-3` | `grok-4.3` |
 | `grok`, `grok4.2`, `grok4.20`, `grok4` | `grok-4.20-beta` |
 | `grok4.1`, `grok-4.1` | `grok-4-1-fast-non-reasoning` |
 | `grok-reasoning`, `grok-4-reasoning` | `grok-4-fast-reasoning` |
@@ -520,6 +521,8 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
+| `gpt5.5` | `gpt-5.5` |
+| `gpt5.5-pro` | `gpt-5.5-pro` |
 | `gpt`, `gpt5.4`, `gpt5` | `gpt-5.4` |
 | `gpt5.3`, `gpt-instant` | `gpt-5.3-chat-latest` |
 | `gpt5.4-mini` | `gpt-5.4-mini` |
@@ -589,6 +592,7 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | Alias | Resolves to |
 |-------|-------------|
 | `gemini`, `flash-lite` | `gemini-3.1-flash-lite-preview` |
+| `gemini3.5` | `gemini-3.5-flash` |
 | `flash` | `gemini-2.5-flash` |
 | `gemini-pro`, `gemini3.1`, `gemini3`, `gemini-3` | `gemini-3.1-pro-preview` |
 

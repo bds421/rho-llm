@@ -309,10 +309,13 @@ func TestResolveModelAlias(t *testing.T) {
 		alias    string
 		expected string
 	}{
-		{"opus", "claude-opus-4-6"},
+		{"opus", "claude-opus-4-8"},
 		{"sonnet", "claude-sonnet-4-6"},
 		{"haiku", "claude-haiku-4-5-20251001"},
 		{"grok", "grok-4.20-beta"},
+		{"grok4.3", "grok-4.3"},
+		{"gpt5.5", "gpt-5.5"},
+		{"gemini3.5", "gemini-3.5-flash"},
 		{"grok-code", "grok-code-fast-1"},
 		{"gemini-pro", "gemini-3.1-pro-preview"},
 		{"flash-lite", "gemini-3.1-flash-lite-preview"},
@@ -3668,8 +3671,8 @@ func TestIsRetryableStringFallback(t *testing.T) {
 		{"context deadline exceeded: timeout", true},
 		{"read tcp: connection reset", true},
 		{"write: broken pipe", true},
-		{"unexpected eof", true},  // HasSuffix "eof" — network-level condition
-		{"something eof", true},   // HasSuffix "eof"
+		{"unexpected eof", true}, // HasSuffix "eof" — network-level condition
+		{"something eof", true},  // HasSuffix "eof"
 		// Should NOT match (narrowed in this fix)
 		{"your payment request failed", false},
 		{"request failed: invalid model", false},
@@ -4011,9 +4014,9 @@ func TestDefaultConfigIncludesCircuitBreaker(t *testing.T) {
 func TestRetryPolicyFromConfig(t *testing.T) {
 	customPolicy := &llm.RetryPolicy{
 		BaseDelay: 10 * time.Millisecond,
-		MaxDelay:   100 * time.Millisecond,
-		Factor:     2.0,
-		Jitter:     0,
+		MaxDelay:  100 * time.Millisecond,
+		Factor:    2.0,
+		Jitter:    0,
 	}
 
 	cfg := llm.DefaultConfig()

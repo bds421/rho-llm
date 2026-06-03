@@ -2,20 +2,20 @@ package llm
 
 // ModelInfo holds per-model metadata used to adapt API requests and UI.
 type ModelInfo struct {
-	ID               string  // Full model identifier
-	Provider         string  // anthropic, xai, gemini, openai, groq, etc.
-	MaxTokens        int     // Model-specific output limit (0 = use config default)
-	ContextWindow    int     // Max input tokens (0 = unknown)
-	InputPricePer1M  float64 // USD per 1M input tokens (0 = unknown/free)
-	OutputPricePer1M float64 // USD per 1M output tokens (0 = unknown/free)
+	ID                   string  // Full model identifier
+	Provider             string  // anthropic, xai, gemini, openai, groq, etc.
+	MaxTokens            int     // Model-specific output limit (0 = use config default)
+	ContextWindow        int     // Max input tokens (0 = unknown)
+	InputPricePer1M      float64 // USD per 1M input tokens (0 = unknown/free)
+	OutputPricePer1M     float64 // USD per 1M output tokens (0 = unknown/free)
 	CacheWritePricePer1M float64 // Anthropic: price per 1M cache creation tokens (0 = not applicable)
 	CacheReadPricePer1M  float64 // Anthropic/Gemini: price per 1M cached input tokens (0 = not applicable)
-	SupportsThinking bool    // Anthropic extended thinking
-	ThoughtSignature bool    // Gemini 3 models require thought_signature in function call responses
-	Thinking         bool    // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
-	ResponsesAPI     bool    // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
-	NoToolSupport    bool    // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
-	Label            string  // Short display name
+	SupportsThinking     bool    // Anthropic extended thinking
+	ThoughtSignature     bool    // Gemini 3 models require thought_signature in function call responses
+	Thinking             bool    // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
+	ResponsesAPI         bool    // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
+	NoToolSupport        bool    // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
+	Label                string  // Short display name
 }
 
 // modelRegistry maps model ID to its metadata.
@@ -23,8 +23,10 @@ type ModelInfo struct {
 var modelRegistry = map[string]ModelInfo{
 	// Anthropic — from platform.claude.com/docs (2026-03-18)
 	// Short aliases (claude-opus-4-5) resolve server-side to dated versions (claude-opus-4-5-20251101)
-	// Anthropic — from platform.claude.com/docs (2026-03-18)
+	// Anthropic — from platform.claude.com/docs (2026-06-03)
 	// Cache pricing: write = 1.25× input, read = 0.1× input (per Anthropic docs)
+	"claude-opus-4-8":            {ID: "claude-opus-4-8", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.8"},
+	"claude-opus-4-7":            {ID: "claude-opus-4-7", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.7"},
 	"claude-opus-4-6":            {ID: "claude-opus-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.6"},
 	"claude-opus-4-5":            {ID: "claude-opus-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5"},
 	"claude-opus-4-5-20251101":   {ID: "claude-opus-4-5-20251101", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5 (Nov)"},
@@ -40,22 +42,24 @@ var modelRegistry = map[string]ModelInfo{
 	"claude-haiku-4-5-20251001":  {ID: "claude-haiku-4-5-20251001", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Haiku 4.5"},
 	"claude-3-haiku-20240307":    {ID: "claude-3-haiku-20240307", Provider: "anthropic", MaxTokens: 4096, ContextWindow: 200000, InputPricePer1M: 0.25, OutputPricePer1M: 1.25, CacheWritePricePer1M: 0.3125, CacheReadPricePer1M: 0.025, SupportsThinking: false, Label: "Haiku 3 (legacy)"},
 
-	// xAI / Grok — from docs.x.ai/developers/models (2026-03-18)
-	"grok-4.20-beta":                      {ID: "grok-4.20-beta", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 Beta"},
-	"grok-4.20-beta-0309-reasoning":       {ID: "grok-4.20-beta-0309-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 R"},
-	"grok-4.20-beta-0309-non-reasoning":   {ID: "grok-4.20-beta-0309-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Label: "Grok 4.20"},
-	"grok-4.20-multi-agent-beta-0309":     {ID: "grok-4.20-multi-agent-beta-0309", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 Agent"},
-	"grok-4-1-fast-reasoning":             {ID: "grok-4-1-fast-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 4.1 R"},
-	"grok-4-1-fast-non-reasoning":         {ID: "grok-4-1-fast-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Label: "Grok 4.1"},
-	"grok-4-fast-reasoning":               {ID: "grok-4-fast-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 4 R"},
-	"grok-4-fast-non-reasoning":           {ID: "grok-4-fast-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Label: "Grok 4"},
-	"grok-4-0709":                         {ID: "grok-4-0709", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Thinking: true, Label: "Grok 4 (Jul)"},
-	"grok-code-fast-1":                    {ID: "grok-code-fast-1", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 0.20, OutputPricePer1M: 1.50, Thinking: true, Label: "Grok Code"},
-	"grok-3":                              {ID: "grok-3", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 3"},
-	"grok-3-mini":                         {ID: "grok-3-mini", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 3 Mini"},
+	// xAI / Grok — from docs.x.ai/developers/models (2026-06-03)
+	"grok-4.3":                          {ID: "grok-4.3", Provider: "xai", ContextWindow: 1000000, InputPricePer1M: 1.25, OutputPricePer1M: 2.50, Thinking: true, Label: "Grok 4.3"},
+	"grok-4.20-beta":                    {ID: "grok-4.20-beta", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 Beta"},
+	"grok-4.20-beta-0309-reasoning":     {ID: "grok-4.20-beta-0309-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 R"},
+	"grok-4.20-beta-0309-non-reasoning": {ID: "grok-4.20-beta-0309-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Label: "Grok 4.20"},
+	"grok-4.20-multi-agent-beta-0309":   {ID: "grok-4.20-multi-agent-beta-0309", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 Agent"},
+	"grok-4-1-fast-reasoning":           {ID: "grok-4-1-fast-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 4.1 R"},
+	"grok-4-1-fast-non-reasoning":       {ID: "grok-4-1-fast-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Label: "Grok 4.1"},
+	"grok-4-fast-reasoning":             {ID: "grok-4-fast-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 4 R"},
+	"grok-4-fast-non-reasoning":         {ID: "grok-4-fast-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Label: "Grok 4"},
+	"grok-4-0709":                       {ID: "grok-4-0709", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Thinking: true, Label: "Grok 4 (Jul)"},
+	"grok-code-fast-1":                  {ID: "grok-code-fast-1", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 0.20, OutputPricePer1M: 1.50, Thinking: true, Label: "Grok Code"},
+	"grok-3":                            {ID: "grok-3", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 3"},
+	"grok-3-mini":                       {ID: "grok-3-mini", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 3 Mini"},
 
-	// Gemini — from ai.google.dev/gemini-api/docs/pricing (2026-04-03)
+	// Gemini — from ai.google.dev/gemini-api/docs/pricing (2026-06-03)
 	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
+	"gemini-3.5-flash":              {ID: "gemini-3.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 9.00, CacheReadPricePer1M: 0.15, ThoughtSignature: true, Label: "Gemini 3.5 Flash"},
 	"gemini-3.1-pro-preview":        {ID: "gemini-3.1-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, ThoughtSignature: true, Label: "Gemini 3.1 Pro"},
 	"gemini-3.1-flash-lite-preview": {ID: "gemini-3.1-flash-lite-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, ThoughtSignature: true, Label: "Gemini 3.1 Flash Lite"},
 	"gemini-3-pro-preview":          {ID: "gemini-3-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, ThoughtSignature: true, Label: "Gemini 3 Pro"},
@@ -65,9 +69,11 @@ var modelRegistry = map[string]ModelInfo{
 	"gemini-2.5-flash-lite":         {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Thinking: true, Label: "Flash Lite"},
 	"gemini-2.0-flash":              {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
 
-	// OpenAI — GPT-5.x family (2026-03-05)
+	// OpenAI — GPT-5.x family (2026-06-03)
 	// Reasoning models use ResponsesAPI: true — reasoning effort is controlled via /v1/responses, not Chat Completions.
 	// Non-reasoning "chat" variants use Chat Completions normally.
+	"gpt-5.5-pro":         {ID: "gpt-5.5-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 30.00, OutputPricePer1M: 180.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.5 Pro"},
+	"gpt-5.5":             {ID: "gpt-5.5", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 5.00, OutputPricePer1M: 30.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.5"},
 	"gpt-5.4-pro":         {ID: "gpt-5.4-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 30.00, OutputPricePer1M: 180.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Pro"},
 	"gpt-5.4":             {ID: "gpt-5.4", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 2.50, OutputPricePer1M: 15.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4"},
 	"gpt-5.4-mini":        {ID: "gpt-5.4-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.75, OutputPricePer1M: 4.50, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Mini"},
@@ -98,12 +104,12 @@ var modelRegistry = map[string]ModelInfo{
 	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O4 Mini"},
 
 	// Groq — cloud inference (2026-02-21)
-	"llama-3.3-70b-versatile":       {ID: "llama-3.3-70b-versatile", Provider: "groq", MaxTokens: 32768, ContextWindow: 128000, InputPricePer1M: 0.59, OutputPricePer1M: 0.79, Label: "Llama 3.3 70B"},
-	"llama-3.1-8b-instant":          {ID: "llama-3.1-8b-instant", Provider: "groq", MaxTokens: 8192, ContextWindow: 128000, InputPricePer1M: 0.05, OutputPricePer1M: 0.08, Label: "Llama 3.1 8B"},
-	"openai/gpt-oss-120b":           {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 3.00, OutputPricePer1M: 8.00, Label: "GPT-OSS 120B"},
-	"openai/gpt-oss-20b":            {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.30, OutputPricePer1M: 0.80, Label: "GPT-OSS 20B"},
-	"deepseek-r1-distill-llama-70b": {ID: "deepseek-r1-distill-llama-70b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.75, OutputPricePer1M: 0.99, Thinking: true, Label: "DeepSeek R1 70B"},
-	"deepseek-r1-distill-qwen-32b":                  {ID: "deepseek-r1-distill-qwen-32b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.69, OutputPricePer1M: 0.69, Thinking: true, Label: "DeepSeek R1 32B"},
+	"llama-3.3-70b-versatile":                   {ID: "llama-3.3-70b-versatile", Provider: "groq", MaxTokens: 32768, ContextWindow: 128000, InputPricePer1M: 0.59, OutputPricePer1M: 0.79, Label: "Llama 3.3 70B"},
+	"llama-3.1-8b-instant":                      {ID: "llama-3.1-8b-instant", Provider: "groq", MaxTokens: 8192, ContextWindow: 128000, InputPricePer1M: 0.05, OutputPricePer1M: 0.08, Label: "Llama 3.1 8B"},
+	"openai/gpt-oss-120b":                       {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 3.00, OutputPricePer1M: 8.00, Label: "GPT-OSS 120B"},
+	"openai/gpt-oss-20b":                        {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.30, OutputPricePer1M: 0.80, Label: "GPT-OSS 20B"},
+	"deepseek-r1-distill-llama-70b":             {ID: "deepseek-r1-distill-llama-70b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.75, OutputPricePer1M: 0.99, Thinking: true, Label: "DeepSeek R1 70B"},
+	"deepseek-r1-distill-qwen-32b":              {ID: "deepseek-r1-distill-qwen-32b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.69, OutputPricePer1M: 0.69, Thinking: true, Label: "DeepSeek R1 32B"},
 	"meta-llama/llama-4-scout-17b-16e-instruct": {ID: "meta-llama/llama-4-scout-17b-16e-instruct", Provider: "groq", MaxTokens: 16384, ContextWindow: 327680, InputPricePer1M: 0.11, OutputPricePer1M: 0.34, Label: "Llama 4 Scout"},
 
 	// Mistral — cloud API (2026-03-18)
@@ -114,8 +120,8 @@ var modelRegistry = map[string]ModelInfo{
 	"magistral-medium-2509": {ID: "magistral-medium-2509", Provider: "mistral", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 2.00, OutputPricePer1M: 5.00, Thinking: true, Label: "Magistral Medium"},
 	"magistral-small-2509":  {ID: "magistral-small-2509", Provider: "mistral", MaxTokens: 8192, ContextWindow: 131072, InputPricePer1M: 0.50, OutputPricePer1M: 1.50, Thinking: true, Label: "Magistral Small"},
 	"codestral-2508":        {ID: "codestral-2508", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.30, OutputPricePer1M: 0.90, Label: "Codestral"},
-	"devstral-2512":           {ID: "devstral-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.40, OutputPricePer1M: 2.00, Label: "Devstral"},
-	"devstral-small-2-2512":   {ID: "devstral-small-2-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.10, OutputPricePer1M: 0.30, Label: "Devstral Small 2"},
+	"devstral-2512":         {ID: "devstral-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.40, OutputPricePer1M: 2.00, Label: "Devstral"},
+	"devstral-small-2-2512": {ID: "devstral-small-2-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.10, OutputPricePer1M: 0.30, Label: "Devstral Small 2"},
 	"ministral-8b-2512":     {ID: "ministral-8b-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.15, OutputPricePer1M: 0.15, Label: "Ministral 8B"},
 	"ministral-14b-2512":    {ID: "ministral-14b-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.20, OutputPricePer1M: 0.20, Label: "Ministral 14B"},
 
@@ -167,6 +173,8 @@ var defaultModels = map[string]string{
 
 var availableModels = map[string][]string{
 	"anthropic": {
+		"claude-opus-4-8",
+		"claude-opus-4-7",
 		"claude-opus-4-6",
 		"claude-opus-4-5",
 		"claude-opus-4-1",
@@ -178,6 +186,7 @@ var availableModels = map[string][]string{
 		"claude-3-haiku-20240307",
 	},
 	"xai": {
+		"grok-4.3",
 		"grok-4.20-beta",
 		"grok-4.20-beta-0309-reasoning",
 		"grok-4.20-beta-0309-non-reasoning",
@@ -192,6 +201,7 @@ var availableModels = map[string][]string{
 		"grok-3-mini",
 	},
 	"gemini": {
+		"gemini-3.5-flash",
 		"gemini-3.1-pro-preview",
 		"gemini-3.1-flash-lite-preview",
 		"gemini-3-pro-preview",
@@ -202,6 +212,8 @@ var availableModels = map[string][]string{
 		"gemini-2.0-flash",
 	},
 	"openai": {
+		"gpt-5.5-pro",
+		"gpt-5.5",
 		"gpt-5.4-pro",
 		"gpt-5.4",
 		"gpt-5.4-mini",
@@ -280,13 +292,15 @@ var availableModels = map[string][]string{
 
 var modelAliases = map[string]string{
 	// Anthropic aliases
-	"opus":   "claude-opus-4-6",
+	"opus":   "claude-opus-4-8",
 	"sonnet": "claude-sonnet-4-6",
 	"haiku":  "claude-haiku-4-5-20251001",
 	"claude": "claude-sonnet-4-6",
 
 	// xAI/Grok aliases
 	"grok":               "grok-4.20-beta",
+	"grok4.3":            "grok-4.3",
+	"grok-4-3":           "grok-4.3",
 	"grok4.2":            "grok-4.20-beta",
 	"grok4.20":           "grok-4.20-beta",
 	"grok4":              "grok-4.20-beta",
@@ -342,6 +356,8 @@ var modelAliases = map[string]string{
 
 	// OpenAI aliases
 	"gpt":         "gpt-5.4",
+	"gpt5.5":      "gpt-5.5",
+	"gpt5.5-pro":  "gpt-5.5-pro",
 	"gpt5.4":      "gpt-5.4",
 	"gpt5.3":      "gpt-5.3-chat-latest",
 	"gpt5":        "gpt-5.4",
@@ -350,12 +366,13 @@ var modelAliases = map[string]string{
 	"gpt5-mini":   "gpt-5-mini",
 	"gpt5-nano":   "gpt-5-nano",
 	"gpt4.1":      "gpt-4.1",
-	"gpt5.4-mini":  "gpt-5.4-mini",
-	"gpt5.4-nano":  "gpt-5.4-nano",
-	"gpt-instant":  "gpt-5.3-chat-latest",
+	"gpt5.4-mini": "gpt-5.4-mini",
+	"gpt5.4-nano": "gpt-5.4-nano",
+	"gpt-instant": "gpt-5.3-chat-latest",
 
 	// Gemini aliases
 	"gemini":     "gemini-3.1-flash-lite-preview",
+	"gemini3.5":  "gemini-3.5-flash",
 	"gemini-pro": "gemini-3.1-pro-preview",
 	"gemini3.1":  "gemini-3.1-pro-preview",
 	"gemini3":    "gemini-3.1-pro-preview",
