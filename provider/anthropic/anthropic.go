@@ -96,7 +96,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 type anthropicRequest struct {
 	Model         string             `json:"model"`
 	Messages      []anthropicMessage `json:"messages"`
-	System        any        `json:"system,omitempty"`
+	System        any                `json:"system,omitempty"`
 	MaxTokens     int                `json:"max_tokens"`
 	Temperature   *float64           `json:"temperature,omitempty"`
 	Tools         []anthropicTool    `json:"tools,omitempty"`
@@ -106,14 +106,14 @@ type anthropicRequest struct {
 }
 
 type anthropicMessage struct {
-	Role    string        `json:"role"`
-	Content []any `json:"content"`
+	Role    string `json:"role"`
+	Content []any  `json:"content"`
 }
 
 type anthropicTool struct {
 	Name         string                 `json:"name"`
 	Description  string                 `json:"description"`
-	InputSchema  map[string]any `json:"input_schema"`
+	InputSchema  map[string]any         `json:"input_schema"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
@@ -196,15 +196,15 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", "anthropic", "error", readErr)
 		}
-		return nil, llm.NewAPIErrorFromStatus("anthropic", resp.StatusCode, string(body))
+		return nil, llm.NewAPIErrorFromStatusWithLimit("anthropic", resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen())
 	}
 
 	var apiResp anthropicResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, llm.MaxResponseBodyBytes)).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, c.config.EffectiveMaxResponseBodyBytes())).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -251,11 +251,11 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", "anthropic", "error", readErr)
 		}
-		yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatus("anthropic", resp.StatusCode, string(body)))
+		yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatusWithLimit("anthropic", resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen()))
 		return
 	}
 
@@ -455,8 +455,9 @@ func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 }
 
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
+	maxToolInput := c.config.EffectiveMaxToolInputBytes()
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(nil, llm.MaxSSELineBytes)
+	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
 
 	var currentToolCall *llm.ToolCall
 	var inputBuffer strings.Builder
@@ -538,8 +539,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					return
 				}
 			case "input_json_delta":
-				if inputBuffer.Len()+len(event.Delta.PartialJSON) > llm.MaxToolInputBytes {
-					yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+				if inputBuffer.Len()+len(event.Delta.PartialJSON) > maxToolInput {
+					yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 					return // stop parsing — continuing would corrupt the tool call
 				}
 				inputBuffer.WriteString(event.Delta.PartialJSON)

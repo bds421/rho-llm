@@ -111,15 +111,15 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+		errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
 		}
-		return nil, llm.NewAPIErrorFromStatus(c.providerName, resp.StatusCode, string(errBody))
+		return nil, llm.NewAPIErrorFromStatusWithLimit(c.providerName, resp.StatusCode, string(errBody), c.config.EffectiveMaxErrorMessageLen())
 	}
 
 	var apiResp responsesResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, llm.MaxResponseBodyBytes)).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, c.config.EffectiveMaxResponseBodyBytes())).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode responses API response: %w", err)
 	}
 
@@ -161,11 +161,11 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+			errBody, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
 			if readErr != nil {
 				slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
 			}
-			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatus(c.providerName, resp.StatusCode, string(errBody)))
+			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatusWithLimit(c.providerName, resp.StatusCode, string(errBody), c.config.EffectiveMaxErrorMessageLen()))
 			return
 		}
 
@@ -176,8 +176,9 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 // parseStream reads SSE events from the Responses API stream and yields
 // llm.StreamEvent values to the caller's iterator.
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
+	maxToolInput := c.config.EffectiveMaxToolInputBytes()
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(nil, llm.MaxSSELineBytes)
+	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
 
 	// Per-tool-call accumulation: the Responses API sends argument deltas
 	// followed by a single "done" event with the full arguments, name, and call_id.
@@ -235,8 +236,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				continue
 			}
-			if inputBuffer.Len()+len(ev.Delta) > llm.MaxToolInputBytes {
-				yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+			if inputBuffer.Len()+len(ev.Delta) > maxToolInput {
+				yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 				return
 			}
 			inputBuffer.WriteString(ev.Delta)
@@ -362,8 +363,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 // =============================================================================
 
 type responsesRequest struct {
-	Model           string  `json:"model"`
-	Input           []any   `json:"input"` // mix of responsesInputMsg, responsesFunctionCall, responsesFunctionCallOutput
+	Model           string              `json:"model"`
+	Input           []any               `json:"input"` // mix of responsesInputMsg, responsesFunctionCall, responsesFunctionCallOutput
 	Reasoning       *responsesReasoning `json:"reasoning,omitempty"`
 	MaxOutputTokens int                 `json:"max_output_tokens,omitempty"`
 	Temperature     *float64            `json:"temperature,omitempty"`
@@ -385,7 +386,7 @@ type responsesInputMsg struct {
 
 // responsesFunctionCall represents an assistant-issued function call re-submitted as context.
 type responsesFunctionCall struct {
-	Type      string `json:"type"`      // "function_call"
+	Type      string `json:"type"` // "function_call"
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -393,7 +394,7 @@ type responsesFunctionCall struct {
 
 // responsesFunctionCallOutput represents a tool result for the Responses API.
 type responsesFunctionCallOutput struct {
-	Type   string `json:"type"`    // "function_call_output"
+	Type   string `json:"type"` // "function_call_output"
 	CallID string `json:"call_id"`
 	Output string `json:"output"`
 }
@@ -401,19 +402,19 @@ type responsesFunctionCallOutput struct {
 type responsesTool struct {
 	Type     string `json:"type"`
 	Function struct {
-		Name        string                 `json:"name"`
-		Description string                 `json:"description"`
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
 		Parameters  map[string]any `json:"parameters"`
 	} `json:"function"`
 }
 
 type responsesResponse struct {
-	ID                string               `json:"id"`
-	Model             string               `json:"model"`
-	Status            string               `json:"status"` // completed, incomplete, failed
+	ID                string                `json:"id"`
+	Model             string                `json:"model"`
+	Status            string                `json:"status"` // completed, incomplete, failed
 	Output            []responsesOutputItem `json:"output"`
-	Usage             responsesUsage       `json:"usage"`
-	IncompleteDetails *responsesIncomplete `json:"incomplete_details"`
+	Usage             responsesUsage        `json:"usage"`
+	IncompleteDetails *responsesIncomplete  `json:"incomplete_details"`
 }
 
 type responsesOutputItem struct {
@@ -539,8 +540,8 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 			apiReq.Tools = append(apiReq.Tools, responsesTool{
 				Type: "function",
 				Function: struct {
-					Name        string                 `json:"name"`
-					Description string                 `json:"description"`
+					Name        string         `json:"name"`
+					Description string         `json:"description"`
 					Parameters  map[string]any `json:"parameters"`
 				}{
 					Name:        tool.Name,

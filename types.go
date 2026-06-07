@@ -316,8 +316,8 @@ func NewAssistantMessage(resp *Response) Message {
 
 // Tool represents a tool/function the LLM can call.
 type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
 	InputSchema map[string]any `json:"input_schema"`
 
 	// Caching (Anthropic): mark this tool definition as cacheable
@@ -338,12 +338,12 @@ type ToolCall struct {
 
 // Request represents an LLM completion request.
 type Request struct {
-	Model         string        `json:"model"`
-	Messages      []Message     `json:"messages"`
-	System        string        `json:"system,omitempty"`
-	MaxTokens     int           `json:"max_tokens"`
-	Temperature   *float64      `json:"temperature,omitempty"`
-	Tools         []Tool        `json:"tools,omitempty"`
+	Model            string           `json:"model"`
+	Messages         []Message        `json:"messages"`
+	System           string           `json:"system,omitempty"`
+	MaxTokens        int              `json:"max_tokens"`
+	Temperature      *float64         `json:"temperature,omitempty"`
+	Tools            []Tool           `json:"tools,omitempty"`
 	ThinkingLevel    ThinkingLevel    `json:"thinking_level,omitempty"`    // low, medium, high (zero value = none)
 	ThinkingBudget   int              `json:"thinking_budget,omitempty"`   // custom token budget; overrides ThinkingLevel default when > 0
 	ReasoningSummary ReasoningSummary `json:"reasoning_summary,omitempty"` // OpenAI Responses API: auto, detailed, concise
@@ -356,15 +356,15 @@ type Request struct {
 
 // Response represents an LLM completion response.
 type Response struct {
-	ID           string     `json:"id"`
-	Model        string     `json:"model"`
-	Content      string     `json:"content"`     // Extracted text content
-	ToolCalls    []ToolCall `json:"tool_calls"`  // Tool use requests
-	Thinking     string     `json:"thinking"`    // Extended thinking content
-	StopReason   string     `json:"stop_reason"` // end_turn, tool_use, max_tokens
-	InputTokens    int `json:"input_tokens"`
-	OutputTokens   int `json:"output_tokens"`
-	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
+	ID             string     `json:"id"`
+	Model          string     `json:"model"`
+	Content        string     `json:"content"`     // Extracted text content
+	ToolCalls      []ToolCall `json:"tool_calls"`  // Tool use requests
+	Thinking       string     `json:"thinking"`    // Extended thinking content
+	StopReason     string     `json:"stop_reason"` // end_turn, tool_use, max_tokens
+	InputTokens    int        `json:"input_tokens"`
+	OutputTokens   int        `json:"output_tokens"`
+	ThinkingTokens int        `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
 
 	// Cache token usage (Anthropic)
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache

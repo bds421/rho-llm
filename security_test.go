@@ -313,10 +313,10 @@ func TestRedirectDoesNotLeakOpenAIKey(t *testing.T) {
 	defer redirector.Close()
 
 	cfg := llm.Config{
-		Provider:  "openai",
-		Model:     "gpt-4",
-		APIKey:    "sk-openai-secret-key",
-		BaseURL:   redirector.URL,
+		Provider: "openai",
+		Model:    "gpt-4",
+		APIKey:   "sk-openai-secret-key",
+		BaseURL:  redirector.URL,
 	}
 
 	client, err := llm.NewClient(cfg)
@@ -666,9 +666,9 @@ func TestMalformedSSEEventYieldsError(t *testing.T) {
 // the APIKey with "REDACTED" so secrets don't leak into logs or debug output.
 func TestConfigMarshalJSONRedactsAPIKey(t *testing.T) {
 	tests := []struct {
-		name     string
-		apiKey   string
-		wantKey  string
+		name    string
+		apiKey  string
+		wantKey string
 	}{
 		{"non-empty key is redacted", "sk-secret-12345", "REDACTED"},
 		{"empty key stays empty", "", ""},
@@ -904,5 +904,55 @@ func TestBaseURLSchemeValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPerConfigErrorMessageLimit proves that Config.MaxErrorMessageLen is actually
+// honored by the adapters. Regression test for the "dead config" bug where adapters
+// ignored every per-Config safety limit and used package globals/constants instead.
+// A server returns a 5000-byte error body; with MaxErrorMessageLen=100 the stored
+// message must be far shorter than the 4096-byte default would have allowed.
+func TestPerConfigErrorMessageLimit(t *testing.T) {
+	const bodyLen = 5000
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		if _, err := io.WriteString(w, strings.Repeat("E", bodyLen)); err != nil {
+			return
+		}
+	}))
+	defer srv.Close()
+
+	cfg := llm.Config{
+		Provider:           "gemini",
+		Model:              "gemini-2.5-flash",
+		APIKey:             "test-key",
+		BaseURL:            srv.URL,
+		MaxErrorMessageLen: 100, // far below DefaultMaxErrorMessageLen (4096)
+	}
+	client, err := gemini.New(cfg)
+	if err != nil {
+		t.Fatalf("gemini.New() error: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	})
+	if err == nil {
+		t.Fatal("expected error from 500 response")
+	}
+
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *llm.APIError, got %T", err)
+	}
+
+	// 100 chars + "... [truncated]" marker. If the per-Config limit were ignored,
+	// the default (4096) would yield a message ~40x longer than this.
+	const wantMax = 100 + len("... [truncated]")
+	if len(apiErr.Message) > wantMax {
+		t.Errorf("APIError.Message length = %d, want <= %d (per-Config MaxErrorMessageLen was ignored)", len(apiErr.Message), wantMax)
+	}
+	if len(apiErr.Message) < 100 {
+		t.Errorf("APIError.Message length = %d, want >= 100 (truncated too aggressively)", len(apiErr.Message))
 	}
 }

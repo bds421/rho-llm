@@ -63,17 +63,29 @@ func NewContextLengthError(provider, message string) *APIError {
 	}
 }
 
-// truncateErrorBody caps s at DefaultMaxErrorMessageLen, appending a truncation marker if cut.
-func truncateErrorBody(s string) string {
-	if len(s) <= DefaultMaxErrorMessageLen {
+// truncateErrorBody caps s at maxLen, appending a truncation marker if cut.
+// A non-positive maxLen falls back to DefaultMaxErrorMessageLen.
+func truncateErrorBody(s string, maxLen int) string {
+	if maxLen <= 0 {
+		maxLen = DefaultMaxErrorMessageLen
+	}
+	if len(s) <= maxLen {
 		return s
 	}
-	return s[:DefaultMaxErrorMessageLen] + "... [truncated]"
+	return s[:maxLen] + "... [truncated]"
 }
 
-// NewAPIErrorFromStatus constructs the appropriate APIError from an HTTP status code and body.
+// NewAPIErrorFromStatus constructs the appropriate APIError from an HTTP status code
+// and body, truncating the stored message to DefaultMaxErrorMessageLen.
 func NewAPIErrorFromStatus(provider string, status int, body string) *APIError {
-	body = truncateErrorBody(body)
+	return NewAPIErrorFromStatusWithLimit(provider, status, body, DefaultMaxErrorMessageLen)
+}
+
+// NewAPIErrorFromStatusWithLimit is like NewAPIErrorFromStatus but truncates the stored
+// message to maxMsgLen. Adapters pass Config.EffectiveMaxErrorMessageLen() so the limit
+// is honored per client. A non-positive maxMsgLen falls back to DefaultMaxErrorMessageLen.
+func NewAPIErrorFromStatusWithLimit(provider string, status int, body string, maxMsgLen int) *APIError {
+	body = truncateErrorBody(body, maxMsgLen)
 	switch {
 	case status == 429:
 		return NewRateLimitError(provider, body)

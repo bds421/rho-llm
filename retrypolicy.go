@@ -53,9 +53,9 @@ type RetryPolicy struct {
 // 1s base, 30s max, doubling, +/-25% jitter.
 var DefaultRetryPolicy = RetryPolicy{
 	BaseDelay: 1 * time.Second,
-	MaxDelay:   30 * time.Second,
-	Factor:     2.0,
-	Jitter:     0.25,
+	MaxDelay:  30 * time.Second,
+	Factor:    2.0,
+	Jitter:    0.25,
 }
 
 // Delay returns the backoff duration for the given 0-indexed attempt.

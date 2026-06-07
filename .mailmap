@@ -1,0 +1,3 @@
+# Canonicalize author identities for `git shortlog`, `git log`, blame, etc.
+# Format: Canonical Name <canonical-email> <commit-email-to-map>
+Rene Heinzl <rene@bds421.com> <reneheinzl@macbookpro.lan>

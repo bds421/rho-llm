@@ -88,12 +88,12 @@ func TestBuildRequestStreaming(t *testing.T) {
 // TestBuildRequestReasoningEffort verifies reasoning effort and summary.
 func TestBuildRequestReasoningEffort(t *testing.T) {
 	tests := []struct {
-		name           string
-		level          llm.ThinkingLevel
-		summary        llm.ReasoningSummary
-		wantEffort     string
-		wantSummary    string
-		wantReasoning  bool
+		name          string
+		level         llm.ThinkingLevel
+		summary       llm.ReasoningSummary
+		wantEffort    string
+		wantSummary   string
+		wantReasoning bool
 	}{
 		{"none", llm.ThinkingNone, llm.ReasoningSummaryNone, "", "", false},
 		{"low", llm.ThinkingLow, llm.ReasoningSummaryNone, "low", "", true},
@@ -1119,11 +1119,11 @@ func TestParseStreamUnknownEventType(t *testing.T) {
 func TestParseStreamMultipleToolCalls(t *testing.T) {
 	sseData := // First tool call
 		"data: " + `{"type":"response.function_call_arguments.delta","delta":"{\"a\":1}"}` + "\n\n" +
-		"data: " + `{"type":"response.function_call_arguments.done","name":"tool1","call_id":"call_1","arguments":"{\"a\":1}"}` + "\n\n" +
-		// Second tool call — buffer should be reset
-		"data: " + `{"type":"response.function_call_arguments.delta","delta":"{\"b\":2}"}` + "\n\n" +
-		"data: " + `{"type":"response.function_call_arguments.done","name":"tool2","call_id":"call_2","arguments":"{\"b\":2}"}` + "\n\n" +
-		"data: " + `{"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"
+			"data: " + `{"type":"response.function_call_arguments.done","name":"tool1","call_id":"call_1","arguments":"{\"a\":1}"}` + "\n\n" +
+			// Second tool call — buffer should be reset
+			"data: " + `{"type":"response.function_call_arguments.delta","delta":"{\"b\":2}"}` + "\n\n" +
+			"data: " + `{"type":"response.function_call_arguments.done","name":"tool2","call_id":"call_2","arguments":"{\"b\":2}"}` + "\n\n" +
+			"data: " + `{"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"
 
 	c := &Client{providerName: "openai_responses"}
 	var events []llm.StreamEvent

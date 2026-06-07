@@ -108,15 +108,15 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", "gemini", "error", readErr)
 		}
-		return nil, llm.NewAPIErrorFromStatus("gemini", resp.StatusCode, string(body))
+		return nil, llm.NewAPIErrorFromStatusWithLimit("gemini", resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen())
 	}
 
 	var apiResp geminiResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, llm.MaxResponseBodyBytes)).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, c.config.EffectiveMaxResponseBodyBytes())).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -161,11 +161,11 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
 			if readErr != nil {
 				slog.Warn("failed to read error response body", "provider", "gemini", "error", readErr)
 			}
-			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatus("gemini", resp.StatusCode, string(body)))
+			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatusWithLimit("gemini", resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen()))
 			return
 		}
 
@@ -228,8 +228,8 @@ type geminiTool struct {
 }
 
 type geminiFunctionDeclaration struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`
 }
 
@@ -487,8 +487,9 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 }
 
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
+	maxToolInput := c.config.EffectiveMaxToolInputBytes()
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(nil, llm.MaxSSELineBytes)
+	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
 
 	callIndex := 0
 	doneEmitted := false
@@ -526,8 +527,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				if part.FunctionCall != nil {
 					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
-					if len(argsJSON) > llm.MaxToolInputBytes {
-						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+					if len(argsJSON) > maxToolInput {
+						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 						return
 					}
 					tc := &llm.ToolCall{

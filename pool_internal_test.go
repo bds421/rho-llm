@@ -15,9 +15,9 @@ type closeSpy struct {
 	closed      atomic.Bool
 	provider    string
 	model       string
-	completeErr error                                                  // if set, Complete returns this error
-	blockCh     chan struct{}                                           // if set, Complete blocks until closed
-	completeFn  func(context.Context, Request) (*Response, error)      // optional override
+	completeErr error                                             // if set, Complete returns this error
+	blockCh     chan struct{}                                     // if set, Complete blocks until closed
+	completeFn  func(context.Context, Request) (*Response, error) // optional override
 }
 
 func (c *closeSpy) Complete(ctx context.Context, req Request) (*Response, error) {

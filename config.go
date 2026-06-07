@@ -11,15 +11,17 @@ import (
 // Default safety limits. Used when the corresponding Config field is zero.
 const (
 	DefaultMaxErrorBodyBytes    = 1 << 20    // 1 MB — caps error response body reads
-	DefaultMaxSSELineBytes     = 256 * 1024  // 256 KB — caps per-line SSE buffer
+	DefaultMaxSSELineBytes      = 256 * 1024 // 256 KB — caps per-line SSE buffer
 	DefaultMaxResponseBodyBytes = 32 << 20   // 32 MB — caps success response body reads
-	DefaultMaxToolInputBytes   = 1 << 20     // 1 MB — caps accumulated tool input JSON
-	DefaultMaxErrorMessageLen  = 4096        // bytes — caps stored error message length
-	DefaultAnthropicVersion    = "2023-06-01"
+	DefaultMaxToolInputBytes    = 1 << 20    // 1 MB — caps accumulated tool input JSON
+	DefaultMaxErrorMessageLen   = 4096       // bytes — caps stored error message length
+	DefaultAnthropicVersion     = "2023-06-01"
 )
 
-// Backward-compatible package-level vars — adapters reference these.
-// Values come from the Default* constants. Override via Config fields for per-client control.
+// Backward-compatible package-level vars — used as the process-wide fallback when
+// the corresponding Config field is zero (see the Effective* accessors). Values
+// come from the Default* constants. Set these for global control, or set the
+// matching Config fields for per-client control (which takes precedence).
 var (
 	MaxErrorBodyBytes    int64 = DefaultMaxErrorBodyBytes
 	MaxSSELineBytes      int   = DefaultMaxSSELineBytes
@@ -204,7 +206,7 @@ func (c Config) EffectiveMaxErrorBodyBytes() int64 {
 	if c.MaxErrorBodyBytes > 0 {
 		return int64(c.MaxErrorBodyBytes)
 	}
-	return int64(DefaultMaxErrorBodyBytes)
+	return MaxErrorBodyBytes
 }
 
 // EffectiveMaxSSELineBytes returns the configured or default limit.
@@ -212,7 +214,7 @@ func (c Config) EffectiveMaxSSELineBytes() int {
 	if c.MaxSSELineBytes > 0 {
 		return c.MaxSSELineBytes
 	}
-	return DefaultMaxSSELineBytes
+	return MaxSSELineBytes
 }
 
 // EffectiveMaxResponseBodyBytes returns the configured or default limit.
@@ -220,7 +222,7 @@ func (c Config) EffectiveMaxResponseBodyBytes() int64 {
 	if c.MaxResponseBodyBytes > 0 {
 		return int64(c.MaxResponseBodyBytes)
 	}
-	return int64(DefaultMaxResponseBodyBytes)
+	return MaxResponseBodyBytes
 }
 
 // EffectiveMaxToolInputBytes returns the configured or default limit.
@@ -228,7 +230,7 @@ func (c Config) EffectiveMaxToolInputBytes() int {
 	if c.MaxToolInputBytes > 0 {
 		return c.MaxToolInputBytes
 	}
-	return DefaultMaxToolInputBytes
+	return MaxToolInputBytes
 }
 
 // EffectiveMaxErrorMessageLen returns the configured or default limit.

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-06-07
+
+### Added
+
+- **Continuous integration workflow** (`.github/workflows/ci.yml`) — runs the full `make ci` pipeline (`fmt-check → vet → build → test-race → gosec → govulncheck`) on every push to `main` and every pull request, resolving the Go toolchain from `go.mod`. The `ci`/`security`/`vulncheck` Makefile targets already existed, but nothing executed them automatically — the repo had no CI runner config. *(audit finding F3)*
+
+- **`NewAPIErrorFromStatusWithLimit(provider, status, body, maxMsgLen)`** — like `NewAPIErrorFromStatus` but truncates the stored error message to a caller-supplied limit. Adapters pass `Config.EffectiveMaxErrorMessageLen()` so the per-client limit is honored.
+
+### Fixed
+
+- **Per-`Config` safety limits are now actually honored** — `MaxErrorBodyBytes`, `MaxResponseBodyBytes`, `MaxSSELineBytes`, `MaxToolInputBytes`, and `MaxErrorMessageLen` set on a `Config` were silently ignored: every adapter read the process-global `llm.Max*` vars and `truncateErrorBody` hardcoded the `DefaultMaxErrorMessageLen` constant, so the documented per-client overrides did nothing. All four adapters now consult `Config.EffectiveMax*()` for every limit (error-body reads, response-body decoding, SSE line buffer, tool-input accumulation, and error-message truncation). The package-level `llm.Max*` vars remain as the process-wide fallback for backward compatibility (the `Effective*()` accessors fall back to them when the `Config` field is zero). New `TestPerConfigErrorMessageLimit` proves a per-`Config` limit changes behavior. *(audit finding F1)*
+
+### Changed
+
+- **`.mailmap`** added — unifies two `Rene Heinzl` commit identities (`reneheinzl@macbookpro.lan` → `rene@bds421.com`) for `git shortlog`/blame.
+
+- **Repository reformatted with `gofmt`** — corrected pre-existing struct-alignment drift across several files (`retrypolicy.go`, `types.go`, examples, internal tests) so the new `fmt-check` CI gate passes. Formatting-only; no behavioral change.
+
 ## [0.2.9] - 2026-06-03
 
 ### Added

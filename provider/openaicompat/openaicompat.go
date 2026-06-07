@@ -113,15 +113,15 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
 		if readErr != nil {
 			slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
 		}
-		return nil, llm.NewAPIErrorFromStatus(c.providerName, resp.StatusCode, string(body))
+		return nil, llm.NewAPIErrorFromStatusWithLimit(c.providerName, resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen())
 	}
 
 	var apiResp openaiResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, llm.MaxResponseBodyBytes)).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, c.config.EffectiveMaxResponseBodyBytes())).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -163,11 +163,11 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, readErr := io.ReadAll(io.LimitReader(resp.Body, llm.MaxErrorBodyBytes))
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
 			if readErr != nil {
 				slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
 			}
-			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatus(c.providerName, resp.StatusCode, string(body)))
+			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatusWithLimit(c.providerName, resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen()))
 			return
 		}
 
@@ -197,7 +197,7 @@ type openaiStreamOptions struct {
 
 type openaiMessage struct {
 	Role             string           `json:"role"`
-	Content          any      `json:"content"`                     // string or array
+	Content          any              `json:"content"`                     // string or array
 	ReasoningContent string           `json:"reasoning_content,omitempty"` // thinking/reasoning output (OpenAI, DeepSeek, etc.)
 	Reasoning        string           `json:"reasoning,omitempty"`         // thinking/reasoning output (Ollama)
 	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
@@ -207,8 +207,8 @@ type openaiMessage struct {
 type openaiTool struct {
 	Type     string `json:"type"`
 	Function struct {
-		Name        string                 `json:"name"`
-		Description string                 `json:"description"`
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
 		Parameters  map[string]any `json:"parameters"`
 	} `json:"function"`
 }
@@ -448,8 +448,8 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 				apiReq.Tools = append(apiReq.Tools, openaiTool{
 					Type: "function",
 					Function: struct {
-						Name        string                 `json:"name"`
-						Description string                 `json:"description"`
+						Name        string         `json:"name"`
+						Description string         `json:"description"`
 						Parameters  map[string]any `json:"parameters"`
 					}{
 						Name:        tool.Name,
@@ -510,8 +510,9 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 }
 
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
+	maxToolInput := c.config.EffectiveMaxToolInputBytes()
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(nil, llm.MaxSSELineBytes)
+	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
 
 	var currentToolCall *llm.ToolCall
 	var inputBuffer strings.Builder
@@ -617,8 +618,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					inputBuffer.Reset()
 				}
 				if tc.Function.Arguments != "" {
-					if inputBuffer.Len()+len(tc.Function.Arguments) > llm.MaxToolInputBytes {
-						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", llm.MaxToolInputBytes))
+					if inputBuffer.Len()+len(tc.Function.Arguments) > maxToolInput {
+						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 						return // stop parsing — continuing would corrupt the tool call
 					}
 					inputBuffer.WriteString(tc.Function.Arguments)

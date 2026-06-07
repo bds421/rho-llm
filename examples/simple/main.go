@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/bds421/rho-llm"
 	_ "github.com/bds421/rho-llm/provider" // register all provider adapters
+	"github.com/joho/godotenv"
 )
 
 func main() {

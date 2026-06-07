@@ -38,7 +38,7 @@ func TestCircuitBreakerOpensAfterThreshold(t *testing.T) {
 
 func TestCircuitBreakerAllowRejectsDuringOpen(t *testing.T) {
 	cb := llm.NewCircuitBreaker(1, 1*time.Hour) // long cooldown
-	cb.RecordFailure()                           // opens
+	cb.RecordFailure()                          // opens
 
 	if cb.Allow() {
 		t.Error("Allow() = true, want false when circuit is open")
@@ -252,10 +252,10 @@ func TestCircuitBreakerOnStateChange(t *testing.T) {
 	)
 
 	cb.RecordFailure()
-	cb.RecordFailure()                  // → open
-	time.Sleep(20 * time.Millisecond)   //
-	cb.Allow()                          // → half-open
-	cb.RecordSuccess()                  // → closed
+	cb.RecordFailure()                // → open
+	time.Sleep(20 * time.Millisecond) //
+	cb.Allow()                        // → half-open
+	cb.RecordSuccess()                // → closed
 
 	expected := []transition{
 		{llm.CircuitClosed, llm.CircuitOpen},
