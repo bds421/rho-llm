@@ -418,6 +418,14 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 			}
 		}
 
+		// Skip a message left with neither content nor tool calls — e.g. an
+		// assistant turn that carried only a thinking block (which this protocol
+		// does not replay). OpenAI rejects a message with null content and no
+		// tool_calls.
+		if oaiMsg.Content == nil && len(oaiMsg.ToolCalls) == 0 {
+			continue
+		}
+
 		apiReq.Messages = append(apiReq.Messages, oaiMsg)
 	}
 

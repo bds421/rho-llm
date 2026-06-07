@@ -1,6 +1,6 @@
 # rho-llm
 
-Multi-provider LLM client for Go. Streaming, tool use, image/vision support, PDF/document support, extended thinking, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
+Multi-provider LLM client for Go. Streaming, tool use, image/vision support, PDF/document support, extended thinking, serializable conversations with cross-provider handoff, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
 
 **Requires Go 1.26+** (`go 1.26.0` in `go.mod`).
 
@@ -239,6 +239,44 @@ req := llm.Request{
 **Note:** Anthropic's API requires `temperature = 1.0` when extended thinking is enabled. The adapter enforces this automatically. A warning-level log is emitted when a temperature override occurs.
 
 If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
+
+## Conversations & Provider Handoff
+
+For multi-turn chat, a `Conversation` is a plain, serializable, provider-neutral transcript, and a `Session` is a concurrency-safe driver that appends each turn for you (with provider/model provenance and accumulated token/cost usage). Generation itself stays stateless — a `Session` just wires a `Conversation` to a `Client`.
+
+```go
+sess := llm.NewSession(client, llm.WithSystem("You are concise."))
+
+resp, _ := sess.Send(ctx, "What's the capital of France?")
+fmt.Println(resp.Content) // "Paris."
+
+resp, _ = sess.Send(ctx, "And its population?") // history is carried automatically
+fmt.Println(resp.Content)
+
+fmt.Printf("conversation cost so far: $%.4f\n", sess.Usage().Cost)
+```
+
+**Persist & resume** — a `Conversation` round-trips losslessly through JSON (versioned with `schema_version` so the format can evolve safely):
+
+```go
+blob, _ := json.Marshal(sess.Conversation())   // save anywhere
+// ... later ...
+conv, _ := llm.LoadConversation(blob)           // validates schema_version
+sess = llm.NewSession(client, llm.WithConversation(conv))
+```
+
+**Provider handoff** — switch the underlying provider mid-conversation; the accumulated history is translated into the new provider's format on the next turn:
+
+```go
+sess.SwitchProvider(anthropicClient) // continue the same chat on a different provider
+resp, _ = sess.Send(ctx, "Continue.")
+```
+
+On a handoff, `NormalizeForProvider` (applied automatically by `Session`, and exported for direct `Client` users) prepares the transcript for the target provider: extended-thinking blocks are replayed verbatim only to the **same** provider that produced them (Anthropic requires the original signature) and otherwise **degrade to plain text** so the reasoning survives; orphaned tool calls get a synthetic error result (every provider rejects an unanswered tool call); dangling tool results are dropped; and errored/aborted turns are dropped. Text, images, documents, and tool calls carry over unchanged.
+
+> **Thinking replay requires thinking enabled.** Anthropic only accepts replayed thinking blocks when extended thinking is on for the request, so keep it enabled across turns (e.g. `llm.NewSession(client, llm.WithBaseRequest(llm.Request{ThinkingLevel: llm.ThinkingLow}))`, or set `ThinkingLevel` on the client `Config`). With thinking off, historical thinking blocks are simply dropped (no error). A failed `Send`/`Stream` rolls back its appended input, so the transcript stays consistent and retryable.
+
+> **Tool loops:** after a `Send` that returns `resp.ToolCalls`, run your tools and continue with `sess.SendMessages(ctx, llm.NewToolResultMessage(id, result, isError))`.
 
 ## Context Caching
 
@@ -627,6 +665,9 @@ llm/
   types.go, config.go, errors.go, ...   # Core types and interfaces
   register.go                            # RegisterProvider() registry
   factory.go                             # NewClient() -> registry lookup
+  conversation.go                        # Conversation + Usage + versioned serialization
+  session.go                             # Session (stateful driver) + provider handoff
+  normalize.go                           # NormalizeForProvider() cross-provider handoff pass
   retrypolicy.go                         # RetryPolicy + RetryHook (configurable backoff)
   circuitbreaker.go                      # CircuitBreaker (3-state machine)
   provider/
@@ -634,6 +675,7 @@ llm/
     anthropic/anthropic.go               # Anthropic Claude adapter
     gemini/gemini.go                     # Google Gemini adapter
     openaicompat/openaicompat.go         # OpenAI-compatible adapter (13+ providers)
+    openairesponses/responses.go         # OpenAI Responses API adapter (GPT-5 reasoning)
 ```
 
 Consumers that call `llm.NewClient()` must add a blank import in their `main.go`:

@@ -135,12 +135,14 @@ type anthropicResponse struct {
 	Role    string `json:"role"`
 	Model   string `json:"model"`
 	Content []struct {
-		Type     string `json:"type"`
-		Text     string `json:"text,omitempty"`
-		ID       string `json:"id,omitempty"`
-		Name     string `json:"name,omitempty"`
-		Input    any    `json:"input,omitempty"`
-		Thinking string `json:"thinking,omitempty"`
+		Type      string `json:"type"`
+		Text      string `json:"text,omitempty"`
+		ID        string `json:"id,omitempty"`
+		Name      string `json:"name,omitempty"`
+		Input     any    `json:"input,omitempty"`
+		Thinking  string `json:"thinking,omitempty"`
+		Signature string `json:"signature,omitempty"` // thinking-block signature (for replay)
+		Data      string `json:"data,omitempty"`      // redacted_thinking payload
 	} `json:"content"`
 	StopReason string `json:"stop_reason"`
 	Usage      struct {
@@ -343,6 +345,31 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					block["cache_control"] = map[string]string{"type": "ephemeral"}
 				}
 				apiMsg.Content = append(apiMsg.Content, block)
+			case llm.ContentThinking:
+				// Replay extended-thinking blocks so multi-turn tool use stays
+				// valid (Anthropic requires the thinking block + its signature on
+				// the next turn). A block without an Anthropic signature — e.g.
+				// produced by another provider — is skipped rather than risk an
+				// API rejection; NormalizeForProvider degrades those to text.
+				//
+				// Thinking blocks are ONLY valid when extended thinking is enabled
+				// for this request — Anthropic rejects them otherwise. So when
+				// thinking is off this turn, drop historical thinking blocks.
+				if req.ThinkingLevel == llm.ThinkingNone {
+					continue
+				}
+				if part.Redacted && part.Thinking != "" {
+					apiMsg.Content = append(apiMsg.Content, map[string]any{
+						"type": "redacted_thinking",
+						"data": part.Thinking,
+					})
+				} else if part.ThinkingSignature != "" && part.Thinking != "" {
+					apiMsg.Content = append(apiMsg.Content, map[string]any{
+						"type":      "thinking",
+						"thinking":  part.Thinking,
+						"signature": part.ThinkingSignature,
+					})
+				}
 			case llm.ContentToolUse:
 				apiMsg.Content = append(apiMsg.Content, map[string]any{
 					"type":  "tool_use",
@@ -448,6 +475,12 @@ func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 			})
 		case "thinking":
 			resp.Thinking += block.Thinking
+			if block.Signature != "" {
+				resp.ThinkingSignature = block.Signature
+			}
+		case "redacted_thinking":
+			resp.Thinking += block.Data
+			resp.ThinkingRedacted = true
 		}
 	}
 
@@ -466,6 +499,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// from "zero tokens" (0).
 	var inputTokens = llm.TokensNotReported
 	var cacheCreationTokens, cacheReadTokens int
+	var thinkingSignature string
 	doneEmitted := false
 
 	for scanner.Scan() {
@@ -488,6 +522,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				Text        string `json:"text"`
 				PartialJSON string `json:"partial_json"`
 				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
 				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
 			ContentBlock struct {
@@ -538,6 +573,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: event.Delta.Thinking}, nil) {
 					return
 				}
+			case "signature_delta":
+				// Authenticates the thinking block; surfaced on EventDone so a
+				// streamed turn can be reassembled with a replayable thinking block.
+				thinkingSignature += event.Delta.Signature
 			case "input_json_delta":
 				if inputBuffer.Len()+len(event.Delta.PartialJSON) > maxToolInput {
 					yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
@@ -569,6 +608,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				StopReason:          event.Delta.StopReason,
 				InputTokens:         inputTokens,
 				OutputTokens:        event.Usage.OutputTokens,
+				ThinkingSignature:   thinkingSignature,
 				CacheCreationTokens: cacheCreationTokens,
 				CacheReadTokens:     cacheReadTokens,
 			}, nil) {

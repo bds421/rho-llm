@@ -36,12 +36,17 @@ echo request fragments. The "privacy-safe logging" claim covers content, not err
 
 rho is a Go tribute to pi; these are capabilities pi has that rho lacks.
 
-### P1 🟠 L — Conversation `Context` + cross-provider handoff  *(pi's headline feature)*
-pi exposes a serializable `Context` (history + usage) that can be saved and resumed on a
-**different** provider mid-session. rho is stateless — callers hand-manage `[]Message`.
-- [ ] Design a `Context`/`Session` type: messages + accumulated usage + provider-neutral state
-- [ ] JSON (de)serialization round-trip
-- [ ] Provider handoff API (switch provider/model while preserving history)
+### P1 ✅ shipped — Conversation + Session + cross-provider handoff
+Phases 1–2 done (see CHANGELOG `[Unreleased]` and ARCHITECTURE §13): serializable
+`Conversation`, concurrency-safe `Session`, `SwitchProvider` handoff, `NormalizeForProvider`,
+`ContentThinking` round-trip with same-provider signature replay. Only the deferred
+persistence piece remains:
+
+#### P1.3 🟢 S — Conversation persistence (`Store`) — deferred Phase 3
+Conversations serialize via `json.Marshal` / `LoadConversation` today. A pluggable store was
+intentionally deferred when the handoff core shipped.
+- [ ] `Store` interface: `Save(ctx, id, *Conversation)` / `Load(ctx, id) (*Conversation, error)`
+- [ ] In-memory default + a file/SQLite example
 
 ### P2 🟠 L — Image generation (output modality)
 pi has `generateImages()`, `getImageModel()`, `getImageModels()`. rho has no image output.
@@ -75,10 +80,44 @@ Mostly auth/endpoint variants on protocols rho already speaks.
 - [ ] Azure OpenAI (Responses)
 - [ ] Others: Cloudflare, Together AI, Fireworks, NVIDIA NIM, Vercel AI Gateway
 
+### P8 🟡 M — Tool-call argument validation
+pi validates tool-call arguments against the tool's schema (`validateToolCall()`, TypeBox).
+rho passes raw JSON schema to the provider and returns whatever the model emits — callers get
+no pre-execution validation.
+- [ ] `ValidateToolCall(tool Tool, call ToolCall) error` against `Tool.InputSchema` (JSON Schema)
+- [ ] Optional: surface validation failures as a typed error for the tool-loop
+
+### P9 🟢 S — Typed model-discovery API
+pi exposes `getModels()` / `getProviders()`. rho only has `GetModelInfo` + `ResolveModelAlias`,
+so callers can't enumerate or filter the registry programmatically.
+- [ ] `Models()` / `Providers()` enumerators over the registry (filter by capability: thinking, tools, vision, docs)
+
+### P10 🟢 S — `CompleteSimple` / `StreamSimple` convenience wrappers
+pi ships `completeSimple()`/`streamSimple()`. Minor ergonomics parity for the common
+"just send a prompt" path.
+- [ ] Thin wrappers taking a prompt string (+ optional system) instead of a full `Request`
+
 ### Backlog (neither pi nor rho has — evaluate demand)
 - [ ] Embeddings API
 - [ ] Structured output / JSON mode
 - [ ] Audio in / out
+
+---
+
+## Code quality / docs (from the June 2026 architecture/security audit)
+
+### Q1 🟡 M — De-duplicate the four provider adapters
+The adapters share ~70% identical structure (build → marshal → POST → status check →
+bounded read → SSE loop). The security-critical bits (bounded reads, header setting,
+error construction) are re-implemented in each.
+- [ ] Extract a shared `httptransport` helper (do-request + bounded-read + error-from-status)
+- [ ] Keep wire-format translation per-adapter; centralize only the HTTP plumbing
+
+### Q2 🟢 S — Fix the "zero external dependencies" README claim
+`README.md` says "Zero external dependencies (stdlib only)", but `go.mod` requires
+`joho/godotenv` (imported only by the 3 `examples/` files, yet still a module-level require,
+so importers pull it transitively).
+- [ ] Either correct the README line, or move `examples/` to its own module to make the claim true
 
 ---
 

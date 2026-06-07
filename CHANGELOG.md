@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-07
+
+### Added
+
+- **Conversations + cross-provider handoff** (roadmap P1) — multi-turn chat with a serializable, provider-neutral transcript and a stateful driver:
+  - **`Conversation`** (`conversation.go`) — a plain value holding `SchemaVersion`, `System`, `Tools`, `Messages`, and accumulated `Usage`. Round-trips losslessly through JSON; `LoadConversation([]byte)` validates `schema_version` (tolerates pre-versioned blobs as v1, rejects newer-than-build). The format is keyed by explicit JSON tags, not Go type names, so stored conversations stay portable.
+  - **`Session`** (`session.go`) — a concurrency-safe (`sync.Mutex`) driver around a `Conversation`: `Send`/`SendMessages`/`Stream`/`StreamMessages` auto-append each turn with provider/model provenance and fold in usage; `SwitchProvider` performs a **provider handoff**; constructed with `WithSystem`/`WithTools`/`WithBaseRequest`/`WithConversation`. Generation stays stateless — `Client.Complete`/`Stream` are unchanged.
+  - **`NormalizeForProvider`** (`normalize.go`) — the single cross-provider translation pass (applied automatically by `Session`, exported for direct `Client` users): degrades non-native thinking blocks to text, repairs orphaned tool calls with a synthetic error result, and drops errored/aborted turns. Never mutates its input.
+  - **`Usage`** — accumulates token counts and sums cost **per response** (each response's own model), so totals stay correct across a multi-provider conversation.
+
+- **`ContentThinking` content part + thinking round-trip** — extended-thinking blocks now survive multi-turn conversations. `Message` gained `Provider`/`Model`/`StopReason` provenance and `ContentPart` gained `Thinking`/`ThinkingSignature`/`Redacted` (all `omitempty`; older serialized messages remain valid). The Anthropic adapter captures the thinking signature (non-streaming response + streaming `signature_delta`, surfaced on `StreamEvent.ThinkingSignature`) and replays the thinking block on the next same-provider turn — required for correct Anthropic extended-thinking + tool-use across turns. `NewAssistantMessage` now preserves thinking (it previously dropped `resp.Thinking`).
+
+### Changed
+
+- **`NewAssistantMessage(resp)`** now emits a leading `ContentThinking` part when the response carried thinking (with its signature), and stamps `Model`/`StopReason` provenance onto the message. Existing text + tool-call behavior is unchanged.
+
+### Fixed
+
+Three defects in the new conversation/handoff stack found by adversarial testing (each has a regression test that fails without the fix):
+
+- **Anthropic no longer replays thinking blocks when extended thinking is disabled** for the request — the API rejects thinking blocks unless thinking is enabled, so the adapter now drops historical thinking blocks when `ThinkingLevel` is none (replay requires thinking enabled, e.g. via `WithBaseRequest`).
+- **`Usage` no longer accumulates the `TokensNotReported` (-1) sentinel** — a streamed turn whose provider never reported usage previously produced negative token totals (and could yield a negative cost). Token counts are now clamped to `>= 0` before accumulation and cost estimation.
+- **openai-compat no longer emits an empty `{role:"assistant","content":null}` message** for an assistant turn that carried only a thinking block (which the protocol drops) — OpenAI rejects a message with null content and no tool calls; such messages are now skipped.
+
+Additional hardening of `NormalizeForProvider` and `Session` from the same testing:
+
+- **Tool-use IDs are deduplicated** on handoff — duplicate IDs (e.g. Gemini's per-turn synthetic `call_0_*` IDs colliding across turns) are rewritten to unique IDs and the paired `tool_result` is remapped, so a handoff to a provider that requires unique IDs (Anthropic) stays valid.
+- **Tool results are ordered & pruned** — a `tool_result` is kept only if its `tool_use` already appeared earlier in the transcript; a result before its call, or a dangling result with no matching call, is dropped (every provider rejects those).
+- `Session.Send`/`Stream` **roll back the appended input when a turn fails** (so a failed turn never leaves a dangling user message that breaks alternation on retry).
+- `Session.Conversation()` returns a **snapshot copy** that is safe to read/marshal concurrently with in-flight turns.
+
+Documented (not a defect): integers inside `ToolInput` (typed `any`) deserialize as `float64` after a JSON reload — standard Go behavior. The re-serialized wire bytes are byte-identical, so a resend is unaffected; only in-memory type assertions see the drift.
+
 ## [0.2.10] - 2026-06-07
 
 ### Added

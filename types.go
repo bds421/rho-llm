@@ -33,6 +33,7 @@ const (
 	ContentText       ContentType = "text"
 	ContentImage      ContentType = "image"
 	ContentDocument   ContentType = "document"
+	ContentThinking   ContentType = "thinking"
 	ContentToolUse    ContentType = "tool_use"
 	ContentToolResult ContentType = "tool_result"
 )
@@ -117,6 +118,14 @@ const TokensNotReported = -1
 type Message struct {
 	Role    Role          `json:"role"`    // user, assistant, system
 	Content []ContentPart `json:"content"` // Content parts (text, images, tool results)
+
+	// Provenance — set on assistant messages so a stored conversation knows which
+	// provider/model produced each turn. This drives cross-provider handoff
+	// decisions (e.g. "same provider → replay thinking signatures verbatim").
+	// All omitempty, so older serialized messages remain valid.
+	Provider   string `json:"provider,omitempty"`    // producing provider (e.g. "anthropic")
+	Model      string `json:"model,omitempty"`       // producing model id
+	StopReason string `json:"stop_reason,omitempty"` // end_turn, tool_use, max_tokens, error
 }
 
 // ContentPart represents a part of message content.
@@ -131,6 +140,17 @@ type ContentPart struct {
 
 	// Document content (e.g. PDFs passed inline as base64)
 	Document *DocumentSource `json:"document,omitempty"`
+
+	// Thinking / extended-reasoning content (from assistant). Carried in the
+	// neutral model so a conversation can replay it to the SAME provider on the
+	// next turn (Anthropic requires the thinking block + signature to be returned
+	// when extended thinking is active). ThinkingSignature is the provider-opaque
+	// signature that authenticates the block for replay; Redacted marks an
+	// encrypted (redacted_thinking) block. On a cross-provider handoff a thinking
+	// block without a matching signature is dropped — see NormalizeForProvider.
+	Thinking          string `json:"thinking,omitempty"`
+	ThinkingSignature string `json:"thinking_signature,omitempty"`
+	Redacted          bool   `json:"redacted,omitempty"`
 
 	// Tool use (from assistant)
 	ToolUseID        string `json:"id,omitempty"`
@@ -291,7 +311,21 @@ func NewAssistantMessage(resp *Response) Message {
 	if resp == nil {
 		panic("llm.NewAssistantMessage: resp must not be nil")
 	}
-	msg := Message{Role: RoleAssistant}
+	msg := Message{
+		Role:       RoleAssistant,
+		Model:      resp.Model,
+		StopReason: resp.StopReason,
+	}
+	// Thinking first — Anthropic requires the thinking block to precede tool_use
+	// when extended thinking is active, and to carry its signature for replay.
+	if resp.Thinking != "" || resp.ThinkingRedacted {
+		msg.Content = append(msg.Content, ContentPart{
+			Type:              ContentThinking,
+			Thinking:          resp.Thinking,
+			ThinkingSignature: resp.ThinkingSignature,
+			Redacted:          resp.ThinkingRedacted,
+		})
+	}
 	if resp.Content != "" {
 		msg.Content = append(msg.Content, ContentPart{
 			Type: ContentText,
@@ -356,15 +390,17 @@ type Request struct {
 
 // Response represents an LLM completion response.
 type Response struct {
-	ID             string     `json:"id"`
-	Model          string     `json:"model"`
-	Content        string     `json:"content"`     // Extracted text content
-	ToolCalls      []ToolCall `json:"tool_calls"`  // Tool use requests
-	Thinking       string     `json:"thinking"`    // Extended thinking content
-	StopReason     string     `json:"stop_reason"` // end_turn, tool_use, max_tokens
-	InputTokens    int        `json:"input_tokens"`
-	OutputTokens   int        `json:"output_tokens"`
-	ThinkingTokens int        `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
+	ID                string     `json:"id"`
+	Model             string     `json:"model"`
+	Content           string     `json:"content"`                      // Extracted text content
+	ToolCalls         []ToolCall `json:"tool_calls"`                   // Tool use requests
+	Thinking          string     `json:"thinking"`                     // Extended thinking content
+	ThinkingSignature string     `json:"thinking_signature,omitempty"` // Anthropic: authenticates the thinking block for replay on the next turn
+	ThinkingRedacted  bool       `json:"thinking_redacted,omitempty"`  // Anthropic: thinking block is redacted (encrypted)
+	StopReason        string     `json:"stop_reason"`                  // end_turn, tool_use, max_tokens
+	InputTokens       int        `json:"input_tokens"`
+	OutputTokens      int        `json:"output_tokens"`
+	ThinkingTokens    int        `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
 
 	// Cache token usage (Anthropic)
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache
@@ -387,6 +423,11 @@ type StreamEvent struct {
 
 	// Thinking event
 	Thinking string `json:"thinking,omitempty"`
+
+	// Thinking signature — emitted on EventDone (Anthropic) so a streamed
+	// assistant turn can be reassembled with a replayable thinking block.
+	ThinkingSignature string `json:"thinking_signature,omitempty"`
+	ThinkingRedacted  bool   `json:"thinking_redacted,omitempty"`
 
 	// Usage event
 	InputTokens    int `json:"input_tokens,omitempty"`

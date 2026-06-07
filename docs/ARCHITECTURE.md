@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of June 2026 (v0.2.10).
+> **Status:** Reflects the actual implementation as of June 2026 (v0.3.0).
 
 ---
 
@@ -15,6 +15,7 @@
 - Image/vision support (base64 images in all 3 adapters)
 - Document/PDF support (`ContentDocument`: native on Gemini/Anthropic, data URI on OpenAI-compatible)
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
+- Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForProvider`)
 - Auth pool rotation with exponential backoff and per-profile cooldown
 - Structured error types enabling reliable retry classification
 - Cost estimation from per-model pricing data
@@ -32,6 +33,9 @@ github.com/bds421/rho-llm/
 ├── registry.go       # ModelRegistry, ModelAliases, cost estimation, ResolveModelAlias()
 ├── register.go       # RegisterProvider() + provider factory registry
 ├── factory.go        # NewClient() / NewClientWithKeys() — registry lookup entry point
+├── conversation.go      # Conversation (serializable transcript) + Usage + versioned JSON
+├── session.go           # Session (concurrency-safe driver) + provider handoff (SwitchProvider)
+├── normalize.go         # NormalizeForProvider() — cross-provider transcript translation
 ├── pool.go              # AuthPool + PooledClient (rotation + retry for Complete and Stream pre-data failures)
 ├── retrypolicy.go       # RetryPolicy (configurable exponential backoff with jitter) + RetryHook
 ├── circuitbreaker.go    # CircuitBreaker (3-state: closed → open → half-open)
@@ -45,7 +49,8 @@ github.com/bds421/rho-llm/
     ├── all.go                       # Blank-imports all sub-packages
     ├── anthropic/anthropic.go       # Native Anthropic API adapter
     ├── gemini/gemini.go             # Native Google Gemini API adapter
-    └── openaicompat/openaicompat.go # OpenAI-compatible adapter (13+ providers)
+    ├── openaicompat/openaicompat.go # OpenAI-compatible adapter (13+ providers)
+    └── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning)
 ```
 
 Provider implementations register themselves via `init()` using `llm.RegisterProvider()`. Consumers that call `llm.NewClient()` must add a blank import: `_ "github.com/bds421/rho-llm/provider"`.
@@ -562,7 +567,74 @@ CircuitCooldown:  30s
 
 ---
 
-## 13. Design Decisions
+## 13. Conversations, Sessions & Provider Handoff
+
+Added in the conversation/handoff work, this layer sits **above** the stateless `Client`
+interface — it never changes how a single request is made, it just accumulates and
+re-points history. The design follows a cross-library survey (pi, Vercel AI SDK,
+LangGraph, OpenAI Agents SDK, and the Go ecosystem) and is tuned to Go idioms.
+
+### Two types: a value and a driver
+
+| Type | Role | Concurrency | Serialization |
+|------|------|-------------|---------------|
+| `Conversation` (`conversation.go`) | Plain, provider-neutral transcript: `SchemaVersion`, `System`, `Tools`, `Messages`, `Usage`. Owns **no** client. | none (a value) | versioned JSON via explicit tags |
+| `Session` (`session.go`) | Concurrency-safe driver: holds a `*Conversation` + current `Client` + a base `Request`; appends each turn; supports handoff. | `sync.Mutex` (one turn at a time) | persist the underlying `Conversation` |
+
+This split is deliberate. The serializable data (`Conversation`) is decoupled from the
+mutable runtime concerns (client, mutex) — so persistence is just `json.Marshal(conv)`, and
+the stateful ergonomics live in `Session` without contaminating the stored form. Generation
+stays **stateless**: `Client.Complete`/`Stream` remain `Request`-in / `Response`-out.
+
+### Provenance drives handoff
+
+Every assistant `Message` records `Provider`/`Model`/`StopReason` provenance (all `omitempty`,
+so older blobs stay valid). This is what makes cross-provider handoff decidable from the data
+alone: a thinking block is replayable verbatim **only** to the same provider that produced it.
+
+### The handoff pass (`NormalizeForProvider`)
+
+`Session` applies `NormalizeForProvider(messages, targetProvider)` before every request (so it
+also self-heals same-provider transcripts); direct `Client` users can call it explicitly. It is
+the single choke point for all cross-provider concerns and never mutates its input:
+
+1. **Thinking degradation** — a thinking block is kept verbatim only when `msg.Provider ==
+   targetProvider` *and* it carries a provider-valid signature (or is redacted). Otherwise the
+   reasoning is preserved by converting it to a plain text block. (A foreign/unsigned thinking
+   block would be rejected, e.g. Anthropic requires the original `signature` on replay.)
+2. **Orphan tool-call repair** — a `tool_use` with no matching `tool_result` anywhere gets a
+   synthetic error result appended after its turn (every provider rejects an unanswered call).
+3. **Errored-turn drop** — assistant turns with `StopReason` `error`/`aborted` are removed,
+   along with the tool results that referenced their now-gone calls.
+4. **Empty-message drop** — messages left contentless by the above are removed.
+
+Only the Anthropic adapter replays thinking blocks (it captures the `signature` from both the
+non-streaming response and the streaming `signature_delta`, surfaced on `EventDone` as
+`StreamEvent.ThinkingSignature`). The other three adapters skip thinking parts by
+switch-omission; by the time history reaches them, normalization has already degraded any
+cross-provider thinking to text. So **cross-provider handoff is intentionally lossy for
+reasoning** (signatures don't transfer) but lossless for text, images, documents, and tools —
+matching the reality that every surveyed library either drops reasoning on a switch or pins it
+to one provider.
+
+### Cost across a handoff
+
+`Usage` sums **cost per response** using each response's own model (`EstimateCost`), so a
+conversation that spans multiple providers/models still totals correctly — accumulating raw
+tokens and pricing once at the end would be wrong when models differ.
+
+### Persistence (Phase 3, deferred)
+
+A pluggable `Store` (save/load conversations by id) is intentionally **not** baked into the
+message model — persistence is `json.Marshal(conv)` / `LoadConversation(blob)` today, and a
+`Store` interface is planned as a separate, optional seam. `LoadConversation` validates
+`schema_version` (tolerating pre-versioned blobs as v1, rejecting versions newer than the
+build) — the format is keyed by explicit JSON tags and is **not** tied to Go type/package
+names, so stored conversations stay portable across versions.
+
+---
+
+## 14. Design Decisions
 
 ### Why a unified interface over provider SDKs?
 
