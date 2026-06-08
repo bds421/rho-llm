@@ -31,6 +31,18 @@ var presets = map[string]ProviderPreset{
 	"qwen":       {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"deepseek":   {BaseURL: "https://api.deepseek.com", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"cohere":     {BaseURL: "https://api.cohere.ai/compatibility/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"together":   {BaseURL: "https://api.together.xyz/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"fireworks":  {BaseURL: "https://api.fireworks.ai/inference/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"nvidia":     {BaseURL: "https://integrate.api.nvidia.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"perplexity": {BaseURL: "https://api.perplexity.ai", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"deepinfra":  {BaseURL: "https://api.deepinfra.com/v1/openai", AuthHeader: "Bearer", Protocol: "openai_compat"},
+
+	// Providers requiring auth that the preset model can't express are intentionally
+	// NOT listed: Amazon Bedrock (AWS SigV4) and Google Vertex AI (GCP service-account
+	// OAuth) need request signing outside this stdlib-only library — front them with a
+	// gateway, or use the gemini protocol + a custom BaseURL/bearer token for Vertex.
+	// Azure OpenAI and Cloudflare/Vercel gateways are OpenAI-compatible but
+	// account/deployment-specific: configure them with Config.BaseURL (+ AuthHeader).
 
 	// OpenAI-compatible: local providers (no auth)
 	"ollama":   {BaseURL: "http://localhost:11434/v1", AuthHeader: "", Protocol: "openai_compat"},

@@ -50,6 +50,12 @@ func newSingleClient(cfg Config) (Client, error) {
 		return nil, fmt.Errorf("unknown provider %q: set BaseURL for custom providers", cfg.Provider)
 	}
 
+	// Opt-in SSRF hardening — also covers the per-key "apikey|baseurl" override,
+	// since pooled clients construct each profile through newSingleClient.
+	if err := CheckBaseURL(cfg); err != nil {
+		return nil, err
+	}
+
 	protocol := ResolveProtocol(cfg)
 
 	// Look up the registered provider factory for this protocol

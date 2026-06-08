@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of June 2026 (v0.3.0).
+> **Status:** Reflects the actual implementation as of June 2026 (v0.3.1).
 
 ---
 
@@ -15,7 +15,10 @@
 - Image/vision support (base64 images in all 3 adapters)
 - Document/PDF support (`ContentDocument`: native on Gemini/Anthropic, data URI on OpenAI-compatible)
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
-- Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForProvider`)
+- Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForProvider`); pluggable persistence (`Store`: `MemoryStore`/`FileStore`)
+- Structured output (JSON mode / JSON schema) on OpenAI-compatible + Gemini; tool-call validation; fine-grained streaming boundaries (`StreamWithBoundaries`)
+- Non-chat capabilities for OpenAI-compatible providers: embeddings, image generation, audio speech/transcription; OAuth 2.0 device-flow token acquisition
+- A `MockClient` test double and model/provider discovery (`Models`/`Providers`)
 - Auth pool rotation with exponential backoff and per-profile cooldown
 - Structured error types enabling reliable retry classification
 - Cost estimation from per-model pricing data
@@ -36,6 +39,15 @@ github.com/bds421/rho-llm/
 ├── conversation.go      # Conversation (serializable transcript) + Usage + versioned JSON
 ├── session.go           # Session (concurrency-safe driver) + provider handoff (SwitchProvider)
 ├── normalize.go         # NormalizeForProvider() — cross-provider transcript translation
+├── store.go             # Store interface + MemoryStore / FileStore (conversation persistence)
+├── streamevents.go      # StreamWithBoundaries() — fine-grained block events
+├── mock.go              # MockClient test double + faux builders
+├── discovery.go         # Models() / ModelsByProvider() / Providers()
+├── simple.go            # CompleteSimple / StreamSimple
+├── validate.go          # ValidateToolCall() against a tool's InputSchema
+├── capabilities.go      # Embeddings, image generation, audio (OpenAI-compatible)
+├── oauth.go             # OAuth 2.0 device-flow helpers (RFC 8628)
+├── transport.go         # Shared HTTP plumbing: bounded reads + APIError construction
 ├── pool.go              # AuthPool + PooledClient (rotation + retry for Complete and Stream pre-data failures)
 ├── retrypolicy.go       # RetryPolicy (configurable exponential backoff with jitter) + RetryHook
 ├── circuitbreaker.go    # CircuitBreaker (3-state: closed → open → half-open)
@@ -623,11 +635,13 @@ to one provider.
 conversation that spans multiple providers/models still totals correctly — accumulating raw
 tokens and pricing once at the end would be wrong when models differ.
 
-### Persistence (Phase 3, deferred)
+### Persistence (`store.go`)
 
-A pluggable `Store` (save/load conversations by id) is intentionally **not** baked into the
-message model — persistence is `json.Marshal(conv)` / `LoadConversation(blob)` today, and a
-`Store` interface is planned as a separate, optional seam. `LoadConversation` validates
+Persistence is a pluggable `Store` (`Save`/`Load`/`Delete` by id) kept **out** of the message
+model: `MemoryStore` (mutex-guarded, stores serialized bytes so loads are independent copies)
+and `FileStore` (one JSON file per id; ids are restricted to a single path segment, so traversal
+like `../evil` is rejected) ship in the library, both stdlib-only. Under the hood it is still just
+`json.Marshal(conv)` / `LoadConversation(blob)`. `LoadConversation` validates
 `schema_version` (tolerating pre-versioned blobs as v1, rejecting versions newer than the
 build) — the format is keyed by explicit JSON tags and is **not** tied to Go type/package
 names, so stored conversations stay portable across versions.

@@ -113,15 +113,11 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
-		if readErr != nil {
-			slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
-		}
-		return nil, llm.NewAPIErrorFromStatusWithLimit(c.providerName, resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen())
+		return nil, llm.ErrorFromResponse(c.providerName, resp, c.config)
 	}
 
 	var apiResp openaiResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, c.config.EffectiveMaxResponseBodyBytes())).Decode(&apiResp); err != nil {
+	if err := llm.DecodeJSONResponse(resp, c.config, &apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -163,11 +159,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
-			if readErr != nil {
-				slog.Warn("failed to read error response body", "provider", c.providerName, "error", readErr)
-			}
-			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatusWithLimit(c.providerName, resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen()))
+			yield(llm.StreamEvent{}, llm.ErrorFromResponse(c.providerName, resp, c.config))
 			return
 		}
 
@@ -189,6 +181,7 @@ type openaiRequest struct {
 	StreamOptions       *openaiStreamOptions `json:"stream_options,omitempty"`
 	Tools               []openaiTool         `json:"tools,omitempty"`
 	Stop                []string             `json:"stop,omitempty"`
+	ResponseFormat      any                  `json:"response_format,omitempty"`
 }
 
 type openaiStreamOptions struct {
@@ -316,7 +309,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 					hasToolResults = true
 					apiReq.Messages = append(apiReq.Messages, openaiMessage{
 						Role:       "tool",
-						Content:    part.ToolResultContent,
+						Content:    part.ToolResultText(),
 						ToolCallID: part.ToolResultID,
 					})
 				case llm.ContentText:
@@ -445,6 +438,23 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 	// Configure stop sequences
 	if len(req.StopSequences) > 0 {
 		apiReq.Stop = req.StopSequences
+	}
+
+	// Structured output (JSON mode / JSON schema).
+	if rf := req.ResponseFormat; rf != nil {
+		switch rf.Type {
+		case llm.ResponseFormatJSONObject:
+			apiReq.ResponseFormat = map[string]any{"type": "json_object"}
+		case llm.ResponseFormatJSONSchema:
+			name := rf.Name
+			if name == "" {
+				name = "response"
+			}
+			apiReq.ResponseFormat = map[string]any{
+				"type":        "json_schema",
+				"json_schema": map[string]any{"name": name, "schema": rf.Schema},
+			}
+		}
 	}
 
 	// Convert tools (skip if model doesn't support tool calling)

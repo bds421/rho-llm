@@ -163,6 +163,13 @@ type ContentPart struct {
 	ToolResultContent string `json:"content,omitempty"`
 	IsError           bool   `json:"is_error,omitempty"`
 
+	// ToolResultParts carries a rich tool result — text and/or image content
+	// blocks — for tools that return images. Anthropic serializes these as a
+	// native content-block array; providers without image-tool-result support
+	// receive only the text (see ToolResultText). When set, it takes precedence
+	// over ToolResultContent.
+	ToolResultParts []ContentPart `json:"tool_result_parts,omitempty"`
+
 	// Caching (Anthropic): mark this content block as cacheable
 	CacheControl bool `json:"cache_control,omitempty"`
 }
@@ -293,6 +300,42 @@ func NewToolResultMessage(toolUseID, result string, isError bool) Message {
 	}
 }
 
+// NewToolResultParts creates a tool-result message whose content is a list of
+// parts (text and/or image), for tools that return images. Providers that don't
+// support image tool results (everything except Anthropic) receive only the text.
+func NewToolResultParts(toolUseID string, isError bool, parts ...ContentPart) Message {
+	return Message{
+		Role: RoleUser,
+		Content: []ContentPart{
+			{
+				Type:            ContentToolResult,
+				ToolResultID:    toolUseID,
+				ToolResultParts: parts,
+				IsError:         isError,
+			},
+		},
+	}
+}
+
+// ToolResultText returns the textual content of a tool-result part: ToolResultContent
+// if set, otherwise the concatenated text of ToolResultParts (images dropped).
+// Adapters without image-tool-result support call this to degrade gracefully.
+func (p ContentPart) ToolResultText() string {
+	if p.ToolResultContent != "" {
+		return p.ToolResultContent
+	}
+	out := ""
+	for _, sub := range p.ToolResultParts {
+		if sub.Type == ContentText && sub.Text != "" {
+			if out != "" {
+				out += "\n"
+			}
+			out += sub.Text
+		}
+	}
+	return out
+}
+
 // NewSystemMessage creates a system message with text content.
 func NewSystemMessage(text string) Message {
 	return Message{
@@ -386,7 +429,29 @@ type Request struct {
 	// Caching
 	SystemCacheControl bool   `json:"system_cache_control,omitempty"` // Anthropic: cache the system prompt
 	CachedContent      string `json:"cached_content,omitempty"`       // Gemini: pre-created cache name
+
+	// ResponseFormat requests structured output (JSON mode / JSON schema). Wired
+	// for OpenAI-compatible providers (response_format) and Gemini
+	// (responseMimeType/responseSchema). Anthropic has no native JSON mode (use a
+	// tool or prompt); the Responses adapter does not wire it. Nil = free text.
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 }
+
+// ResponseFormat selects structured output for a Request.
+type ResponseFormat struct {
+	// Type is "json_object" (any JSON) or "json_schema" (constrained to Schema).
+	Type string `json:"type"`
+	// Name is the schema name (required by OpenAI for json_schema).
+	Name string `json:"name,omitempty"`
+	// Schema is a JSON Schema, used when Type == "json_schema".
+	Schema map[string]any `json:"schema,omitempty"`
+}
+
+// Structured-output type constants.
+const (
+	ResponseFormatJSONObject = "json_object"
+	ResponseFormatJSONSchema = "json_schema"
+)
 
 // Response represents an LLM completion response.
 type Response struct {

@@ -198,15 +198,11 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
-		if readErr != nil {
-			slog.Warn("failed to read error response body", "provider", "anthropic", "error", readErr)
-		}
-		return nil, llm.NewAPIErrorFromStatusWithLimit("anthropic", resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen())
+		return nil, llm.ErrorFromResponse("anthropic", resp, c.config)
 	}
 
 	var apiResp anthropicResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, c.config.EffectiveMaxResponseBodyBytes())).Decode(&apiResp); err != nil {
+	if err := llm.DecodeJSONResponse(resp, c.config, &apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -253,11 +249,7 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
-		if readErr != nil {
-			slog.Warn("failed to read error response body", "provider", "anthropic", "error", readErr)
-		}
-		yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatusWithLimit("anthropic", resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen()))
+		yield(llm.StreamEvent{}, llm.ErrorFromResponse("anthropic", resp, c.config))
 		return
 	}
 
@@ -378,12 +370,40 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					"input": part.ToolInput,
 				})
 			case llm.ContentToolResult:
-				apiMsg.Content = append(apiMsg.Content, map[string]any{
+				block := map[string]any{
 					"type":        "tool_result",
 					"tool_use_id": part.ToolResultID,
-					"content":     part.ToolResultContent,
 					"is_error":    part.IsError,
-				})
+				}
+				// Rich tool results (text + image blocks) serialize as a content
+				// array; plain results stay a string.
+				if len(part.ToolResultParts) > 0 {
+					var blocks []any
+					for _, sub := range part.ToolResultParts {
+						switch sub.Type {
+						case llm.ContentText:
+							if sub.Text != "" {
+								blocks = append(blocks, map[string]any{"type": "text", "text": sub.Text})
+							}
+						case llm.ContentImage:
+							if err := llm.ValidateImageSource(sub); err != nil {
+								return anthropicRequest{}, err
+							}
+							blocks = append(blocks, map[string]any{
+								"type": "image",
+								"source": map[string]any{
+									"type":       sub.Source.Type,
+									"media_type": sub.Source.MediaType,
+									"data":       sub.Source.Data,
+								},
+							})
+						}
+					}
+					block["content"] = blocks
+				} else {
+					block["content"] = part.ToolResultContent
+				}
+				apiMsg.Content = append(apiMsg.Content, block)
 			}
 		}
 		apiReq.Messages = append(apiReq.Messages, apiMsg)

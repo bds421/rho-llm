@@ -108,15 +108,11 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
-		if readErr != nil {
-			slog.Warn("failed to read error response body", "provider", "gemini", "error", readErr)
-		}
-		return nil, llm.NewAPIErrorFromStatusWithLimit("gemini", resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen())
+		return nil, llm.ErrorFromResponse("gemini", resp, c.config)
 	}
 
 	var apiResp geminiResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, c.config.EffectiveMaxResponseBodyBytes())).Decode(&apiResp); err != nil {
+	if err := llm.DecodeJSONResponse(resp, c.config, &apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -161,11 +157,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, readErr := io.ReadAll(io.LimitReader(resp.Body, c.config.EffectiveMaxErrorBodyBytes()))
-			if readErr != nil {
-				slog.Warn("failed to read error response body", "provider", "gemini", "error", readErr)
-			}
-			yield(llm.StreamEvent{}, llm.NewAPIErrorFromStatusWithLimit("gemini", resp.StatusCode, string(body), c.config.EffectiveMaxErrorMessageLen()))
+			yield(llm.StreamEvent{}, llm.ErrorFromResponse("gemini", resp, c.config))
 			return
 		}
 
@@ -217,10 +209,12 @@ type geminiFunctionResponse struct {
 }
 
 type geminiGenerationConfig struct {
-	Temperature     *float64              `json:"temperature,omitempty"`
-	MaxOutputTokens int                   `json:"maxOutputTokens,omitempty"`
-	StopSequences   []string              `json:"stopSequences,omitempty"`
-	ThinkingConfig  *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
+	Temperature      *float64              `json:"temperature,omitempty"`
+	MaxOutputTokens  int                   `json:"maxOutputTokens,omitempty"`
+	StopSequences    []string              `json:"stopSequences,omitempty"`
+	ThinkingConfig   *geminiThinkingConfig `json:"thinkingConfig,omitempty"`
+	ResponseMimeType string                `json:"responseMimeType,omitempty"`
+	ResponseSchema   map[string]any        `json:"responseSchema,omitempty"`
 }
 
 type geminiTool struct {
@@ -347,7 +341,7 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 					FunctionResponse: &geminiFunctionResponse{
 						Name: funcName,
 						Response: map[string]string{
-							"result": part.ToolResultContent,
+							"result": part.ToolResultText(),
 						},
 					},
 				})
@@ -362,6 +356,14 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	// Configure stop sequences
 	if len(req.StopSequences) > 0 {
 		apiReq.GenerationConfig.StopSequences = req.StopSequences
+	}
+
+	// Structured output (JSON mode / JSON schema).
+	if rf := req.ResponseFormat; rf != nil && rf.Type != "" {
+		apiReq.GenerationConfig.ResponseMimeType = "application/json"
+		if rf.Type == llm.ResponseFormatJSONSchema && len(rf.Schema) > 0 {
+			apiReq.GenerationConfig.ResponseSchema = rf.Schema
+		}
 	}
 
 	// Configure thinking

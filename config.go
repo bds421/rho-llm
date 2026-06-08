@@ -3,8 +3,11 @@ package llm
 import (
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -29,7 +32,9 @@ var (
 	MaxToolInputBytes    int   = DefaultMaxToolInputBytes
 )
 
-// sensitiveHeaders are stripped on cross-domain redirects to prevent key leakage.
+// sensitiveHeaders are stripped on cross-origin redirects (scheme or host change)
+// to prevent key leakage — including an https→http same-host downgrade, which
+// would otherwise send the key in plaintext.
 var sensitiveHeaders = []string{
 	"Authorization",
 	"x-api-key",
@@ -52,7 +57,7 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 			}
 			if len(via) > 0 {
 				prev := via[len(via)-1]
-				if !sameHost(prev.URL, req.URL) {
+				if !sameOrigin(prev.URL, req.URL) {
 					for _, h := range sensitiveHeaders {
 						req.Header.Del(h)
 					}
@@ -64,8 +69,37 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 }
 
 // sameHost returns true if two URLs have the same host (including port).
-func sameHost(a, b *url.URL) bool {
-	return a.Host == b.Host
+// sameOrigin reports whether two URLs share scheme AND host (an https→http
+// downgrade on the same host is NOT same-origin, so auth headers are stripped).
+func sameOrigin(a, b *url.URL) bool {
+	return a.Scheme == b.Scheme && a.Host == b.Host
+}
+
+// CheckBaseURL enforces Config.BlockPrivateBaseURL: when set, it rejects a BaseURL
+// whose host is a loopback, private, link-local, or unspecified IP (e.g. the cloud
+// metadata endpoint 169.254.169.254, or 127.0.0.1), or the literal "localhost".
+// This is opt-in SSRF hardening for deployments that only talk to public provider
+// endpoints; it is incompatible with local providers. Best-effort: it checks IP
+// literals and "localhost" only — hostname DNS resolution and DNS-rebinding are
+// out of scope. It is a no-op when BlockPrivateBaseURL is false or BaseURL is empty.
+func CheckBaseURL(cfg Config) error {
+	if !cfg.BlockPrivateBaseURL || cfg.BaseURL == "" {
+		return nil
+	}
+	u, err := url.Parse(cfg.BaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid base URL %q: %w", cfg.BaseURL, err)
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("base URL host %q is not allowed (BlockPrivateBaseURL)", host)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("base URL host %q is a private/loopback/link-local address (BlockPrivateBaseURL)", host)
+		}
+	}
+	return nil
 }
 
 // Config holds LLM client configuration. Self-contained replacement for
@@ -95,7 +129,23 @@ type Config struct {
 
 	// BaseURL overrides the provider's default endpoint.
 	// Example: "http://my-proxy:8080/v1" for a custom OpenAI-compatible server.
+	//
+	// TRUST BOUNDARY: BaseURL (and the per-key "apikey|baseurl" override) is a
+	// developer-supplied, trusted value — the client sends the API key to it. Do
+	// NOT populate it from untrusted input without validation: any reachable
+	// http(s) URL (including internal hosts like the cloud metadata endpoint
+	// 169.254.169.254) would receive the key. Non-http(s) schemes are rejected by
+	// net/http at request time, not by this library. For hardened deployments
+	// that only talk to public endpoints, set BlockPrivateBaseURL.
 	BaseURL string `json:"base_url,omitempty"`
+
+	// BlockPrivateBaseURL is opt-in SSRF hardening: when true, client construction
+	// rejects a BaseURL whose host is a loopback, private, link-local, or
+	// unspecified IP, or "localhost". Incompatible with local providers
+	// (ollama/vllm/lmstudio, which use localhost). Best-effort — it checks IP
+	// literals and "localhost"; hostname DNS resolution and DNS-rebinding are out
+	// of scope. See CheckBaseURL.
+	BlockPrivateBaseURL bool `json:"block_private_base_url,omitempty"`
 
 	// AuthHeader overrides the authorization header format.
 	// Only applies to OpenAI-compatible providers (openai, xai, groq, etc.).

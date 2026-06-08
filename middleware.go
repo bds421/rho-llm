@@ -10,6 +10,11 @@ import (
 // LoggingClient wraps any Client with request/response metadata logging.
 // It does NOT log message content (privacy safe) -- only metadata like
 // provider, model, message count, tool count, token usage, and errors.
+//
+// Note: on failure it logs the error, and an *APIError carries the (truncated)
+// upstream response body in its Message — provider 4xx bodies can echo fragments
+// of the request. The "privacy safe" guarantee covers message content, not error
+// bodies; route logs accordingly if that matters for your data policy.
 type LoggingClient struct {
 	inner  Client
 	logger *slog.Logger

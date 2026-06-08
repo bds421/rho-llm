@@ -744,10 +744,12 @@ func TestAuthProfileMarshalJSONRedactsAPIKey(t *testing.T) {
 	}
 }
 
-// TestBaseURLSchemeValidation verifies that the library produces clear errors
-// for non-HTTP(S) URL schemes. This is a defense-in-depth check — the library
-// is developer-facing, but catching protocol misuse (file://, javascript:) is
-// cheap and prevents accidental SSRF-adjacent mistakes.
+// TestBaseURLSchemeValidation documents that non-HTTP(S) BaseURL schemes
+// (file://, javascript:, ftp://, data:) fail at request time. NOTE: this library
+// does NOT validate the scheme itself — Go's net/http rejects unsupported schemes
+// when the request is made. This test pins that incidental behavior; it is not
+// evidence of an allowlist. For actual SSRF hardening of BaseURL, see
+// Config.BlockPrivateBaseURL / llm.CheckBaseURL (TestBlockPrivateBaseURL).
 //
 // Uses the openaicompat adapter directly (not llm.NewClient) to avoid the
 // PooledClient retry loop, which would add ~30s per subtest in cooldown waits.
@@ -954,5 +956,47 @@ func TestPerConfigErrorMessageLimit(t *testing.T) {
 	}
 	if len(apiErr.Message) < 100 {
 		t.Errorf("APIError.Message length = %d, want >= 100 (truncated too aggressively)", len(apiErr.Message))
+	}
+}
+
+// TestBlockPrivateBaseURL verifies the opt-in SSRF guard (F2): with
+// BlockPrivateBaseURL set, construction rejects loopback/private/link-local hosts
+// (incl. the cloud metadata IP) — while the default (opt-out) still allows them,
+// so local providers keep working.
+func TestBlockPrivateBaseURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		baseURL string
+		block   bool
+		wantErr bool
+	}{
+		{"metadata IP blocked", "http://169.254.169.254/latest", true, true},
+		{"loopback blocked", "http://127.0.0.1:8080/v1", true, true},
+		{"localhost blocked", "http://localhost:11434/v1", true, true},
+		{"private 10.x blocked", "http://10.0.0.5/v1", true, true},
+		{"public host allowed", "https://api.example.com/v1", true, false},
+		{"default: metadata IP allowed (opt-out)", "http://169.254.169.254/latest", false, false},
+		{"empty base URL ok", "", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := llm.CheckBaseURL(llm.Config{BaseURL: tc.baseURL, BlockPrivateBaseURL: tc.block})
+			if tc.wantErr && err == nil {
+				t.Errorf("CheckBaseURL(%q, block=%v) = nil, want error", tc.baseURL, tc.block)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("CheckBaseURL(%q, block=%v) = %v, want nil", tc.baseURL, tc.block, err)
+			}
+		})
+	}
+
+	// Integration: NewClient must refuse a private BaseURL when blocking is on.
+	_, err := llm.NewClient(llm.Config{
+		Provider: "openai", Model: "gpt-4", APIKey: "k",
+		BaseURL: "http://169.254.169.254/v1", BlockPrivateBaseURL: true,
+		MaxTokens: 10,
+	})
+	if err == nil {
+		t.Error("NewClient with private BaseURL + BlockPrivateBaseURL should error")
 	}
 }

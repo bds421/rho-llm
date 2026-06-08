@@ -1,6 +1,6 @@
 # rho-llm
 
-Multi-provider LLM client for Go. Streaming, tool use, image/vision support, PDF/document support, extended thinking, serializable conversations with cross-provider handoff, auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. Zero external dependencies (stdlib only).
+Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports only the Go standard library (the `examples/` use `joho/godotenv`).
 
 **Requires Go 1.26+** (`go 1.26.0` in `go.mod`).
 
@@ -25,6 +25,11 @@ go get github.com/bds421/rho-llm
 | DashScope/Qwen | OpenAI-compat | Bearer | dashscope-intl.aliyuncs.com/compatible-mode/v1 |
 | DeepSeek | OpenAI-compat | Bearer | api.deepseek.com |
 | Cohere | OpenAI-compat | Bearer | api.cohere.ai/compatibility/v1 |
+| Together AI | OpenAI-compat | Bearer | api.together.xyz/v1 |
+| Fireworks | OpenAI-compat | Bearer | api.fireworks.ai/inference/v1 |
+| NVIDIA NIM | OpenAI-compat | Bearer | integrate.api.nvidia.com/v1 |
+| Perplexity | OpenAI-compat | Bearer | api.perplexity.ai |
+| DeepInfra | OpenAI-compat | Bearer | api.deepinfra.com/v1/openai |
 | Ollama | OpenAI-compat | None | localhost:11434/v1 |
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
@@ -493,6 +498,88 @@ p := llm.RetryPolicy{BaseDelay: 100*time.Millisecond, MaxDelay: 5*time.Second, F
 delay = p.Delay(attempt)
 ```
 
+## More Capabilities
+
+### Structured output (JSON mode)
+
+Set `Request.ResponseFormat` to constrain output to JSON. Wired for OpenAI-compatible providers (`response_format`) and Gemini (`responseMimeType`/`responseSchema`); Anthropic has no native JSON mode (use a tool).
+
+```go
+req.ResponseFormat = &llm.ResponseFormat{
+    Type:   llm.ResponseFormatJSONSchema, // or llm.ResponseFormatJSONObject
+    Name:   "person",
+    Schema: map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}},
+}
+```
+
+### Tool-call validation
+
+Validate model tool arguments against the tool's `InputSchema` before executing (JSON-Schema subset: `required`, per-property `type`, `enum`):
+
+```go
+if err := llm.ValidateToolCall(tool, call); err != nil { /* reject / re-prompt */ }
+```
+
+### Fine-grained streaming events
+
+Wrap any stream to get block boundaries (`EventTextStart/End`, `EventThinkingStart/End`, `EventToolStart/End`) for clean UI rendering — uniform across providers:
+
+```go
+for ev, err := range llm.StreamWithBoundaries(client.Stream(ctx, req)) { ... }
+```
+
+### Conversation persistence
+
+Persist conversations with a pluggable `Store` (in-memory or file; both stdlib-only):
+
+```go
+store := llm.NewFileStore("./chats")        // or llm.NewMemoryStore()
+store.Save(ctx, "chat-1", sess.Conversation())
+conv, err := store.Load(ctx, "chat-1")       // llm.ErrConversationNotFound if absent
+```
+
+### Model & provider discovery
+
+```go
+for _, m := range llm.Models()             { /* m.ID, m.Provider, m.SupportsThinking, ... */ }
+mods := llm.ModelsByProvider("anthropic")
+provs := llm.Providers()
+```
+
+### One-shot helpers & a mock client
+
+```go
+resp, _ := llm.CompleteSimple(ctx, client, "What's 2+2?")
+
+mock := llm.NewMockClient("anthropic", "claude").PushText("hi").PushStream(/* events */)
+sess := llm.NewSession(mock)                 // drive Sessions/handoff in tests, no network
+```
+
+### Embeddings, image generation, audio
+
+Standalone OpenAI-compatible capability functions (reuse `SafeHTTPClient`, honor `BlockPrivateBaseURL`):
+
+```go
+emb, _ := llm.GenerateEmbeddings(ctx, cfg, llm.EmbeddingRequest{Model: "text-embedding-3-small", Input: []string{"hi"}})
+img, _ := llm.GenerateImages(ctx, cfg, llm.ImageRequest{Model: "gpt-image-1", Prompt: "a cat", Size: "1024x1024"})
+wav, _ := llm.SynthesizeSpeech(ctx, cfg, llm.SpeechRequest{Model: "tts-1", Input: "hello", Voice: "alloy"})
+text, _ := llm.TranscribeAudio(ctx, cfg, llm.TranscriptionRequest{Model: "whisper-1", Audio: bytes, Filename: "a.mp3"})
+```
+
+### OAuth (device flow)
+
+For providers that issue tokens via OAuth, use the RFC 8628 device-authorization grant; the resulting access token becomes `Config.APIKey`:
+
+```go
+da, _  := llm.StartDeviceAuth(ctx, llm.DeviceAuthConfig{ClientID: "...", DeviceAuthURL: "...", TokenURL: "..."})
+fmt.Printf("Visit %s and enter %s\n", da.VerificationURI, da.UserCode)
+tok, _ := llm.PollDeviceToken(ctx, cfg, da)  // honors authorization_pending / slow_down
+```
+
+### SSRF hardening
+
+`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) pointing at a loopback/private/link-local host (e.g. the cloud metadata IP) — opt-in, off by default so local providers keep working. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
+
 ## Config Reference
 
 | Field | Type | Default | Description |
@@ -523,6 +610,8 @@ delay = p.Delay(attempt)
 | MaxResponseBodyBytes | int | 32 MB | Cap on success response body reads |
 | MaxToolInputBytes | int | 1 MB | Cap on accumulated tool input JSON |
 | MaxErrorMessageLen | int | 4096 | Cap on stored error message length |
+| BlockPrivateBaseURL | bool | false | Opt-in SSRF guard: reject loopback/private/link-local BaseURL hosts |
+| ResponseFormat | *ResponseFormat | nil | Structured output (JSON mode / JSON schema) — OpenAI-compat + Gemini |
 
 ## Model Registry
 
@@ -668,6 +757,15 @@ llm/
   conversation.go                        # Conversation + Usage + versioned serialization
   session.go                             # Session (stateful driver) + provider handoff
   normalize.go                           # NormalizeForProvider() cross-provider handoff pass
+  store.go                               # Store interface + MemoryStore / FileStore
+  streamevents.go                        # StreamWithBoundaries() fine-grained events
+  mock.go                                # MockClient (test double) + faux builders
+  discovery.go                           # Models() / ModelsByProvider() / Providers()
+  simple.go                              # CompleteSimple / StreamSimple
+  validate.go                            # ValidateToolCall()
+  capabilities.go                        # Embeddings, image gen, audio (OpenAI-compatible)
+  oauth.go                               # OAuth 2.0 device-flow helpers
+  transport.go                           # Shared HTTP plumbing (bounded reads, error construction)
   retrypolicy.go                         # RetryPolicy + RetryHook (configurable backoff)
   circuitbreaker.go                      # CircuitBreaker (3-state machine)
   provider/

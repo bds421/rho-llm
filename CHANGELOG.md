@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-08
+
+### Added
+
+- **`MockClient`** (roadmap P6) — an in-memory `Client` for tests and examples (no network). Script it with `PushResponse`/`PushText`/`PushStream`/`PushError` or `SetResponseFunc`, inspect received requests via `Requests()`/`LastRequest()`, and pass it anywhere a `Client` is expected (e.g. `NewSession(mock)`). Scripting is symmetric — a queued `Response` is synthesized into stream events and queued events are assembled into a `Response`, so one script drives `Complete` or `Stream`. Plus `FauxResponse`/`FauxToolCall` builders.
+- **Model-discovery API** (P9) — `Models()`, `ModelsByProvider(provider)`, and `Providers()` enumerate the registry programmatically (filter by capability via `ModelInfo` fields).
+- **`CompleteSimple` / `StreamSimple`** (P10) — one-shot convenience wrappers taking a prompt string instead of a full `Request` (generation settings come from the client `Config`).
+- **`Config.BlockPrivateBaseURL` + `CheckBaseURL`** (F2) — opt-in SSRF hardening: when set, client construction rejects a `BaseURL` whose host is loopback/private/link-local/unspecified (e.g. the `169.254.169.254` metadata IP) or `localhost`. Covers the per-key `"apikey|baseurl"` override too (wired through `newSingleClient`). Off by default, so local providers keep working.
+- **Conversation persistence** (P1.3, completes roadmap P1) — a `Store` interface (`Save`/`Load`/`Delete` by id) with two stdlib-only implementations: `MemoryStore` (mutex-guarded, stores serialized bytes so loads are independent copies) and `FileStore` (one JSON file per id under a directory; ids are restricted to a single path segment, so traversal like `../evil` is rejected). `Load` of an unknown id returns `ErrConversationNotFound`.
+- **`ValidateToolCall(tool, call)`** (P8) — best-effort structural validation of a tool call's arguments against the tool's `InputSchema` (a JSON-Schema subset: object `required`, per-property `type`, and `enum`). Accepts arguments as a `map[string]any` or a raw JSON string; returns nil when the tool has no schema.
+- **`StreamWithBoundaries`** (P5) — wraps any coarse event stream and injects block-boundary events (`EventTextStart`/`End`, `EventThinkingStart`/`End`, `EventToolStart`/`End`) around contiguous runs. Derived uniformly over the neutral stream, so every provider gets identical fine-grained semantics without per-adapter changes.
+- **Tool results with image content** (P3) — `ContentPart.ToolResultParts` + `NewToolResultParts(...)` let a tool return text and/or image blocks. Anthropic serializes them natively as a `tool_result` content array; the other providers degrade to the text via `ContentPart.ToolResultText()` (images dropped).
+- **Five more OpenAI-compatible providers** (P7) — `together`, `fireworks`, `nvidia` (NIM), `perplexity`, and `deepinfra` presets (Bearer auth, chat-completions). Amazon Bedrock (AWS SigV4), Google Vertex AI (GCP OAuth), Azure OpenAI, and Cloudflare/Vercel gateways are documented as requiring custom auth or account-specific `BaseURL`s — their signing/addressing is outside the stdlib-only preset model.
+- **Structured output / JSON mode** — `Request.ResponseFormat` (`ResponseFormatJSONObject` / `ResponseFormatJSONSchema` + optional `Schema`/`Name`) wired to OpenAI-compatible (`response_format`) and Gemini (`responseMimeType`/`responseSchema`). Anthropic has no native JSON mode (use a tool); the Responses adapter is not wired.
+- **Embeddings** — `GenerateEmbeddings(ctx, cfg, EmbeddingRequest)` for OpenAI-compatible `/embeddings`.
+- **Image generation** (P2) — `GenerateImages(ctx, cfg, ImageRequest)` for OpenAI-compatible `/images/generations` (base64 output). Gemini Imagen (a different API shape) is out of scope here.
+- **Audio in / out** — `SynthesizeSpeech` (`/audio/speech` → raw bytes) and `TranscribeAudio` (`/audio/transcriptions`, multipart → text) for OpenAI-compatible providers.
+- **OAuth 2.0 device flow** (P4) — `StartDeviceAuth` + `PollDeviceToken` implement the RFC 8628 Device Authorization Grant (stdlib only, honoring `authorization_pending`/`slow_down`); the resulting access token is used as `Config.APIKey`. Interactive, provider-specific `loginX()` flows remain the caller's responsibility (a stdlib library has no browser). The standalone capability functions all reuse `SafeHTTPClient` and honor `BlockPrivateBaseURL`.
+
+### Security
+
+- **Auth headers stripped on TLS-downgrade redirects** (F4) — `SafeHTTPClient` now strips `Authorization`/`x-api-key`/`x-goog-api-key` when a redirect changes scheme **or** host (previously host-only), closing an `https→http` same-host downgrade that would have sent the key in plaintext. `sameHost` → `sameOrigin`.
+
+### Changed
+
+- **`BaseURL` trust boundary documented** (F2) — `Config.BaseURL` godoc and the README now state explicitly that `BaseURL` is a trusted developer-supplied value (the API key is sent to it). The misleading scheme-validation test is corrected to note that non-HTTP schemes are rejected by `net/http`, not by this library.
+- **Logging privacy caveat documented** (F5) — `LoggingClient` godoc now notes that logged errors carry the truncated upstream body (`APIError.Message`), which can echo request fragments; the "privacy-safe" guarantee covers message content, not error bodies.
+- **Provider adapters de-duplicated** (Q1) — the security-critical HTTP plumbing (bounded error read + `APIError` construction, bounded JSON decode, JSON request building) is centralized in `transport.go` (`ErrorFromResponse`, `DecodeJSONResponse`, `NewJSONRequest`) and shared by all four adapters; wire-format translation stays per-adapter.
+
+### Fixed
+
+- **README dependency claim corrected** (Q2) — the library imports only the Go standard library; `joho/godotenv` is used solely by `examples/`. The previous "zero external dependencies" wording was inaccurate at the module level.
+
 ## [0.3.0] - 2026-06-07
 
 ### Added
