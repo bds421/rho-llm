@@ -36,7 +36,7 @@ go get github.com/bds421/rho-llm
 
 ## Quick Start
 
-This example demonstrates a complete request using Google Gemini, but the code is identical for all 15 providers.
+This example demonstrates a complete request using Google Gemini, but the code is identical for all 20 providers.
 
 ```go
 import _ "github.com/bds421/rho-llm/provider" // required: register adapters
@@ -772,7 +772,7 @@ llm/
     all.go                               # Blank-imports all sub-packages
     anthropic/anthropic.go               # Anthropic Claude adapter
     gemini/gemini.go                     # Google Gemini adapter
-    openaicompat/openaicompat.go         # OpenAI-compatible adapter (13+ providers)
+    openaicompat/openaicompat.go         # OpenAI-compatible adapter (18+ providers)
     openairesponses/responses.go         # OpenAI Responses API adapter (GPT-5 reasoning)
 ```
 

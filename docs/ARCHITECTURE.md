@@ -1,12 +1,12 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of June 2026 (v0.3.1).
+> **Status:** Reflects the actual implementation as of June 2026 (v0.3.2).
 
 ---
 
 ## 1. Overview
 
-`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers fifteen providers across three distinct wire protocols.
+`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty providers across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
 
 **Key capabilities:**
 - Single `Client` interface for all providers and protocols
@@ -61,7 +61,7 @@ github.com/bds421/rho-llm/
     ├── all.go                       # Blank-imports all sub-packages
     ├── anthropic/anthropic.go       # Native Anthropic API adapter
     ├── gemini/gemini.go             # Native Google Gemini API adapter
-    ├── openaicompat/openaicompat.go # OpenAI-compatible adapter (13+ providers)
+    ├── openaicompat/openaicompat.go # OpenAI-compatible adapter (18+ providers)
     └── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning)
 ```
 
@@ -191,13 +191,14 @@ type StreamEvent struct {
 
 ### Protocol Routing
 
-Three wire protocols are supported:
+Four wire protocols are supported:
 
 | Protocol | Adapters | Notes |
 |---|---|---|
 | `anthropic` | `AnthropicClient` | Native SSE streaming, `x-api-key` header |
 | `gemini` | `GeminiClient` | Native REST + SSE, `x-goog-api-key` header |
 | `openai_compat` | `OpenAICompatClient` | Standard `/chat/completions` with SSE streaming |
+| `openai_responses` | `OpenAIResponsesClient` | OpenAI `/responses` for GPT-5 reasoning-effort control (auto-selected for `ResponsesAPI` models) |
 
 Protocol selection happens in `factory.newSingleClient()` via `ResolveProtocol(cfg)`:
 
@@ -552,6 +553,11 @@ type Config struct {
     AuthHeader       string         // Override auth header ("Bearer", "x-api-key", "")
     ProviderName     string         // Override Client.Provider() return value
     LogRequests      bool           // Enable metadata logging
+    BlockPrivateBaseURL bool        // Opt-in SSRF guard: reject loopback/private BaseURL hosts
+
+    // (Request carries ResponseFormat for structured output; per-Config safety
+    //  limits — MaxErrorBodyBytes, MaxResponseBodyBytes, … — are read via the
+    //  Effective*() accessors. See README "Config Reference" for the full set.)
 
     // Resilience
     RetryPolicy       *RetryPolicy  // Configurable backoff (nil = DefaultRetryPolicy)

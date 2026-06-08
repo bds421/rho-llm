@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-08
+
+### Changed
+
+- **Documentation pass for v0.3.1 (all `.md` files)** — corrected stale counts across README, ARCHITECTURE, and CLAUDE.md: 15 → 20 providers and "three" → four wire protocols (the `openai_responses` protocol is now listed in ARCHITECTURE's protocol table), the OpenAI-compatible adapter provider count 13+ → 18+, and `BlockPrivateBaseURL` / `ResponseFormat` are noted in the ARCHITECTURE config reference. No code changes.
+
 ## [0.3.1] - 2026-06-08
 
 ### Added

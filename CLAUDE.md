@@ -5,7 +5,7 @@ Guidance for working in the `rho-llm` repository.
 ## What this is
 
 `github.com/bds421/rho-llm` — a unified, provider-agnostic LLM client for Go covering
-**15 providers across 4 wire protocols** (`anthropic`, `gemini`, `openai_compat`,
+**20 providers across 4 wire protocols** (`anthropic`, `gemini`, `openai_compat`,
 `openai_responses`). Features: streaming (`iter.Seq2`), tool use, extended thinking,
 image + PDF/document input, **serializable conversations with cross-provider handoff**,
 multi-key auth-pool rotation, circuit breaking, configurable retry, and cost estimation.
