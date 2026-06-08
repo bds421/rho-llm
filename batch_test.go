@@ -321,3 +321,25 @@ func TestNewProviderPresets(t *testing.T) {
 		}
 	}
 }
+
+func TestNewProvidersHaveRegistryEntries(t *testing.T) {
+	for _, p := range []string{"perplexity", "fireworks", "together", "deepinfra", "nvidia"} {
+		models := llm.ModelsByProvider(p)
+		if len(models) == 0 {
+			t.Errorf("ModelsByProvider(%q) is empty — provider has no registry entries", p)
+		}
+		for _, m := range models {
+			if m.Provider != p {
+				t.Errorf("%q query returned a %q model: %s", p, m.Provider, m.ID)
+			}
+		}
+	}
+	// Cost estimation now works for a priced model (sonar-pro = $3/$15 per 1M) — was 0 before.
+	if cost := llm.EstimateCost(llm.CostInput{Model: "sonar-pro", InputTokens: 1_000_000, OutputTokens: 1_000_000}); cost <= 0 {
+		t.Errorf("EstimateCost(sonar-pro, 1M/1M) = %v, want > 0", cost)
+	}
+	// They appear via GetModelInfo too.
+	if _, ok := llm.GetModelInfo("accounts/fireworks/models/fireworks/kimi-k2p6"); !ok {
+		t.Error("fireworks model not found via GetModelInfo")
+	}
+}

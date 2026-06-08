@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-08
+
+### Added
+
+- **Model registry entries for the 5 newest providers** — `perplexity` (Sonar family), `fireworks`, `together`, `deepinfra`, and `nvidia` (NIM) now have curated, source-dated entries, so they appear in `Models()`/`ModelsByProvider()` and get cost estimation (NVIDIA's hosted catalog is free dev-tier, so its prices are left 0). Representative subsets — the registry only affects cost estimation + discovery; any model ID can still be passed directly to the provider.
+
+### Fixed
+
+- **GitHub CI pipeline** — the `make ci` security gates (`gosec`/`govulncheck`) had never actually run (they aren't installed locally), so the first GitHub Actions run went red. Fixed: `FileStore` directory perms `0o755` → `0o750` (gosec G301); justified `#nosec` on the validated `FileStore.Load` read (G304) and the cache-API example's keyed URL (G107); and **Go bumped `1.26.0` → `1.26.4`** to clear two stdlib CVEs (`net/textproto` GO-2026-5039, `crypto/x509` GO-2026-5037) reported by `govulncheck`.
+
+### Changed
+
+- **Go 1.26.4 minimum** (`go.mod` + README).
+- **Pre-push checklist** (CLAUDE.md) gains a third gate — CI green (`make ci`) — alongside no-credentials and README-current.
+
 ## [0.3.2] - 2026-06-08
 
 ### Changed

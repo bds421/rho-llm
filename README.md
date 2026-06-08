@@ -2,7 +2,7 @@
 
 Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports only the Go standard library (the `examples/` use `joho/godotenv`).
 
-**Requires Go 1.26+** (`go 1.26.0` in `go.mod`).
+**Requires Go 1.26.4+** (`go 1.26.4` in `go.mod`; 1.26.4 fixes stdlib CVEs in `net/textproto` and `crypto/x509`).
 
 ## Install
 

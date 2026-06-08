@@ -161,7 +161,7 @@ func createCache(apiKey, systemInstruction string) (string, error) {
 	}
 
 	url := fmt.Sprintf("%s?key=%s", cacheAPIBase, apiKey)
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body)) // #nosec G107 -- example only; constant base + the caller's own key (Gemini cache API requires ?key=)
 	if err != nil {
 		return "", fmt.Errorf("POST: %w", err)
 	}

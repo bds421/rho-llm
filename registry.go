@@ -131,6 +131,32 @@ var modelRegistry = map[string]ModelInfo{
 	// Cohere — OpenAI-compatible API (2026-04-04)
 	"command-a-03-2025": {ID: "command-a-03-2025", Provider: "cohere", MaxTokens: 4096, ContextWindow: 256000, InputPricePer1M: 2.50, OutputPricePer1M: 10.00, Thinking: true, Label: "Command A"},
 
+	// Perplexity — Sonar API (from docs.perplexity.ai/getting-started/pricing, 2026-06-08).
+	// Representative subset; the registry only affects cost estimation + discovery — any model ID can be passed directly.
+	"sonar":               {ID: "sonar", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 1.00, OutputPricePer1M: 1.00, Label: "Sonar"},
+	"sonar-pro":           {ID: "sonar-pro", Provider: "perplexity", ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Sonar Pro"},
+	"sonar-reasoning-pro": {ID: "sonar-reasoning-pro", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "Sonar Reasoning Pro"},
+	"sonar-deep-research": {ID: "sonar-deep-research", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "Sonar Deep Research"},
+
+	// Fireworks — serverless (from docs.fireworks.ai/serverless/pricing, 2026-06-08).
+	"accounts/fireworks/models/fireworks/kimi-k2p6":         {ID: "accounts/fireworks/models/fireworks/kimi-k2p6", Provider: "fireworks", ContextWindow: 262144, InputPricePer1M: 0.95, OutputPricePer1M: 4.00, Label: "Kimi K2.6"},
+	"accounts/fireworks/models/fireworks/deepseek-v4-pro":   {ID: "accounts/fireworks/models/fireworks/deepseek-v4-pro", Provider: "fireworks", ContextWindow: 163840, InputPricePer1M: 1.74, OutputPricePer1M: 3.48, Thinking: true, Label: "DeepSeek V4 Pro"},
+	"accounts/fireworks/models/fireworks/deepseek-v4-flash": {ID: "accounts/fireworks/models/fireworks/deepseek-v4-flash", Provider: "fireworks", ContextWindow: 163840, InputPricePer1M: 0.14, OutputPricePer1M: 0.28, Thinking: true, Label: "DeepSeek V4 Flash"},
+	"accounts/fireworks/models/fireworks/qwen3p6-plus":      {ID: "accounts/fireworks/models/fireworks/qwen3p6-plus", Provider: "fireworks", ContextWindow: 262144, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, Thinking: true, Label: "Qwen 3.6 Plus"},
+
+	// Together AI — serverless (from together.ai/pricing, 2026-06-08; IDs as the API exposes them).
+	"deepseek-ai/DeepSeek-V3":                 {ID: "deepseek-ai/DeepSeek-V3", Provider: "together", ContextWindow: 131072, InputPricePer1M: 2.10, OutputPricePer1M: 4.40, Thinking: true, Label: "DeepSeek (Together)"},
+	"meta-llama/Llama-3.3-70B-Instruct-Turbo": {ID: "meta-llama/Llama-3.3-70B-Instruct-Turbo", Provider: "together", ContextWindow: 131072, InputPricePer1M: 1.04, OutputPricePer1M: 1.04, Label: "Llama 3.3 70B (Together)"},
+
+	// DeepInfra — serverless (from deepinfra.com/pricing, 2026-06-08; distinct IDs to avoid registry key collisions with other hosts).
+	"Qwen/Qwen3-32B":                        {ID: "Qwen/Qwen3-32B", Provider: "deepinfra", ContextWindow: 40960, InputPricePer1M: 0.08, OutputPricePer1M: 0.28, Thinking: true, Label: "Qwen3 32B (DeepInfra)"},
+	"meta-llama/Meta-Llama-3.1-8B-Instruct": {ID: "meta-llama/Meta-Llama-3.1-8B-Instruct", Provider: "deepinfra", ContextWindow: 131072, InputPricePer1M: 0.02, OutputPricePer1M: 0.05, Label: "Llama 3.1 8B (DeepInfra)"},
+	"deepseek-ai/DeepSeek-V4-Flash":         {ID: "deepseek-ai/DeepSeek-V4-Flash", Provider: "deepinfra", ContextWindow: 163840, InputPricePer1M: 0.10, OutputPricePer1M: 0.20, Thinking: true, Label: "DeepSeek V4 Flash (DeepInfra)"},
+
+	// NVIDIA NIM — hosted catalog at build.nvidia.com is free for development (rate-limited; no public per-token price), so prices are left 0. IDs as integrate.api.nvidia.com exposes them.
+	"nvidia/llama-3.1-nemotron-70b-instruct": {ID: "nvidia/llama-3.1-nemotron-70b-instruct", Provider: "nvidia", ContextWindow: 131072, Label: "Llama 3.1 Nemotron 70B (NIM, free dev tier)"},
+	"meta/llama-3.1-8b-instruct":             {ID: "meta/llama-3.1-8b-instruct", Provider: "nvidia", ContextWindow: 131072, Label: "Llama 3.1 8B (NIM, free dev tier)"},
+
 	// DashScope (Alibaba) — OpenAI-compatible API (2026-04-03)
 	"qwen3.6-plus":       {ID: "qwen3.6-plus", Provider: "dashscope", MaxTokens: 65536, ContextWindow: 1000000, InputPricePer1M: 0.29, OutputPricePer1M: 1.74, Thinking: true, Label: "Qwen 3.6 Plus"},
 	"qwen3.5-omni-plus":  {ID: "qwen3.5-omni-plus", Provider: "dashscope", MaxTokens: 16384, ContextWindow: 256000, Thinking: true, Label: "Qwen 3.5 Omni Plus"},

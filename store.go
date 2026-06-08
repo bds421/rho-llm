@@ -105,7 +105,7 @@ func (s *FileStore) Save(_ context.Context, id string, conv *Conversation) error
 	if err != nil {
 		return fmt.Errorf("llm: marshal conversation: %w", err)
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := os.MkdirAll(s.dir, 0o750); err != nil {
 		return err
 	}
 	return os.WriteFile(p, data, 0o600)
@@ -117,7 +117,7 @@ func (s *FileStore) Load(_ context.Context, id string) (*Conversation, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	data, err := os.ReadFile(p) // #nosec G304 -- p comes from s.path(), which rejects separators and ".." (single path segment only)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrConversationNotFound
