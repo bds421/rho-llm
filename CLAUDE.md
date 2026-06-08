@@ -67,6 +67,11 @@ finished task lives in the changelog, not the todo list.
   machine-hostname identity — set author + committer explicitly per commit). GitLab commits use
   `Rene Heinzl <reneheinzl@macbookpro.lan>` (the identity the `bds421/rho/*` GitLab repos use); the
   GitHub history's canonical identity is `rene@bds421.com` (unified via `.mailmap`).
+- **Before pushing to GitHub** (public, and the Go module source) ALWAYS check first: (1) **no
+  leaked credentials** in tracked files / the diff — secret grep over `git ls-files`, only test
+  fakes allowed, `.gitignore` covers `.env`/`.claude`; and (2) **`README.md` is up to date**.
+  Leaks and stale public docs are hard to retract. (GitLab is the internal mirror — this gate is
+  specifically for the public GitHub push.)
 - **Cutting a release:**
   1. Move `## [Unreleased]` content into `## [X.Y.Z] - YYYY-MM-DD` in `CHANGELOG.md` (leave an empty
      `[Unreleased]`). Minor bump for features, patch for fixes.
