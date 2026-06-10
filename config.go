@@ -25,6 +25,10 @@ const (
 // the corresponding Config field is zero (see the Effective* accessors). Values
 // come from the Default* constants. Set these for global control, or set the
 // matching Config fields for per-client control (which takes precedence).
+//
+// These vars are read without synchronization: set them once at program start,
+// BEFORE creating clients or issuing requests. Mutating them while requests
+// are in flight is a data race.
 var (
 	MaxErrorBodyBytes    int64 = DefaultMaxErrorBodyBytes
 	MaxSSELineBytes      int   = DefaultMaxSSELineBytes
@@ -236,6 +240,11 @@ const (
 )
 
 // DefaultConfig returns a Config with sensible defaults.
+//
+// BetaFeatures defaults to the Anthropic interleaved-thinking flag even though
+// it is provider-specific: every other provider ignores the field, and losing
+// the flag would silently disable interleaved thinking for Anthropic users.
+// Set BetaFeatures explicitly (or nil) to opt out.
 func DefaultConfig() Config {
 	return Config{
 		Provider:         "anthropic",

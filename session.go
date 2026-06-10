@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"strings"
 	"sync"
@@ -13,18 +14,22 @@ import (
 // SwitchProvider. The underlying Conversation stays a plain serializable value
 // that you can snapshot and persist between turns.
 //
-// A Session serializes its own calls with a mutex, so concurrent Send/Stream on
-// one Session are safe but run one at a time. For real parallelism, use separate
-// Sessions (each over its own Conversation).
+// Concurrency: turns (Send/Stream) are serialized — concurrent calls are safe
+// but run one at a time. Snapshot reads (Conversation, Usage, Provider) and
+// SwitchProvider never wait for an in-flight turn: a turn is committed to the
+// transcript only after it completes, so snapshots taken mid-turn simply do
+// not include it, and a provider switch mid-turn applies from the next turn.
+// For real parallelism, use separate Sessions (each over its own Conversation).
 //
 // Generation itself stays stateless: a Session just wires a Conversation to a
 // Client and applies NormalizeForProvider before each request so the accumulated
 // history is valid for whichever provider is currently active.
 type Session struct {
-	mu     sync.Mutex
-	conv   *Conversation
-	client Client
-	base   Request
+	turnMu  sync.Mutex // serializes turns (Send/Stream/Append)
+	stateMu sync.Mutex // guards conv, client, base — held only briefly
+	conv    *Conversation
+	client  Client
+	base    Request
 }
 
 // SessionOption configures a Session at construction.
@@ -70,30 +75,28 @@ func NewSession(client Client, opts ...SessionOption) *Session {
 	return s
 }
 
-// Conversation returns a snapshot copy of the underlying conversation, safe to
-// read or json.Marshal at any time — even while other Session calls run
-// concurrently. Mutating the returned value does not affect the Session; to
-// resume from a modified transcript, build a new Session with WithConversation.
+// Conversation returns a deep-copied snapshot of the underlying conversation,
+// safe to read, mutate, or json.Marshal at any time — even while a turn is
+// streaming (an uncommitted in-flight turn is not included). Mutating the
+// returned value never affects the Session; to resume from a modified
+// transcript, build a new Session with WithConversation.
 func (s *Session) Conversation() *Conversation {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cp := *s.conv
-	cp.Messages = append([]Message(nil), s.conv.Messages...)
-	cp.Tools = append([]Tool(nil), s.conv.Tools...)
-	return &cp
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.conv.Clone()
 }
 
 // Usage returns a snapshot of the accumulated token/cost usage.
 func (s *Session) Usage() Usage {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	return s.conv.Usage
 }
 
 // Provider returns the current client's provider name.
 func (s *Session) Provider() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	return s.client.Provider()
 }
 
@@ -101,18 +104,22 @@ func (s *Session) Provider() string {
 // new client, and the accumulated history is translated into that provider's
 // format on the next Send/Stream (see NormalizeForProvider). Thinking blocks not
 // native to the new provider degrade to text; tool calls, text, images, and
-// documents carry over.
+// documents carry over. Switching while a turn is in flight does not affect
+// that turn — it completes (and is recorded) against the client it started with.
 func (s *Session) SwitchProvider(client Client) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	s.client = client
 }
 
 // Append adds messages to the conversation without generating — e.g. to inject a
-// tool result before the next Send.
+// tool result before the next Send. Like a turn, it waits for any in-flight
+// turn to finish so transcript order stays deterministic.
 func (s *Session) Append(msgs ...Message) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	s.conv.Append(msgs...)
 }
 
@@ -124,28 +131,32 @@ func (s *Session) Send(ctx context.Context, prompt string) (*Response, error) {
 
 // SendMessages appends the given messages (e.g. a user message, or tool results
 // continuing a tool loop), generates, appends the assistant reply, and returns
-// the response.
+// the response. On failure nothing is recorded — input and reply are committed
+// to the transcript together, only after the turn succeeds.
 func (s *Session) SendMessages(ctx context.Context, msgs ...Message) (*Response, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	n := len(s.conv.Messages)
-	s.conv.Append(msgs...)
-	resp, err := s.client.Complete(ctx, s.requestLocked())
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+
+	req, client, provider := s.prepareTurn(msgs)
+	resp, err := client.Complete(ctx, req)
 	if err != nil {
-		// Roll back the appended input so a failed turn leaves the transcript
-		// unchanged (otherwise a retry would stack two user turns in a row,
-		// which providers like Anthropic reject).
-		s.conv.Messages = s.conv.Messages[:n]
-		return nil, err
+		return nil, err // nothing was appended — the transcript is untouched
 	}
-	s.conv.AddResponse(s.client.Provider(), resp)
+	if resp == nil {
+		// A misbehaving Client returned (nil, nil). Surface it as an error
+		// rather than panicking in NewAssistantMessage and taking down the
+		// caller; the transcript stays untouched.
+		return nil, fmt.Errorf("llm: client %q returned a nil response and nil error", provider)
+	}
+	s.commitTurn(msgs, provider, resp)
 	return resp, nil
 }
 
 // Stream is the streaming counterpart of Send. It yields events as they arrive;
 // once the turn completes, it appends the assembled assistant message (text +
-// thinking + tool calls, with provenance) and folds in usage. If the caller
-// breaks the range early, no partial turn is appended.
+// thinking + tool calls, with provenance) and folds in usage. If the stream
+// errors, ends without EventDone, or the caller breaks the range early, no
+// partial turn is recorded.
 func (s *Session) Stream(ctx context.Context, prompt string) iter.Seq2[StreamEvent, error] {
 	return s.StreamMessages(ctx, NewTextMessage(RoleUser, prompt))
 }
@@ -153,22 +164,10 @@ func (s *Session) Stream(ctx context.Context, prompt string) iter.Seq2[StreamEve
 // StreamMessages is the streaming counterpart of SendMessages.
 func (s *Session) StreamMessages(ctx context.Context, msgs ...Message) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
+		s.turnMu.Lock()
+		defer s.turnMu.Unlock()
 
-		n := len(s.conv.Messages)
-		s.conv.Append(msgs...)
-		// Roll back the appended input unless the turn completes and is recorded,
-		// so an errored / aborted / abandoned stream leaves the transcript clean.
-		committed := false
-		defer func() {
-			if !committed {
-				s.conv.Messages = s.conv.Messages[:n]
-			}
-		}()
-
-		req := s.requestLocked()
-		provider := s.client.Provider()
+		req, client, provider := s.prepareTurn(msgs)
 
 		var (
 			text, thinking   strings.Builder
@@ -178,10 +177,10 @@ func (s *Session) StreamMessages(ctx context.Context, msgs ...Message) iter.Seq2
 			final            StreamEvent
 			sawDone          bool
 		)
-		for ev, err := range s.client.Stream(ctx, req) {
+		for ev, err := range client.Stream(ctx, req) {
 			if err != nil {
 				yield(StreamEvent{}, err)
-				return // do not append a partial/failed turn
+				return // do not record a partial/failed turn
 			}
 			switch ev.Type {
 			case EventContent:
@@ -223,18 +222,38 @@ func (s *Session) StreamMessages(ctx context.Context, msgs ...Message) iter.Seq2
 			CacheCreationTokens: final.CacheCreationTokens,
 			CacheReadTokens:     final.CacheReadTokens,
 		}
-		s.conv.AddResponse(provider, resp)
-		committed = true
+		s.commitTurn(msgs, provider, resp)
 	}
 }
 
-// requestLocked builds the next Request from the conversation, normalized for the
-// current provider. The caller must hold s.mu.
-func (s *Session) requestLocked() Request {
+// prepareTurn builds the next Request from a snapshot of the conversation plus
+// this turn's input messages, normalized for the current provider, and captures
+// the client the turn will run against. The stored transcript is not mutated —
+// input is committed together with the reply only after the turn succeeds.
+// The caller must hold turnMu (but NOT stateMu).
+func (s *Session) prepareTurn(msgs []Message) (Request, Client, string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	client := s.client
+	provider := client.Provider()
+
 	req := s.conv.ToRequest(s.base)
-	req.Messages = NormalizeForProvider(req.Messages, s.client.Provider())
+	combined := make([]Message, 0, len(s.conv.Messages)+len(msgs))
+	combined = append(combined, s.conv.Messages...)
+	combined = append(combined, msgs...)
+	req.Messages = NormalizeForProvider(combined, provider)
 	if req.Model == "" {
-		req.Model = s.client.Model()
+		req.Model = client.Model()
 	}
-	return req
+	return req, client, provider
+}
+
+// commitTurn atomically records a completed turn: the input messages and the
+// assistant reply (with provenance + usage). The caller must hold turnMu.
+func (s *Session) commitTurn(msgs []Message, provider string, resp *Response) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	s.conv.Append(msgs...)
+	s.conv.AddResponse(provider, resp)
 }

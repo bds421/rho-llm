@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -126,8 +128,24 @@ func IsOverloaded(err error) bool {
 // IsRetryable reports whether err should trigger a retry.
 // Treats both API-level transient errors (429, 502, 503) and
 // pure network dial/timeout errors (e.g. proxy unreachable) as retryable.
+//
+// Two classes are explicitly NOT retryable even though they surface as
+// net.Error through net/http's *url.Error wrapper:
+//   - context.Canceled: the caller aborted — retrying with a dead context
+//     cannot succeed, and counting it as a provider failure would poison
+//     pool/breaker health. (context.DeadlineExceeded stays retryable: the
+//     HTTP client's own timeout surfaces as it.)
+//   - TLS certificate verification failures: an endpoint-identity /
+//     configuration problem that no retry or key rotation can fix.
 func IsRetryable(err error) bool {
 	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
 		return false
 	}
 	var apiErr *APIError

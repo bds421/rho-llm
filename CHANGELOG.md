@@ -7,6 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-10
+
+This release lands the fixes from the 2026-06-10 architecture review (finding ids
+`R-*`). Each fix ships with a break-the-system regression test (red without the fix).
+
+### Fixed
+
+- **Caller cancellation no longer poisons the resilience stack** (R-H1) — a request
+  aborted via the caller's `context` surfaces through net/http as a `*url.Error`
+  satisfying `net.Error`, which the retry path treated as a transient provider
+  failure: it put the (healthy) key in cooldown, recorded a circuit-breaker failure,
+  and burned retries against a dead context — so a few user cancellations could open
+  the circuit and reject real traffic. `PooledClient.Complete`/`Stream` now detect
+  `ctx.Err() != nil` and return immediately without touching key or breaker health,
+  and `IsRetryable` classifies `context.Canceled` as non-retryable. The HTTP client's
+  own timeout (`context.DeadlineExceeded`) stays retryable.
+- **Streams signal completion explicitly — no more silent truncation** (R-H2) — when a
+  server closed the connection mid-turn without its protocol-final event, the
+  anthropic, gemini, and openai_responses adapters ended the iterator with neither an
+  `EventDone` nor an error (the anthropic adapter additionally dropped a
+  half-accumulated tool call). All four adapters now yield an explicit error wrapping
+  `io.ErrUnexpectedEOF` on a truncated stream, so a partial turn can never be mistaken
+  for a complete one (and the pool can classify it as retryable). An explicit `[DONE]`
+  without a `finish_reason` (a known local-server quirk) still synthesizes a stop
+  reason rather than erroring.
+- **Gemini honors the `TokensNotReported` (-1) convention** (R-M8) — a Gemini response
+  or stream chunk carrying no `usageMetadata` previously reported `0` tokens,
+  indistinguishable from a genuine zero; it now reports the `-1` sentinel like every
+  other adapter, and streamed usage arriving on an earlier chunk than the
+  `finishReason` is preserved.
+- **Anthropic stop reasons are normalized** (R-M4) — the anthropic adapter passed raw
+  API values (`stop_sequence`, …) straight through while the other adapters normalized
+  to the unified vocabulary; `stop_sequence` now maps to `end_turn` in both `Complete`
+  and `Stream`. New exported `Stop*` constants (`StopEndTurn`, `StopToolUse`,
+  `StopMaxTokens`, `StopError`, `StopAborted`) document the unified set.
+- **`Session.Conversation()` returns a true deep copy** (R-M1) — the snapshot
+  previously shared each message's `Content` slice and each tool's `InputSchema` map
+  with the live transcript, so mutating the snapshot corrupted the session. It now
+  returns an independent deep copy via the new `Conversation.Clone()`.
+- **`Session` no longer holds its lock for an entire streaming turn** (R-M2) — snapshot
+  reads (`Conversation`/`Usage`/`Provider`) and `SwitchProvider` blocked until a
+  (possibly minutes-long) stream finished. Turns are now serialized by one mutex while
+  state access uses a separate, briefly-held mutex; a turn is built from a snapshot and
+  committed (input + reply together) only on success, so reads never block and an
+  in-flight turn is simply invisible until it completes.
+- **`FileStore.Save` is atomic** (R-M7) — it wrote in place via `os.WriteFile`, so a
+  crash or a concurrent reader could observe a half-written conversation. It now writes
+  to a temp file in the same directory and renames.
+- **Mid-stream provider failures count against the circuit breaker** (R-L7) — a
+  retryable error that arrived *after* the first stream event marked the key failed but
+  skipped `breaker.RecordFailure()`, asymmetric with the pre-data path; it now records
+  the failure (still exempting caller cancellation).
+- **Circuit breaker can't wedge half-open** (R-L2) — if a half-open probe was abandoned
+  (iterator dropped, goroutine died) without reporting success or failure, the circuit
+  stayed half-open forever, rejecting everything. A fresh probe is now admitted after
+  another cooldown elapses.
+- **`NewClientWithKeys(cfg, nil)` no longer bypasses the resilience stack** (R-L1) — an
+  empty/nil key slice silently returned a bare adapter with no retry/rotation/breaker;
+  it now falls back to `cfg.APIKey` and goes through `PooledClient`, matching `NewClient`
+  and its own documentation.
+
+The following two were surfaced by an adversarial break-the-system test pass over the
+above changes (each ships with a test that fails without the fix):
+
+- **`Conversation.Clone()` deep-copies even on its fallback path** — when a message carries
+  a non-JSON-serializable `ToolInput` (e.g. a channel), `Clone`'s JSON round-trip fails and
+  it took a shallow fallback that still shared the `Message.Content` backing arrays, nested
+  `ToolResultParts`, `Tool.InputSchema` maps, and `*ImageSource`/`*DocumentSource` pointers
+  with the original — so mutating the snapshot corrupted the live transcript (defeating the
+  R-M1 fix for that case). The fallback now does a structural deep copy; only a truly-opaque
+  `ToolInput` value (unreachable by reflection-free copy, and non-persistable anyway) stays
+  shared.
+- **Adapters stop reading after the terminal stream event** — anthropic/gemini/openai_responses
+  kept scanning after emitting `EventDone`, so trailing bytes from a misbehaving server
+  (including a malformed SSE line) surfaced as a spurious error *after* a complete turn —
+  which made a `Session` drop the otherwise-complete turn. Each adapter now returns right
+  after the terminal event, so post-completion noise can't mask a finished turn.
+
+A second adversarial round found and fixed:
+
+- **A misbehaving `Client` can no longer panic a `Session`** — a `Client.Complete` that
+  returned `(nil, nil)` (no response, no error) reached `NewAssistantMessage(nil)` and
+  panicked, taking down the caller. `Session` now surfaces it as an error and leaves the
+  transcript untouched.
+- **`ValidateToolCall` is panic-safe on hostile schemas** — an `enum` containing
+  uncomparable values (slices/maps) panicked on `==`; it now compares with
+  `reflect.DeepEqual`. It also rejects non-finite floats (`+Inf`) for an `integer` field
+  (which previously passed, since `math.Trunc(Inf)==Inf`).
+- **Anthropic flushes a pending tool call before a new `content_block_start`** — a
+  spec-violating stream that omitted `content_block_stop` between two tool blocks silently
+  dropped the first call's accumulated input. The adapter now flushes on a new block start
+  (matching the OpenAI-compatible adapter), so no tool call is lost.
+- **`StreamWithBoundaries` closes an open block before propagating an error** — an error
+  mid-thinking/text-block previously left a dangling `…Start` with no matching `…End`,
+  breaking block-based UIs. Every `Start` now gets its `End` even on error.
+
+### Added
+
+- **Runtime model-registry extension** (R-M5) — `RegisterModel(ModelInfo)` and
+  `RegisterModelAlias(alias, modelID)` add or override model metadata and aliases at
+  runtime, so unlisted or newly released models get cost estimation, capability flags,
+  and discovery (and stale built-in pricing can be corrected) without a library release.
+  The registry maps are now guarded by an `RWMutex` across all readers
+  (`GetModelInfo`, `EstimateCost`, `Models`, `ResolveModelAlias`, …), making extension
+  safe for concurrent use.
+- **`Conversation.Clone()`** — a deep copy via the versioned JSON round-trip (the same
+  machinery persistence uses), so no backing arrays, maps, or tool-input values are
+  shared with the original.
+- **`SSEData(line)`** — shared server-sent-events `data:` line parsing, hoisted out of
+  the four adapters that each reimplemented it.
+
+### Changed
+
+- **`make test` (`-short`) actually skips live-API integration tests** (R-M6) — the
+  Makefile passed `-short` and the docs promised it skipped integration tests, but no
+  test consulted `testing.Short()`, so a developer with provider keys in their
+  environment triggered real API calls (and spend). The Anthropic/xAI/Gemini streaming
+  tests and the multi-key pool test now skip under `-short` regardless of env keys.
+- **Documentation** — README gains a stream-completion guarantee, caller-cancellation
+  semantics, the runtime registry-extension API, and a provider-count clarification;
+  `docs/ARCHITECTURE.md` reflects the new streaming/cancellation/registry behavior.
+
 ## [0.3.3] - 2026-06-08
 
 ### Added

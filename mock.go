@@ -60,7 +60,7 @@ func (m *MockClient) PushResponse(r *Response) *MockClient {
 
 // PushText queues a plain-text assistant reply.
 func (m *MockClient) PushText(text string) *MockClient {
-	return m.PushResponse(&Response{Content: text, StopReason: "end_turn"})
+	return m.PushResponse(&Response{Content: text, StopReason: StopEndTurn})
 }
 
 // PushStream queues a sequence of stream events for the next Stream (or, for the
@@ -183,7 +183,7 @@ func (m *MockClient) Close() error { return nil }
 
 // FauxResponse builds a plain-text assistant Response (stop_reason "end_turn").
 func FauxResponse(text string) *Response {
-	return &Response{Content: text, StopReason: "end_turn"}
+	return &Response{Content: text, StopReason: StopEndTurn}
 }
 
 // FauxToolCall builds an assistant Response that issues a single tool call
@@ -191,7 +191,7 @@ func FauxResponse(text string) *Response {
 func FauxToolCall(id, name string, input any) *Response {
 	return &Response{
 		ToolCalls:  []ToolCall{{ID: id, Name: name, Input: input}},
-		StopReason: "tool_use",
+		StopReason: StopToolUse,
 	}
 }
 
@@ -214,7 +214,7 @@ func mockResponseToEvents(r *Response) []StreamEvent {
 	}
 	stop := r.StopReason
 	if stop == "" {
-		stop = "end_turn"
+		stop = StopEndTurn
 	}
 	out = append(out, StreamEvent{
 		Type: EventDone, StopReason: stop,
@@ -255,7 +255,7 @@ func assembleMockResponse(events []StreamEvent, model string) *Response {
 	r.Content = text.String()
 	r.Thinking = thinking.String()
 	if r.StopReason == "" {
-		r.StopReason = "end_turn"
+		r.StopReason = StopEndTurn
 	}
 	return r
 }

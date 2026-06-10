@@ -70,6 +70,7 @@ type CircuitBreaker struct {
 	threshold     int
 	cooldown      time.Duration
 	openedAt      time.Time
+	probeStarted  time.Time // when the current half-open probe was admitted
 	isSuccess     func(error) bool
 	onStateChange func(from, to CircuitState)
 }
@@ -104,6 +105,7 @@ func (cb *CircuitBreaker) Allow() bool {
 	case CircuitOpen:
 		if time.Since(cb.openedAt) >= cb.cooldown {
 			from, to, changed := cb.setStateLocked(CircuitHalfOpen)
+			cb.probeStarted = time.Now()
 			cb.mu.Unlock()
 			if changed {
 				cb.fireCallback(from, to)
@@ -113,8 +115,15 @@ func (cb *CircuitBreaker) Allow() bool {
 		cb.mu.Unlock()
 		return false
 	case CircuitHalfOpen:
-		// Only one probe at a time; additional requests are rejected
-		// until the probe completes.
+		// Only one probe at a time; additional requests are rejected until the
+		// probe completes. If the probe never reports back (abandoned iterator,
+		// crashed goroutine), admit a fresh probe after another cooldown rather
+		// than wedging half-open forever.
+		if time.Since(cb.probeStarted) >= cb.cooldown {
+			cb.probeStarted = time.Now()
+			cb.mu.Unlock()
+			return true
+		}
 		cb.mu.Unlock()
 		return false
 	default:

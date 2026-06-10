@@ -179,13 +179,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	var completed bool
 
 	for scanner.Scan() {
-		line := scanner.Text()
-
-		if !strings.HasPrefix(line, "data: ") {
+		data, ok := llm.SSEData(scanner.Text())
+		if !ok {
 			continue
 		}
-
-		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			break
 		}
@@ -303,16 +300,18 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			} else if ev.Response.Status == "failed" {
 				stopReason = "error"
 			}
+			// The terminal event: emit Done and stop. Returning here means any
+			// trailing bytes after the turn is complete (including malformed
+			// lines) can't surface as a spurious error masking the completed turn.
 			completed = true
-			if !yield(llm.StreamEvent{
+			yield(llm.StreamEvent{
 				Type:           llm.EventDone,
 				StopReason:     stopReason,
 				InputTokens:    ev.Response.Usage.InputTokens,
 				OutputTokens:   ev.Response.Usage.OutputTokens,
 				ThinkingTokens: ev.Response.Usage.ReasoningTokens,
-			}, nil) {
-				return
-			}
+			}, nil)
+			return
 
 		case "error":
 			var ev struct {
@@ -341,12 +340,16 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}
 	}
 
-	if !completed && scanner.Err() == nil {
-		slog.Warn("stream ended without response.completed event", "provider", c.providerName)
-	}
-
 	if err := scanner.Err(); err != nil && !completed {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
+		return
+	}
+
+	// Clean EOF without response.completed: the server truncated the turn.
+	// Yield an explicit error instead of ending silently (see the anthropic
+	// adapter for the rationale; io.ErrUnexpectedEOF makes it pool-retryable).
+	if !completed {
+		yield(llm.StreamEvent{}, fmt.Errorf("%s: stream ended without completion: %w", c.providerName, io.ErrUnexpectedEOF))
 	}
 }
 

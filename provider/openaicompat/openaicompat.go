@@ -545,16 +545,16 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// can distinguish "not reported" from "zero tokens" (0).
 	var finishReason string
 	var inputTokens, outputTokens = llm.TokensNotReported, llm.TokensNotReported
+	sawDone := false         // server sent an explicit [DONE]
+	emittedToolCall := false // the turn contained at least one tool call
 
 	for scanner.Scan() {
-		line := scanner.Text()
-
-		if !strings.HasPrefix(line, "data: ") {
+		data, ok := llm.SSEData(scanner.Text())
+		if !ok {
 			continue
 		}
-
-		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			sawDone = true
 			break
 		}
 
@@ -625,6 +625,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 							input = raw
 						}
 						currentToolCall.Input = input
+						emittedToolCall = true
 						if !yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: currentToolCall}, nil) {
 							return
 						}
@@ -655,6 +656,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 						input = raw
 					}
 					currentToolCall.Input = input
+					emittedToolCall = true
 					if !yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: currentToolCall}, nil) {
 						return
 					}
@@ -675,8 +677,21 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			input = raw
 		}
 		currentToolCall.Input = input
+		emittedToolCall = true
 		if !yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: currentToolCall}, nil) {
 			return
+		}
+	}
+
+	// An explicit [DONE] without finish_reason is a known spec violation of
+	// some servers (e.g. older local ones). The server DID signal completion,
+	// so synthesize the stop reason instead of erroring.
+	if finishReason == "" && sawDone {
+		slog.Warn("stream sent [DONE] without finish_reason", "provider", c.providerName)
+		if emittedToolCall {
+			finishReason = llm.StopToolUse
+		} else {
+			finishReason = llm.StopEndTurn
 		}
 	}
 
@@ -690,15 +705,19 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}, nil) {
 			return
 		}
-	} else if scanner.Err() == nil {
-		// Stream ended cleanly but server never sent a finish_reason —
-		// protocol violation by the provider. Log so operators can investigate.
-		slog.Warn("stream ended without finish_reason", "provider", c.providerName)
+		return
 	}
 
 	// Only report scanner errors if the stream did not already complete
 	// successfully. A trailing read error after EventDone is noise.
-	if err := scanner.Err(); err != nil && finishReason == "" {
+	if err := scanner.Err(); err != nil {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
+		return
 	}
+
+	// Clean EOF without finish_reason or [DONE]: the server truncated the
+	// turn. Yield an explicit error instead of ending silently (see the
+	// anthropic adapter for the rationale; io.ErrUnexpectedEOF makes it
+	// pool-retryable).
+	yield(llm.StreamEvent{}, fmt.Errorf("%s: stream ended without completion: %w", c.providerName, io.ErrUnexpectedEOF))
 }

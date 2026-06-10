@@ -13,15 +13,14 @@ func NewClient(cfg Config) (Client, error) {
 }
 
 // NewClientWithKeys creates an LLM client with optional multiple API keys for rotation.
-// Even single-key clients go through PooledClient to get retry/backoff on transient errors.
+// Every client goes through PooledClient to get retry/backoff on transient errors —
+// a nil or empty keys slice falls back to cfg.APIKey, exactly like NewClient.
 // Keys may use the format "apikey|baseurl" to override the base URL per key.
 func NewClientWithKeys(cfg Config, keys []string) (Client, error) {
-	if len(keys) >= 1 {
-		return newPooledClient(cfg, keys)
+	if len(keys) == 0 {
+		keys = []string{cfg.APIKey}
 	}
-
-	// No keys provided - use config's APIKey directly
-	return newSingleClient(cfg)
+	return newPooledClient(cfg, keys)
 }
 
 // newSingleClient creates a single (non-pooled) client based on protocol routing.

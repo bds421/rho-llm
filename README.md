@@ -34,6 +34,14 @@ go get github.com/bds421/rho-llm
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
+> **Counting:** 20 built-in provider presets across 4 wire protocols — the OpenAI
+> row spans two (`openai_compat` and the auto-selected `openai_responses` for GPT-5
+> reasoning models), and `claude`/`google`/`grok`/`qwen` are aliases of providers
+> already listed. 15 of them ship curated **model metadata** (pricing + capabilities)
+> for cost estimation and discovery; the rest work fully — any model ID can be passed
+> directly — and you can add metadata for any model at runtime (see
+> [Model Registry](#model-registry)). Unknown providers work too via `Config.BaseURL`.
+
 ## Quick Start
 
 This example demonstrates a complete request using Google Gemini, but the code is identical for all 20 providers.
@@ -148,6 +156,8 @@ Supported media types: `application/pdf`.
 ## Streaming
 
 `client.Stream()` returns a Go 1.23 iterator (`iter.Seq2[StreamEvent, error]`) that yields events as the model generates tokens. This lets you display partial output in real time rather than waiting for the full response. Use `break` to abort early — the iterator cleans up the underlying HTTP connection automatically.
+
+**Completion is explicit.** Every stream either yields an `EventDone` (carrying the stop reason and final token usage) or yields an error — never both, and never neither. If the server closes the connection mid-turn without sending its protocol-final event, the adapter yields an explicit error (wrapping `io.ErrUnexpectedEOF`) instead of ending silently, so a truncated turn can never be mistaken for a complete one. To abort an in-flight stream, cancel the `ctx` you passed to `Stream()` — a caller-cancelled stream is reported to you but is *not* counted as a provider failure (no key cooldown, no circuit-breaker trip).
 
 ```go
 for event, err := range client.Stream(ctx, req) {
@@ -346,6 +356,8 @@ Cache fields are silently ignored — no error, no effect.
 All clients get automatic retry with exponential backoff (1s→2s→4s, capped at 30s) and a circuit breaker (opens after 5 consecutive failures, probes after 30s) — including keyless local providers like Ollama and vLLM. A solo developer hitting a transient 502 or 429 gets the same resilience as an enterprise with 10 keys.
 
 The rotation engine is thread-safe. During concurrent rate-limit events, rotation is synchronized to prevent redundant HTTP client allocations, ensuring all in-flight requests seamlessly fail over to the next available endpoint.
+
+**Caller cancellation is never a provider failure.** If you cancel the request `ctx` (or `Complete`/`Stream` returns because *your* context expired), the library returns immediately without rotating, putting the key in cooldown, or tripping the circuit breaker — cancelling a slow request can no longer poison the pool's health. The HTTP client's own `Timeout` (`context.DeadlineExceeded`) still counts as a transient failure and retries. Permanent transport errors that no retry can fix — TLS certificate verification failures — are classified non-retryable and returned at once.
 
 ```go
 cfg := llm.Config{
@@ -743,6 +755,26 @@ provider := llm.ProviderForModel("gemini-2.5-flash") // -> "gemini"
 
 // Get the default model for a provider
 model := llm.GetDefaultModel("xai") // -> "grok-4.20-beta"
+```
+
+**Extending the registry at runtime.** Unlisted models return a cost estimate of `0`
+and carry no capability flags. Register metadata for any model — or correct stale
+built-in pricing in place — without waiting for a release. Both calls are safe for
+concurrent use:
+
+```go
+// Add (or override) a model's metadata — it now feeds EstimateCost, the
+// capability flags adapters read, and the discovery API (Models/ModelsByProvider).
+llm.RegisterModel(llm.ModelInfo{
+    ID:               "my-self-hosted-llm",
+    Provider:         "vllm",
+    ContextWindow:    128000,
+    InputPricePer1M:  0.20,
+    OutputPricePer1M: 0.60,
+})
+
+// Point a short alias at it (the target model must already be registered).
+llm.RegisterModelAlias("myllm", "my-self-hosted-llm")
 ```
 
 ## Package Structure

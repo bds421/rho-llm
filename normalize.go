@@ -128,5 +128,5 @@ func uniqueToolID(base string, used map[string]bool) string {
 // isIncompleteTurn reports whether a stop reason marks a turn that must not be
 // replayed (it never produced a usable assistant message).
 func isIncompleteTurn(stopReason string) bool {
-	return stopReason == "error" || stopReason == "aborted"
+	return stopReason == StopError || stopReason == StopAborted
 }

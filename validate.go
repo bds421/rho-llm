@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 )
 
 // ValidateToolCall checks a tool call's arguments against the tool's InputSchema.
@@ -93,12 +94,14 @@ func matchesJSONType(declared string, v any) bool {
 	case "integer":
 		switch n := v.(type) {
 		case float64:
-			return n == math.Trunc(n)
+			// Reject NaN (n != n) and ±Inf — neither is a valid integer, and
+			// math.Trunc(Inf)==Inf would otherwise let infinity pass.
+			return !math.IsInf(n, 0) && n == math.Trunc(n)
 		case int, int64:
 			return true
 		case json.Number:
 			f, err := n.Float64()
-			return err == nil && f == math.Trunc(f)
+			return err == nil && !math.IsInf(f, 0) && f == math.Trunc(f)
 		default:
 			return false
 		}
@@ -145,7 +148,11 @@ func jsonTypeName(v any) string {
 
 func enumContains(enum []any, v any) bool {
 	for _, e := range enum {
-		if e == v {
+		// reflect.DeepEqual instead of == : a JSON-decoded enum may hold slices
+		// or maps (uncomparable types), and `e == v` panics when both operands
+		// share an uncomparable dynamic type. DeepEqual matches == for the scalar
+		// cases real enums use.
+		if reflect.DeepEqual(e, v) {
 			return true
 		}
 	}

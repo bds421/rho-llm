@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 // This file centralizes the HTTP plumbing shared by every provider adapter so the
@@ -39,4 +40,14 @@ func ErrorFromResponse(provider string, resp *http.Response, cfg Config) error {
 // effective response-body limit.
 func DecodeJSONResponse(resp *http.Response, cfg Config, out any) error {
 	return json.NewDecoder(io.LimitReader(resp.Body, cfg.EffectiveMaxResponseBodyBytes())).Decode(out)
+}
+
+// SSEData extracts the payload of a server-sent-events "data: " line.
+// ok is false for every other line (event names, comments, blank keep-alives),
+// which SSE consumers skip. Shared by all streaming adapters.
+func SSEData(line string) (data string, ok bool) {
+	if !strings.HasPrefix(line, "data: ") {
+		return "", false
+	}
+	return strings.TrimPrefix(line, "data: "), true
 }

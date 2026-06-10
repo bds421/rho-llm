@@ -974,12 +974,23 @@ func TestAllProviders(t *testing.T) {
 	}
 }
 
+// requireLiveAPI gates a test that calls a real provider API: it is skipped in
+// -short mode (what `make test` runs — keys in the developer's env must not
+// trigger live calls and spend) and when no key is configured.
+func requireLiveAPI(t *testing.T, key, skipMsg string) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("integration test: skipped in -short mode")
+	}
+	if key == "" {
+		t.Skip(skipMsg)
+	}
+}
+
 // TestAnthropicStreaming tests streaming with Anthropic.
 func TestAnthropicStreaming(t *testing.T) {
 	apiKey := envKey("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEYS")
-	if apiKey == "" {
-		t.Skip("ANTHROPIC_API_KEY(S) not set")
-	}
+	requireLiveAPI(t, apiKey, "ANTHROPIC_API_KEY(S) not set")
 
 	cfg := llm.Config{
 		Provider:    "anthropic",
@@ -1036,9 +1047,7 @@ func TestAnthropicStreaming(t *testing.T) {
 // TestXAIStreaming tests streaming with xAI Grok via OpenAI-compat adapter.
 func TestXAIStreaming(t *testing.T) {
 	apiKey := envKey("XAI_API_KEY", "XAI_API_KEYS")
-	if apiKey == "" {
-		t.Skip("XAI_API_KEY(S) not set")
-	}
+	requireLiveAPI(t, apiKey, "XAI_API_KEY(S) not set")
 
 	cfg := llm.Config{
 		Provider:    "xai",
@@ -1091,9 +1100,7 @@ func TestXAIStreaming(t *testing.T) {
 // TestGeminiStreaming tests streaming with Google Gemini.
 func TestGeminiStreaming(t *testing.T) {
 	apiKey := envKey("GEMINI_API_KEY", "GEMINI_API_KEYS")
-	if apiKey == "" {
-		t.Skip("GEMINI_API_KEY(S) not set")
-	}
+	requireLiveAPI(t, apiKey, "GEMINI_API_KEY(S) not set")
 
 	cfg := llm.Config{
 		Provider:    "gemini",
@@ -1146,6 +1153,9 @@ func TestGeminiStreaming(t *testing.T) {
 // TestPooledClientWithMultipleKeys tests auth pool rotation with multiple API keys.
 func TestPooledClientWithMultipleKeys(t *testing.T) {
 	keys := envKeys("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEYS")
+	if testing.Short() {
+		t.Skip("integration test: skipped in -short mode")
+	}
 	if len(keys) < 2 {
 		t.Skip("ANTHROPIC_API_KEYS not set or has fewer than 2 keys")
 	}

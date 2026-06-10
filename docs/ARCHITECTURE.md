@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of June 2026 (v0.3.3).
+> **Status:** Reflects the actual implementation as of June 2026 (v0.4.0).
 
 ---
 
@@ -183,7 +183,9 @@ type StreamEvent struct {
 }
 ```
 
-**Token counts:** In streaming, token counts are `-1` if the provider didn't report them (connection dropped, provider quirk). This distinguishes "not reported" from a legitimate "zero tokens" response.
+**Token counts:** In streaming, token counts are `-1` (`TokensNotReported`) if the provider didn't report them (connection dropped, provider quirk). This distinguishes "not reported" from a legitimate "zero tokens" response. All four adapters honor this — including Gemini, whose `usageMetadata` is now decoded through a pointer so an absent block reports `-1` rather than a fake `0`.
+
+**Completion is explicit (v0.4.0):** every stream terminates in exactly one of two ways — an `EventDone` (stop reason + final usage) or an error. If the connection closes mid-turn without the wire protocol's final event (`message_delta` / a `finishReason` / `[DONE]` / `response.completed`), the adapter yields an explicit error wrapping `io.ErrUnexpectedEOF` instead of ending silently, so a truncated turn is never mistaken for a complete one — and `PooledClient` can classify the pre-data case as retryable. An explicit `[DONE]` without a `finish_reason` (a known local-server quirk) still synthesizes a stop reason rather than erroring.
 
 ---
 
@@ -243,7 +245,7 @@ NewClient(cfg)
                           └── cfg.LogRequests? → WithLogging(client)
 ```
 
-All clients — including keyless local providers (Ollama, vLLM, LM Studio) — go through `PooledClient` to get exponential backoff on transient errors (429, 503, 502). `NewClient` always delegates to `NewClientWithKeys`, ensuring uniform retry/backoff protection.
+All clients — including keyless local providers (Ollama, vLLM, LM Studio) — go through `PooledClient` to get exponential backoff on transient errors (429, 503, 502). `NewClient` always delegates to `NewClientWithKeys`, and `NewClientWithKeys` with a nil/empty key slice falls back to `cfg.APIKey` (rather than bypassing the pool, v0.4.0) — ensuring uniform retry/backoff protection for every construction path.
 
 ---
 
@@ -314,6 +316,8 @@ Stream():
         4. Stream completes → MarkSuccess(), breaker.RecordSuccess(), return
 ```
 
+**Caller cancellation (v0.4.0):** before marking a key failed or recording a breaker failure, both `Complete` and `Stream` check `ctx.Err()`. A request aborted by the caller's context surfaces through net/http as a `*url.Error` that satisfies `net.Error` — without this check it looked like a transient provider failure, so a cancelled request would cool down a healthy key and trip the breaker. Caller cancellation now returns immediately, touching neither key nor breaker health. The HTTP client's own timeout (`context.DeadlineExceeded`) is *not* exempted — it remains a retryable transient failure. TLS certificate-verification failures are classified non-retryable (no retry can fix endpoint identity).
+
 **Auth error handling:** When a 401/403 occurs, the key is marked permanently unhealthy (`IsHealthy = false`), not just put in cooldown. If rotation fails because no healthy keys remain, the error returns immediately — no point backing off with a dead key.
 
 **Pre-data vs mid-stream retry:** A stream that fails on the initial HTTP connection (429/503 before any SSE events) is functionally identical to a failed `Complete` — no data has reached the caller, so retry with rotation is safe. Once any event has been yielded via `for-range`, retrying would replay content from scratch with no way for the caller to detect duplication, so mid-stream errors pass through immediately.
@@ -372,6 +376,7 @@ CircuitHalfOpen ──(probe failure)──────────────�
 - **Callback-safe:** `WithOnStateChange` callbacks are invoked outside the mutex, so they may safely call back into the circuit breaker
 - **Auth-aware:** `WithSuccessPredicate` excludes auth errors from failure counting (bad key ≠ broken endpoint)
 - **Fail-fast on open:** when the circuit is open, `Complete` and `Stream` return `ErrCircuitOpen` immediately instead of burning retry iterations
+- **No half-open wedge (v0.4.0):** a half-open probe admits one request and rejects the rest until it reports back. If that probe is abandoned (iterator dropped, goroutine died) without recording success or failure, a fresh probe is admitted after another cooldown elapses rather than wedging the circuit half-open forever.
 - Enabled by default via `DefaultConfig()` with threshold=5, cooldown=30s
 
 ### Retry Hook (`retrypolicy.go`)
@@ -462,6 +467,8 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 | Gemini | gemini-3.5-flash, gemini-3.1-{pro,flash-lite}-preview, gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
 
 `EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0.
+
+**Runtime extension (v0.4.0):** built-in metadata is curated for 15 providers, but `RegisterModel(ModelInfo)` and `RegisterModelAlias(alias, modelID)` add or override entries at runtime — so unlisted/newly released models get cost estimation, capability flags, and discovery (and stale built-in pricing can be corrected) without a library release. The registry maps were "immutable after init"; they are now guarded by an `RWMutex` taken by every reader (`GetModelInfo`, `EstimateCost`, `ResolveModelAlias`, `Models`, …), so runtime registration is safe for concurrent use.
 
 ---
 
@@ -596,8 +603,10 @@ LangGraph, OpenAI Agents SDK, and the Go ecosystem) and is tuned to Go idioms.
 
 | Type | Role | Concurrency | Serialization |
 |------|------|-------------|---------------|
-| `Conversation` (`conversation.go`) | Plain, provider-neutral transcript: `SchemaVersion`, `System`, `Tools`, `Messages`, `Usage`. Owns **no** client. | none (a value) | versioned JSON via explicit tags |
-| `Session` (`session.go`) | Concurrency-safe driver: holds a `*Conversation` + current `Client` + a base `Request`; appends each turn; supports handoff. | `sync.Mutex` (one turn at a time) | persist the underlying `Conversation` |
+| `Conversation` (`conversation.go`) | Plain, provider-neutral transcript: `SchemaVersion`, `System`, `Tools`, `Messages`, `Usage`. Owns **no** client. `Clone()` deep-copies it via the versioned JSON round-trip. | none (a value) | versioned JSON via explicit tags |
+| `Session` (`session.go`) | Concurrency-safe driver: holds a `*Conversation` + current `Client` + a base `Request`; appends each turn; supports handoff. | two mutexes — one serializes turns, one briefly guards state (v0.4.0) | persist the underlying `Conversation` |
+
+**Session locking (v0.4.0):** turns (`Send`/`Stream`) are serialized by `turnMu`, but snapshot reads (`Conversation`/`Usage`/`Provider`) and `SwitchProvider` take a separate, briefly-held `stateMu` — so they never block on a (possibly minutes-long) streaming turn. A turn is built from a state snapshot and **committed atomically** (input messages + assistant reply together) only after it succeeds; a failed, aborted, or abandoned turn records nothing, and an in-flight turn is invisible to snapshots until it completes. `Conversation()` returns a deep `Clone()`, so mutating the snapshot can never corrupt the live transcript.
 
 This split is deliberate. The serializable data (`Conversation`) is decoupled from the
 mutable runtime concerns (client, mutex) — so persistence is just `json.Marshal(conv)`, and
@@ -646,7 +655,9 @@ tokens and pricing once at the end would be wrong when models differ.
 Persistence is a pluggable `Store` (`Save`/`Load`/`Delete` by id) kept **out** of the message
 model: `MemoryStore` (mutex-guarded, stores serialized bytes so loads are independent copies)
 and `FileStore` (one JSON file per id; ids are restricted to a single path segment, so traversal
-like `../evil` is rejected) ship in the library, both stdlib-only. Under the hood it is still just
+like `../evil` is rejected; **writes are atomic** — temp file + rename — so a crash or a
+concurrent reader never sees a half-written conversation, v0.4.0) ship in the library, both
+stdlib-only. Under the hood it is still just
 `json.Marshal(conv)` / `LoadConversation(blob)`. `LoadConversation` validates
 `schema_version` (tolerating pre-versioned blobs as v1, rejecting versions newer than the
 build) — the format is keyed by explicit JSON tags and is **not** tied to Go type/package

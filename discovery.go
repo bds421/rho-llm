@@ -9,10 +9,12 @@ import "sort"
 //	    if m.SupportsThinking { ... }
 //	}
 func Models() []ModelInfo {
+	registryMu.RLock()
 	out := make([]ModelInfo, 0, len(modelRegistry))
 	for _, m := range modelRegistry {
 		out = append(out, m)
 	}
+	registryMu.RUnlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
@@ -20,12 +22,14 @@ func Models() []ModelInfo {
 // ModelsByProvider returns the registered models for one provider, sorted by ID.
 // An unknown provider yields an empty (non-nil) slice.
 func ModelsByProvider(provider string) []ModelInfo {
+	registryMu.RLock()
 	out := make([]ModelInfo, 0)
 	for _, m := range modelRegistry {
 		if m.Provider == provider {
 			out = append(out, m)
 		}
 	}
+	registryMu.RUnlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }

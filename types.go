@@ -110,6 +110,18 @@ func ClampThinkingBudget(provider, model string, budget, maxTokens int) int {
 // Callers can distinguish "not reported" (-1) from "zero tokens" (0).
 const TokensNotReported = -1
 
+// Stop reasons — the unified vocabulary adapters normalize provider-native
+// values into (Gemini "STOP", OpenAI "length", Anthropic "stop_sequence", …).
+// Compare Response.StopReason / StreamEvent.StopReason against these constants;
+// provider-specific reasons with no unified equivalent pass through verbatim.
+const (
+	StopEndTurn   = "end_turn"   // the model finished its turn normally
+	StopToolUse   = "tool_use"   // the model is waiting for tool results
+	StopMaxTokens = "max_tokens" // output truncated at the token limit
+	StopError     = "error"      // the turn failed — NormalizeForProvider drops it on replay
+	StopAborted   = "aborted"    // the turn was aborted by the caller — dropped on replay
+)
+
 // =============================================================================
 // MESSAGE TYPES
 // =============================================================================

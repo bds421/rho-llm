@@ -1,5 +1,16 @@
 package llm
 
+import (
+	"fmt"
+	"sync"
+)
+
+// registryMu guards the registry maps (modelRegistry, modelAliases,
+// availableModels, defaultModels). The built-in data is written at package
+// init; RegisterModel/RegisterModelAlias extend it at runtime, so every
+// reader takes the read lock.
+var registryMu sync.RWMutex
+
 // ModelInfo holds per-model metadata used to adapt API requests and UI.
 type ModelInfo struct {
 	ID                   string  // Full model identifier
@@ -18,8 +29,8 @@ type ModelInfo struct {
 	Label                string  // Short display name
 }
 
-// modelRegistry maps model ID to its metadata.
-// Immutable after init — no mutex needed.
+// modelRegistry maps model ID to its metadata. Built-in entries are written
+// at init; RegisterModel extends/overrides at runtime under registryMu.
 var modelRegistry = map[string]ModelInfo{
 	// Anthropic — from platform.claude.com/docs (2026-03-18)
 	// Short aliases (claude-opus-4-5) resolve server-side to dated versions (claude-opus-4-5-20251101)
@@ -407,14 +418,56 @@ var modelAliases = map[string]string{
 	"flash-lite": "gemini-3.1-flash-lite-preview",
 }
 
+// RegisterModel adds (or overrides) a model's metadata at runtime, so unlisted
+// or newly released models get cost estimation, capability flags, and
+// discovery without waiting for a library release — and stale built-in pricing
+// can be corrected in place. info.ID and info.Provider are required.
+// Safe for concurrent use.
+func RegisterModel(info ModelInfo) error {
+	if info.ID == "" {
+		return fmt.Errorf("llm: RegisterModel: ID is required")
+	}
+	if info.Provider == "" {
+		return fmt.Errorf("llm: RegisterModel: Provider is required")
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	_, existed := modelRegistry[info.ID]
+	modelRegistry[info.ID] = info
+	if !existed {
+		availableModels[info.Provider] = append(availableModels[info.Provider], info.ID)
+	}
+	return nil
+}
+
+// RegisterModelAlias adds (or re-points) a model alias at runtime. The target
+// model must already be registered (built-in or via RegisterModel).
+// Safe for concurrent use.
+func RegisterModelAlias(alias, modelID string) error {
+	if alias == "" || modelID == "" {
+		return fmt.Errorf("llm: RegisterModelAlias: alias and model ID are required")
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, ok := modelRegistry[modelID]; !ok {
+		return fmt.Errorf("llm: RegisterModelAlias: unknown model %q (register it first)", modelID)
+	}
+	modelAliases[alias] = modelID
+	return nil
+}
+
 // GetModelInfo returns the ModelInfo for a model ID, or false if not found.
 func GetModelInfo(model string) (ModelInfo, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	info, ok := modelRegistry[model]
 	return info, ok
 }
 
 // GetDefaultModel returns the default model for a provider.
 func GetDefaultModel(provider string) string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	if model, ok := defaultModels[provider]; ok {
 		return model
 	}
@@ -425,6 +478,8 @@ func GetDefaultModel(provider string) string {
 // Returns nil if the provider has no models registered.
 // Returns a copy to prevent callers from mutating global registry state.
 func GetAvailableModels(provider string) []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	src := availableModels[provider]
 	if src == nil {
 		return nil
@@ -437,6 +492,8 @@ func GetAvailableModels(provider string) []string {
 // ResolveModelAlias resolves a model alias to its full name.
 // Returns the input unchanged if not an alias.
 func ResolveModelAlias(model string) string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	if full, ok := modelAliases[model]; ok {
 		return full
 	}
@@ -446,6 +503,8 @@ func ResolveModelAlias(model string) string {
 // ProviderForModel detects the provider from a model name.
 // Returns empty string if the model is not recognized.
 func ProviderForModel(model string) string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	if info, ok := modelRegistry[model]; ok {
 		return info.Provider
 	}
@@ -464,9 +523,12 @@ type CostInput struct {
 
 // EstimateCost returns the estimated cost in USD for a request/response.
 // Accepts a CostInput with all token types for accurate cache-aware pricing.
-// Returns 0 if the model is not in the registry or has no pricing data.
+// Returns 0 if the model is not in the registry or has no pricing data —
+// register unlisted models via RegisterModel to get real estimates.
 func EstimateCost(input CostInput) float64 {
+	registryMu.RLock()
 	info, ok := modelRegistry[input.Model]
+	registryMu.RUnlock()
 	if !ok {
 		return 0
 	}

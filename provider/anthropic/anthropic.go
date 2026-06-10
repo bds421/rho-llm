@@ -472,11 +472,22 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	return apiReq, nil
 }
 
+// normalizeStopReason maps Anthropic stop reasons onto the unified vocabulary
+// (llm.StopEndTurn, …). Anthropic already uses the unified names for the
+// common cases; a configured stop sequence is a normal end of turn. Reasons
+// with no unified equivalent (e.g. "refusal", "pause_turn") pass through.
+func normalizeStopReason(reason string) string {
+	if reason == "stop_sequence" {
+		return llm.StopEndTurn
+	}
+	return reason
+}
+
 func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 	resp := &llm.Response{
 		ID:                  apiResp.ID,
 		Model:               apiResp.Model,
-		StopReason:          apiResp.StopReason,
+		StopReason:          normalizeStopReason(apiResp.StopReason),
 		InputTokens:         apiResp.Usage.InputTokens,
 		OutputTokens:        apiResp.Usage.OutputTokens,
 		CacheCreationTokens: apiResp.Usage.CacheCreationTokens,
@@ -522,14 +533,32 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	var thinkingSignature string
 	doneEmitted := false
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	// flushToolCall emits any accumulated tool call and clears the buffer.
+	// Returns false if the caller broke iteration. Called both on
+	// content_block_stop and defensively on a new content_block_start, so a
+	// spec-violating stream that omits the stop can't silently drop a tool call.
+	flushToolCall := func() bool {
+		if currentToolCall == nil {
+			return true
+		}
+		var input any
+		raw := inputBuffer.String()
+		if err := json.Unmarshal([]byte(raw), &input); err != nil {
+			slog.Warn("failed to parse tool input JSON", "provider", "anthropic", "tool", currentToolCall.Name, "error", err)
+			input = raw
+		}
+		currentToolCall.Input = input
+		tc := currentToolCall
+		currentToolCall = nil
+		inputBuffer.Reset()
+		return yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: tc}, nil)
+	}
 
-		if !strings.HasPrefix(line, "data: ") {
+	for scanner.Scan() {
+		data, ok := llm.SSEData(scanner.Text())
+		if !ok {
 			continue
 		}
-
-		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			break
 		}
@@ -576,6 +605,11 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		switch event.Type {
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
+				// Flush a still-open tool call first (defends against a missing
+				// content_block_stop), then begin the new one.
+				if !flushToolCall() {
+					return
+				}
 				currentToolCall = &llm.ToolCall{
 					ID:   event.ContentBlock.ID,
 					Name: event.ContentBlock.Name,
@@ -606,34 +640,26 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 
 		case "content_block_stop":
-			if currentToolCall != nil {
-				// Parse accumulated input
-				var input any
-				raw := inputBuffer.String()
-				if err := json.Unmarshal([]byte(raw), &input); err != nil {
-					slog.Warn("failed to parse tool input JSON", "provider", "anthropic", "tool", currentToolCall.Name, "error", err)
-					input = raw
-				}
-				currentToolCall.Input = input
-				if !yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: currentToolCall}, nil) {
-					return
-				}
-				currentToolCall = nil
+			if !flushToolCall() {
+				return
 			}
 
 		case "message_delta":
+			// The terminal event: emit Done and stop. Returning here means any
+			// trailing bytes the server sends after the turn is complete
+			// (including malformed lines) can't surface as a spurious error that
+			// would mask the completed turn.
 			doneEmitted = true
-			if !yield(llm.StreamEvent{
+			yield(llm.StreamEvent{
 				Type:                llm.EventDone,
-				StopReason:          event.Delta.StopReason,
+				StopReason:          normalizeStopReason(event.Delta.StopReason),
 				InputTokens:         inputTokens,
 				OutputTokens:        event.Usage.OutputTokens,
 				ThinkingSignature:   thinkingSignature,
 				CacheCreationTokens: cacheCreationTokens,
 				CacheReadTokens:     cacheReadTokens,
-			}, nil) {
-				return
-			}
+			}, nil)
+			return
 
 		case "message_stop":
 			// Final event
@@ -650,5 +676,14 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// successfully. A trailing read error after EventDone is noise.
 	if err := scanner.Err(); err != nil && !doneEmitted {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
+		return
+	}
+
+	// Clean EOF without message_delta: the server truncated the turn. Yield an
+	// explicit error — otherwise a half-accumulated tool call or missing stop
+	// reason would be indistinguishable from a complete turn. Wrapping
+	// io.ErrUnexpectedEOF lets the pool classify the failure as retryable.
+	if !doneEmitted {
+		yield(llm.StreamEvent{}, fmt.Errorf("anthropic: stream ended without completion: %w", io.ErrUnexpectedEOF))
 	}
 }

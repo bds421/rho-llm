@@ -122,6 +122,109 @@ func (c *Conversation) ToRequest(base Request) Request {
 	return req
 }
 
+// Clone returns a deep copy of the conversation, made through the versioned
+// JSON round-trip (the same machinery persistence uses), so no backing arrays,
+// maps, or tool-input values are shared with the original. As with
+// persistence, ToolInput values come back in their JSON form (a struct
+// becomes a map[string]any).
+func (c *Conversation) Clone() *Conversation {
+	if data, err := json.Marshal(c); err == nil {
+		if cp, err := LoadConversation(data); err == nil {
+			return cp
+		}
+	}
+	// Fallback for a non-JSON-serializable ToolInput (e.g. a channel), which
+	// makes Marshal fail. A structural deep copy still isolates every backing
+	// array, map, and pointer source — only a truly-opaque ToolInput value
+	// (which can't be deep-copied without reflection, and isn't persistable
+	// anyway) stays shared.
+	cp := *c
+	cp.Messages = cloneMessages(c.Messages)
+	cp.Tools = cloneTools(c.Tools)
+	return &cp
+}
+
+// cloneMessages deep-copies a message slice (used by Clone's fallback path).
+func cloneMessages(src []Message) []Message {
+	if src == nil {
+		return nil
+	}
+	out := make([]Message, len(src))
+	for i, m := range src {
+		m.Content = cloneParts(m.Content)
+		out[i] = m
+	}
+	return out
+}
+
+// cloneParts deep-copies a content-part slice, including nested tool-result
+// parts and the *ImageSource / *DocumentSource pointers.
+func cloneParts(src []ContentPart) []ContentPart {
+	if src == nil {
+		return nil
+	}
+	out := make([]ContentPart, len(src))
+	for i, p := range src {
+		if p.Source != nil {
+			s := *p.Source
+			p.Source = &s
+		}
+		if p.Document != nil {
+			d := *p.Document
+			p.Document = &d
+		}
+		if p.ToolResultParts != nil {
+			p.ToolResultParts = cloneParts(p.ToolResultParts)
+		}
+		if p.ToolInput != nil {
+			p.ToolInput = deepCopyJSONValue(p.ToolInput)
+		}
+		out[i] = p
+	}
+	return out
+}
+
+// cloneTools deep-copies a tool slice, including each InputSchema map.
+func cloneTools(src []Tool) []Tool {
+	if src == nil {
+		return nil
+	}
+	out := make([]Tool, len(src))
+	for i, t := range src {
+		if t.InputSchema != nil {
+			m := make(map[string]any, len(t.InputSchema))
+			for k, v := range t.InputSchema {
+				m[k] = deepCopyJSONValue(v)
+			}
+			t.InputSchema = m
+		}
+		out[i] = t
+	}
+	return out
+}
+
+// deepCopyJSONValue deep-copies a JSON-shaped value (maps and slices of any).
+// Scalars and opaque values (chan/func/etc.) are returned as-is — they can't be
+// copied without reflection and aren't JSON-serializable in the first place.
+func deepCopyJSONValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		m := make(map[string]any, len(x))
+		for k, val := range x {
+			m[k] = deepCopyJSONValue(val)
+		}
+		return m
+	case []any:
+		s := make([]any, len(x))
+		for i, val := range x {
+			s[i] = deepCopyJSONValue(val)
+		}
+		return s
+	default:
+		return v
+	}
+}
+
 // MarshalJSON stamps the current schema version even on a zero-value Conversation
 // constructed without NewConversation, so every persisted blob is versioned.
 func (c Conversation) MarshalJSON() ([]byte, error) {

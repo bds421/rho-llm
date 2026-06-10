@@ -63,10 +63,12 @@ finished task lives in the changelog, not the todo list.
   alongside the team's other `bds421/rho/*` projects). Releases can go to either or both.
 - ⚠️ **`bds421/rho/pdf` is a DIFFERENT project** (an AI PDF-extraction service, cloned at
   `../rho-pdf`) — never push rho-llm there or merge the two.
-- **Committer identity.** This checkout has no global git user configured (git otherwise invents a
-  machine-hostname identity — set author + committer explicitly per commit). GitLab commits use
-  `Rene Heinzl <reneheinzl@macbookpro.lan>` (the identity the `bds421/rho/*` GitLab repos use); the
-  GitHub history's canonical identity is `rene@bds421.com` (unified via `.mailmap`).
+- **Committer identity.** One identity, globally configured (`~/.gitconfig`):
+  **`renebd421 <rene@bds421.com>`** — used for all commits and tags on **both** remotes
+  (GitHub and GitLab). A plain `git commit` / `git tag -a` picks it up automatically;
+  never set per-commit `GIT_COMMITTER_*` overrides, and remove any stale per-repo
+  `user.name`/`user.email`. Historical identities (`Rene Heinzl`,
+  `reneheinzl@macbookpro.lan`) are folded into the canonical one via `.mailmap`.
 - **Before pushing to GitHub** (public, and the Go module source) ALWAYS check first: (1) **no
   leaked credentials** in tracked files / the diff — secret grep over `git ls-files`, only test
   fakes allowed, `.gitignore` covers `.env`/`.claude`; (2) **`README.md` is up to date**; and

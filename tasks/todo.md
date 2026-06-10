@@ -14,3 +14,9 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 - **Multi-key auth-pool rotation** with per-key cooldown
 - **Circuit breaker** (3-state) + configurable retry/backoff + retry hooks
 - **Per-model cost estimation** registry
+
+---
+
+## Open work
+
+_(none — the v0.4.0 architecture-review fixes shipped; see `CHANGELOG.md`.)_

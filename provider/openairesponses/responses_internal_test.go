@@ -2,6 +2,8 @@ package openairesponses
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -966,7 +968,10 @@ func TestParseStreamError(t *testing.T) {
 	}
 }
 
-// TestParseStreamDoneSignal verifies that [DONE] terminates parsing.
+// TestParseStreamDoneSignal verifies that [DONE] terminates parsing — and,
+// since the Responses protocol's only legitimate terminal event is
+// response.completed, that ending on a bare [DONE] surfaces as a truncation
+// error rather than a silent end (R-H2).
 func TestParseStreamDoneSignal(t *testing.T) {
 	sseData := "data: " + `{"type":"response.output_text.delta","delta":"hello"}` + "\n\n" +
 		"data: [DONE]\n\n" +
@@ -974,9 +979,11 @@ func TestParseStreamDoneSignal(t *testing.T) {
 
 	c := &Client{providerName: "openai_responses"}
 	var events []llm.StreamEvent
+	var gotErr error
 	c.parseStream(strings.NewReader(sseData), func(ev llm.StreamEvent, err error) bool {
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			gotErr = err
+			return true
 		}
 		events = append(events, ev)
 		return true
@@ -985,6 +992,12 @@ func TestParseStreamDoneSignal(t *testing.T) {
 	// Only the first content event should appear; [DONE] stops parsing
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1 (after [DONE])", len(events))
+	}
+	if gotErr == nil {
+		t.Fatal("stream ended without response.completed — want a truncation error, got silence")
+	}
+	if !errors.Is(gotErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("truncation error should wrap io.ErrUnexpectedEOF, got: %v", gotErr)
 	}
 }
 
@@ -1389,21 +1402,30 @@ func TestParseStreamErrorNoCode(t *testing.T) {
 	}
 }
 
-// TestParseStreamEmptyBody verifies that an empty stream body doesn't panic.
+// TestParseStreamEmptyBody verifies that an empty stream body doesn't panic —
+// and surfaces as a truncation error rather than a silent end (R-H2): no
+// response.completed ever arrived, so the turn must not look complete.
 func TestParseStreamEmptyBody(t *testing.T) {
 	c := &Client{providerName: "openai_responses"}
 	var events []llm.StreamEvent
+	var gotErr error
 	c.parseStream(strings.NewReader(""), func(ev llm.StreamEvent, err error) bool {
 		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+			gotErr = err
+			return true
 		}
 		events = append(events, ev)
 		return true
 	})
 
-	// Should produce no events and not panic
 	if len(events) != 0 {
 		t.Errorf("got %d events from empty stream", len(events))
+	}
+	if gotErr == nil {
+		t.Fatal("empty stream ended silently — want a truncation error")
+	}
+	if !errors.Is(gotErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("truncation error should wrap io.ErrUnexpectedEOF, got: %v", gotErr)
 	}
 }
 

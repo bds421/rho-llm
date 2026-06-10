@@ -236,14 +236,18 @@ type geminiResponse struct {
 			Probability string `json:"probability"`
 		} `json:"safetyRatings"`
 	} `json:"candidates"`
-	UsageMetadata struct {
-		PromptTokenCount        int `json:"promptTokenCount"`
-		CandidatesTokenCount    int `json:"candidatesTokenCount"`
-		TotalTokenCount         int `json:"totalTokenCount"`
-		ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
-		CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
-	} `json:"usageMetadata"`
-	ModelVersion string `json:"modelVersion"`
+	// Pointer so "usage absent" (nil) is distinguishable from "zero tokens" —
+	// the TokensNotReported sentinel depends on it.
+	UsageMetadata *geminiUsageMetadata `json:"usageMetadata"`
+	ModelVersion  string               `json:"modelVersion"`
+}
+
+type geminiUsageMetadata struct {
+	PromptTokenCount        int `json:"promptTokenCount"`
+	CandidatesTokenCount    int `json:"candidatesTokenCount"`
+	TotalTokenCount         int `json:"totalTokenCount"`
+	ThoughtsTokenCount      int `json:"thoughtsTokenCount,omitempty"`
+	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 }
 
 func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
@@ -449,11 +453,15 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 	}
 
 	resp := &llm.Response{
-		Model:           model,
-		InputTokens:     apiResp.UsageMetadata.PromptTokenCount,
-		OutputTokens:    apiResp.UsageMetadata.CandidatesTokenCount,
-		ThinkingTokens:  apiResp.UsageMetadata.ThoughtsTokenCount,
-		CacheReadTokens: apiResp.UsageMetadata.CachedContentTokenCount,
+		Model:        model,
+		InputTokens:  llm.TokensNotReported,
+		OutputTokens: llm.TokensNotReported,
+	}
+	if u := apiResp.UsageMetadata; u != nil {
+		resp.InputTokens = u.PromptTokenCount
+		resp.OutputTokens = u.CandidatesTokenCount
+		resp.ThinkingTokens = u.ThoughtsTokenCount
+		resp.CacheReadTokens = u.CachedContentTokenCount
 	}
 
 	if len(apiResp.Candidates) > 0 {
@@ -495,14 +503,18 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 	callIndex := 0
 	doneEmitted := false
-	for scanner.Scan() {
-		line := scanner.Text()
 
-		if !strings.HasPrefix(line, "data: ") {
+	// Usage may arrive on any chunk (often only the final one carries it).
+	// Track the latest seen, initialized to "not reported" so a stream that
+	// never reports usage is distinguishable from a zero-token one.
+	inputTokens, outputTokens := llm.TokensNotReported, llm.TokensNotReported
+	var thinkingTokens, cacheReadTokens int
+
+	for scanner.Scan() {
+		data, ok := llm.SSEData(scanner.Text())
+		if !ok {
 			continue
 		}
-
-		data := strings.TrimPrefix(line, "data: ")
 
 		var event geminiResponse
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -510,6 +522,13 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				return
 			}
 			continue
+		}
+
+		if u := event.UsageMetadata; u != nil {
+			inputTokens = u.PromptTokenCount
+			outputTokens = u.CandidatesTokenCount
+			thinkingTokens = u.ThoughtsTokenCount
+			cacheReadTokens = u.CachedContentTokenCount
 		}
 
 		if len(event.Candidates) > 0 {
@@ -553,17 +572,19 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 
 			if candidate.FinishReason != "" {
+				// The terminal event: emit Done and stop. Returning here means
+				// trailing bytes after the turn is complete (including malformed
+				// lines) can't surface as a spurious error masking the turn.
 				doneEmitted = true
-				if !yield(llm.StreamEvent{
+				yield(llm.StreamEvent{
 					Type:            llm.EventDone,
 					StopReason:      normalizeStopReason(candidate.FinishReason),
-					InputTokens:     event.UsageMetadata.PromptTokenCount,
-					OutputTokens:    event.UsageMetadata.CandidatesTokenCount,
-					ThinkingTokens:  event.UsageMetadata.ThoughtsTokenCount,
-					CacheReadTokens: event.UsageMetadata.CachedContentTokenCount,
-				}, nil) {
-					return
-				}
+					InputTokens:     inputTokens,
+					OutputTokens:    outputTokens,
+					ThinkingTokens:  thinkingTokens,
+					CacheReadTokens: cacheReadTokens,
+				}, nil)
+				return
 			}
 		}
 	}
@@ -572,6 +593,14 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// successfully. A trailing read error after EventDone is noise.
 	if err := scanner.Err(); err != nil && !doneEmitted {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
+		return
+	}
+
+	// Clean EOF without a finishReason: the server truncated the turn. Yield
+	// an explicit error instead of ending silently (see the anthropic adapter
+	// for the rationale; io.ErrUnexpectedEOF makes it pool-retryable).
+	if !doneEmitted {
+		yield(llm.StreamEvent{}, fmt.Errorf("gemini: stream ended without completion: %w", io.ErrUnexpectedEOF))
 	}
 }
 

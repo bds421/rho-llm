@@ -418,6 +418,13 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 		}
 
 		lastErr = err
+
+		// The caller's context is done — this is not a provider failure. Don't
+		// poison key health or the breaker, and don't retry with a dead context.
+		if ctx.Err() != nil {
+			return nil, err
+		}
+
 		pc.emitRetryEvent(RetryEvent{Type: RetryAttemptFailed, Attempt: i, Err: err})
 
 		// Auth errors and retryable errors trigger rotation to try another key.
@@ -519,9 +526,16 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 						retryable = true
 						break
 					}
-					// Mid-stream error or non-retryable — pass through
-					if IsRetryable(err) || IsAuthError(err) {
+					// Mid-stream error or non-retryable — pass through (no retry:
+					// it would duplicate already-yielded content). A genuine
+					// provider failure still counts against key health and the
+					// breaker, exactly like a pre-data failure; a caller-cancelled
+					// context counts against neither.
+					if ctx.Err() == nil && (IsRetryable(err) || IsAuthError(err)) {
 						pc.markFailed(usedName, err)
+						if !IsAuthError(err) {
+							pc.breaker.RecordFailure()
+						}
 					}
 					rc.Release()
 					yield(StreamEvent{}, err)
@@ -542,6 +556,12 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				// Stream completed normally
 				pc.pool.MarkSuccessByName(usedName)
 				pc.breaker.RecordSuccess()
+				return
+			}
+
+			// The caller's context is done — not a provider failure (see Complete).
+			if ctx.Err() != nil {
+				yield(StreamEvent{}, lastErr)
 				return
 			}
 

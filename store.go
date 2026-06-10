@@ -93,6 +93,8 @@ func (s *FileStore) path(id string) (string, error) {
 }
 
 // Save writes conv to `<dir>/<id>.json` (0600), creating dir if needed.
+// The write is atomic (temp file + rename): a crash mid-write or a concurrent
+// reader can never observe a partially written conversation.
 func (s *FileStore) Save(_ context.Context, id string, conv *Conversation) error {
 	if conv == nil {
 		return fmt.Errorf("llm: cannot save nil conversation")
@@ -108,7 +110,26 @@ func (s *FileStore) Save(_ context.Context, id string, conv *Conversation) error
 	if err := os.MkdirAll(s.dir, 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o600)
+	tmp, err := os.CreateTemp(s.dir, id+".*.tmp") // 0600 by default
+	if err != nil {
+		return err
+	}
+	// On any failure below, the primary error is what matters; the temp-file
+	// cleanup is best-effort (errors deliberately ignored).
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), p); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 // Load reads `<dir>/<id>.json`, returning ErrConversationNotFound if absent.
