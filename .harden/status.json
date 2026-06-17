@@ -1,11 +1,10 @@
 {
-  "targeted_area": "gemini URL construction (model-name escaping)",
+  "targeted_area": "fixed-path adapter URL injection-safety (verification)",
   "new_serious_bugs": 0,
   "tests_added": 1,
   "untested_surface_remaining": true,
   "remaining_areas": [
-    "confirm the other adapters' URL paths are injection-free (fixed paths; likely safe)",
-    "ResolveAuthHeader / '|' base-url split edges",
+    "ResolveAuthHeader / '|' base-url split edge keys",
     "cache_control passthrough"
   ],
   "changed": true

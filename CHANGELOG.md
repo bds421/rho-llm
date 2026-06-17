@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-06-17
+
+Hardening pass 11 — verified the Anthropic / OpenAI-compatible / Responses adapters use fixed
+URL paths and cannot be URL-injected via a hostile model name (no defect; regression coverage).
+
 ## [0.4.11] - 2026-06-17
 
 Hardening pass 10 — defense-in-depth.

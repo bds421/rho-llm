@@ -61,6 +61,10 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   untested path showed pass 9's "surface exhausted" was premature, so reverted
   untested_surface_remaining to true. Test: `TestGeminiEscapesModelInURL`.
 
+- **Pass 11 (v0.4.12):** fixed-path adapter URLs. No defect — anthropic/openai_compat/
+  openai_responses use fixed paths; a hostile model can't inject. URL surface now fully
+  covered. Test: `TestFixedPathAdaptersIgnoreHostileModelInURL`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).
