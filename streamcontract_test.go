@@ -353,6 +353,30 @@ func TestOpenAIResponsesStreamToolCallStopReason(t *testing.T) {
 	}
 }
 
+// A mid-stream empty SSE data line ("data: " with no value — keep-alive/padding
+// some servers emit) must be skipped, not turned into a spurious malformed-event
+// error that aborts an otherwise-complete turn.
+func TestStreamEmptyDataLineIgnored(t *testing.T) {
+	srv := sseServer(
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":1}}}`,
+		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`,
+		"data: ", // empty data value mid-stream
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+	)
+	defer srv.Close()
+	client, err := anthropic.New(llm.Config{Provider: "anthropic", Model: "claude-sonnet-4-6", APIKey: "test-key", BaseURL: srv.URL, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	events, errs := collectStream(t, client)
+	if len(errs) != 0 {
+		t.Fatalf("empty SSE data line produced a spurious error: %v", errs)
+	}
+	if !hasDone(events) {
+		t.Fatal("no EventDone — empty data line aborted the turn")
+	}
+}
+
 // A complete Anthropic turn whose FINAL tool_use block is missing its
 // content_block_stop (spec violation) must still deliver the tool call with its
 // accumulated input — the terminal message_delta must flush it before Done, not

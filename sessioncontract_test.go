@@ -18,6 +18,20 @@ import (
 	llm "github.com/bds421/rho-llm"
 )
 
+// BUG 5: "." is a reserved path component; FileStore must reject it as an id
+// rather than silently writing a meaningless "..json" file. (".." is already
+// rejected; "." slipped through the validation.)
+func TestFileStoreRejectsDotID(t *testing.T) {
+	s := llm.NewFileStore(t.TempDir())
+	ctx := context.Background()
+	if err := s.Save(ctx, ".", llm.NewConversation("")); err == nil {
+		t.Error(`FileStore.Save(".") must reject the reserved "." id`)
+	}
+	if _, err := s.Load(ctx, "."); err == nil {
+		t.Error(`FileStore.Load(".") must reject the reserved "." id`)
+	}
+}
+
 // R-M1: the snapshot returned by Session.Conversation() must not share any
 // mutable state with the live transcript — mutating nested content of the
 // snapshot must never corrupt the session.

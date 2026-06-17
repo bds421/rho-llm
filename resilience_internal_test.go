@@ -69,6 +69,133 @@ func (c *scriptedStreamClient) Provider() string { return "test" }
 func (c *scriptedStreamClient) Model() string    { return "test-model" }
 func (c *scriptedStreamClient) Close() error     { return nil }
 
+// PIN (Round2/3): the v0.4.1 token-scoped breaker must be race-free under heavy
+// contention across every method, and never end in a torn/invalid state. The
+// -race detector is the real assertion here; the state check guards against a
+// corrupted transition.
+func TestCircuitBreakerConcurrentProbeLifecycleRaceFree(t *testing.T) {
+	cb := NewCircuitBreaker(2, time.Millisecond)
+	var wg sync.WaitGroup
+	for g := 0; g < 24; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 400; i++ {
+				switch (g + i) % 6 {
+				case 0:
+					if admitted, tok := cb.allow(); admitted {
+						if i%2 == 0 {
+							cb.recordSuccess(tok)
+						} else {
+							cb.recordFailure(tok)
+						}
+					}
+				case 1:
+					if admitted, tok := cb.allow(); admitted {
+						cb.ReleaseProbe(tok)
+					}
+				case 2:
+					cb.RecordFailure() // public wildcard
+				case 3:
+					cb.RecordSuccess()
+				case 4:
+					_ = cb.State()
+					_ = cb.Allow()
+				case 5:
+					if i%50 == 0 {
+						cb.Reset()
+					}
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	switch cb.State() {
+	case CircuitClosed, CircuitOpen, CircuitHalfOpen:
+	default:
+		t.Fatalf("breaker ended in an invalid state: %v", cb.State())
+	}
+}
+
+// closeSpyClient counts how many times its Close is invoked, and blocks each
+// Complete on a gate so a test can hold N requests in-flight (refs held) while
+// Close races them.
+type closeSpyClient struct {
+	closes atomic.Int32
+	ready  *sync.WaitGroup
+	gate   chan struct{}
+}
+
+func (c *closeSpyClient) Complete(_ context.Context, _ Request) (*Response, error) {
+	c.ready.Done()
+	<-c.gate
+	return &Response{Content: "ok"}, nil
+}
+
+func (c *closeSpyClient) Stream(_ context.Context, _ Request) iter.Seq2[StreamEvent, error] {
+	return func(yield func(StreamEvent, error) bool) {
+		c.ready.Done()
+		<-c.gate
+		yield(StreamEvent{Type: EventDone, StopReason: "end_turn"}, nil)
+	}
+}
+
+func (c *closeSpyClient) Provider() string { return "test" }
+func (c *closeSpyClient) Model() string    { return "test-model" }
+func (c *closeSpyClient) Close() error     { c.closes.Add(1); return nil }
+
+// PIN (Round2): refcount exactness. With N requests in-flight (each holding a
+// ref) when Close races them — including concurrent double-Close — the
+// underlying client's Close must fire EXACTLY once, never zero (leak) and never
+// twice (double-close). Negative assertion under -race.
+func TestPoolCloseFiresUnderlyingCloseExactlyOnce(t *testing.T) {
+	const n = 8
+	var ready sync.WaitGroup
+	ready.Add(n)
+	spy := &closeSpyClient{ready: &ready, gate: make(chan struct{})}
+
+	pc, err := NewPooledClient(DefaultConfig(), []string{"k"}, func(AuthProfile) (Client, error) {
+		return spy, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+
+	var inflight sync.WaitGroup
+	for i := 0; i < n; i++ {
+		inflight.Add(1)
+		go func() { defer inflight.Done(); _, _ = pc.Complete(context.Background(), Request{}) }()
+	}
+	ready.Wait() // all n requests are in-flight, each holding a ref
+
+	var closers sync.WaitGroup
+	for i := 0; i < 3; i++ { // concurrent double(triple)-Close
+		closers.Add(1)
+		go func() { defer closers.Done(); _ = pc.Close() }()
+	}
+	closers.Wait()
+	close(spy.gate) // release the in-flight requests; the last ref drop triggers Close
+	inflight.Wait()
+
+	if got := spy.closes.Load(); got != 1 {
+		t.Fatalf("underlying client Close fired %d times, want exactly 1 (0=leak, >1=double-close)", got)
+	}
+}
+
+// PIN (Round3): RetryPolicy.Delay must never return a non-positive duration even
+// under maximal jitter — a zero/negative backoff would busy-spin retries. Pins
+// the post-jitter floor clamp.
+func TestRetryPolicyDelayNeverNonPositive(t *testing.T) {
+	rp := RetryPolicy{BaseDelay: 100 * time.Millisecond, MaxDelay: 100 * time.Millisecond, Factor: 2, Jitter: 0.99}
+	for attempt := 0; attempt < 5; attempt++ {
+		for i := 0; i < 1000; i++ {
+			if d := rp.Delay(attempt); d <= 0 {
+				t.Fatalf("Delay(%d) = %v, must stay > 0 (jitter underflow must be clamped)", attempt, d)
+			}
+		}
+	}
+}
+
 // alwaysOverloadedClient always returns a retryable 503, ignoring its context —
 // it forces the pool to rotate (Complete) or treat the failure as retryable.
 type alwaysOverloadedClient struct{}
@@ -567,6 +694,31 @@ func TestCircuitBreakerReleaseProbeIgnoresForeignToken(t *testing.T) {
 	cb.ReleaseProbe(probeTok)
 	if cb.Allow() {
 		t.Fatal("a superseded token re-armed the current probe — would admit a 2nd concurrent probe")
+	}
+}
+
+// BUG 6: a real probe token must never equal the reserved sentinels — 0
+// ("admitted while closed / no probe") or anyProbe (the wildcard that bypasses
+// the identity check). If probeGen wrapped onto anyProbe, that probe's recorder
+// would be treated as the wildcard and could flip an unrelated circuit; a wrap
+// onto 0 would make its outcome silently ignored. Force the edge and assert the
+// token stays a distinct identity.
+func TestCircuitBreakerProbeTokenNeverHitsReservedValues(t *testing.T) {
+	cb := NewCircuitBreaker(1, 50*time.Millisecond)
+	cb.RecordFailure() // open
+	time.Sleep(60 * time.Millisecond)
+
+	// Drive probeGen to the edge so the next admission would wrap onto anyProbe.
+	cb.mu.Lock()
+	cb.probeGen = anyProbe - 1
+	cb.mu.Unlock()
+
+	_, tok := cb.allow() // half-open admission bumps the generation
+	if tok == anyProbe {
+		t.Fatalf("probe token wrapped onto the anyProbe wildcard (%d) — would bypass the identity check", tok)
+	}
+	if tok == 0 {
+		t.Fatal("probe token wrapped onto 0 — its outcome would be silently ignored")
 	}
 }
 

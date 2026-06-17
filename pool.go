@@ -148,11 +148,13 @@ func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimi
 		return
 	}
 
-	// Auth errors permanently disable the key — it's revoked, not temporarily overloaded
+	// Auth errors permanently disable the key — it's revoked, not temporarily overloaded.
+	// Scrub the key from the (logged + stored) error: a 401 body may echo it.
 	if IsAuthError(err) {
+		redacted := redactSecret(err.Error(), profile.APIKey)
 		profile.IsHealthy = false
-		profile.LastError = err.Error()
-		slog.Warn("profile permanently disabled (auth error)", "profile", profile.Name, "error", err)
+		profile.LastError = redacted
+		slog.Warn("profile permanently disabled (auth error)", "profile", profile.Name, "error", redacted)
 		return
 	}
 
@@ -166,7 +168,7 @@ func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimi
 		slog.Warn("profile overloaded", "profile", profile.Name, "cooldown", cooldown)
 	} else {
 		cooldown = defaultCD
-		slog.Warn("profile failed", "profile", profile.Name, "error", err, "cooldown", cooldown)
+		slog.Warn("profile failed", "profile", profile.Name, "error", redactSecret(err.Error(), profile.APIKey), "cooldown", cooldown)
 	}
 
 	profile.MarkFailed(err, cooldown)
@@ -315,6 +317,21 @@ func (pc *PooledClient) cooldownForError() (rateLimitCD, overloadCD, defaultCD t
 func (pc *PooledClient) markFailed(name string, err error) {
 	rl, ol, df := pc.cooldownForError()
 	pc.pool.MarkFailedByNameWithCooldown(name, err, rl, ol, df)
+}
+
+// redactErr renders err with every pool key scrubbed, for safe logging — a
+// provider error body may echo the request key (pools are small; this is cheap).
+func (pc *PooledClient) redactErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	pc.pool.mu.RLock()
+	for _, prof := range pc.pool.profiles {
+		s = redactSecret(s, prof.APIKey)
+	}
+	pc.pool.mu.RUnlock()
+	return s
 }
 
 // emitRetryEvent fires the retry hook if configured.
@@ -467,7 +484,7 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 			// Rotation failed (all keys in cooldown or single-key pool).
 			// Auth errors are permanent — no point retrying with the same dead key.
 			if IsAuthError(err) {
-				slog.Warn("auth error with no healthy keys, giving up", "error", err)
+				slog.Warn("auth error with no healthy keys, giving up", "error", pc.redactErr(err))
 				return nil, err
 			}
 
@@ -618,7 +635,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				// Rotation failed (all keys in cooldown or single-key pool).
 				// Auth errors are permanent — no point retrying with the same dead key.
 				if IsAuthError(lastErr) {
-					slog.Warn("stream: auth error with no healthy keys, giving up", "error", lastErr)
+					slog.Warn("stream: auth error with no healthy keys, giving up", "error", pc.redactErr(lastErr))
 					yield(StreamEvent{}, lastErr)
 					return
 				}

@@ -10,8 +10,21 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"strings"
 	"time"
 )
+
+// redactSecret removes the literal API key from a free-text message (e.g. a
+// provider error body that echoed the request key) so it can't leak into logs
+// or serialized state. The library knows its own key, so this is an exact,
+// reliable scrub — not heuristic pattern-matching. A short key is left alone to
+// avoid mangling unrelated text (real keys are long); an empty key is a no-op.
+func redactSecret(msg, key string) string {
+	if len(key) < 8 || msg == "" {
+		return msg
+	}
+	return strings.ReplaceAll(msg, key, "REDACTED")
+}
 
 // =============================================================================
 // NAMED STRING TYPES
@@ -583,10 +596,12 @@ func (p *AuthProfile) MarkUsed() {
 	p.LastUsed = time.Now()
 }
 
-// MarkFailed marks the profile as failed with cooldown.
+// MarkFailed marks the profile as failed with cooldown. The error text is
+// scrubbed of this profile's own API key first, so a server response that echoed
+// the key can't lodge it in LastError (which is logged and serialized).
 func (p *AuthProfile) MarkFailed(err error, cooldownDuration time.Duration) {
 	if err != nil {
-		p.LastError = err.Error()
+		p.LastError = redactSecret(err.Error(), p.APIKey)
 	}
 	p.Cooldown = time.Now().Add(cooldownDuration)
 }
@@ -599,11 +614,14 @@ func (p *AuthProfile) MarkHealthy() {
 }
 
 // MarshalJSON implements json.Marshaler. Redacts APIKey to prevent accidental
-// secret leakage when AuthProfile is serialized for logging or debugging.
+// secret leakage when AuthProfile is serialized for logging or debugging — and
+// scrubs the same key out of LastError (a free-text field that may have captured
+// a server response echoing the key) before redacting APIKey itself.
 func (p AuthProfile) MarshalJSON() ([]byte, error) {
 	type profileAlias AuthProfile // break recursion
 	tmp := profileAlias(p)
 	if tmp.APIKey != "" {
+		tmp.LastError = redactSecret(tmp.LastError, tmp.APIKey)
 		tmp.APIKey = "REDACTED"
 	}
 	return json.Marshal(tmp)

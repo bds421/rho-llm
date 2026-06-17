@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A break-the-system campaign (three escalating rounds) over the v0.4.x surface found and
+fixed the issues below; each ships a regression test that fails without the fix.
+
+### Security
+
+- **API keys no longer leak into logs or serialized state** — a provider error body that
+  echoes the request key (e.g. a 401 "invalid key sk-… rejected") was stored raw in
+  `AuthProfile.LastError` and logged by the pool, and `AuthProfile.MarshalJSON` redacted
+  `APIKey` but not `LastError`. The library now scrubs its own key — which it knows, so the
+  redaction is exact rather than heuristic — from error text before storing, logging, or
+  marshaling it. (The error returned to the caller is left intact: the caller already holds
+  the key, and scrubbing would lose debugging detail.)
+
+### Fixed
+
+- **An empty SSE `data:` line no longer aborts a stream** — `SSEData` returned an empty
+  payload as a parseable event, so a keep-alive/padding `data: ` line mid-stream surfaced as
+  a spurious malformed-event error that dropped an otherwise-complete turn. Empty data values
+  are now skipped, matching `SSEData`'s own documented contract.
+- **Circuit-breaker probe token can never collide with a reserved value** — the probe
+  generation now skips `0` ("no probe") and the `anyProbe` wildcard when it advances, so a
+  real probe token stays a distinct identity even across a (practically impossible) 2^64 wrap
+  that would otherwise let a wrapped probe's recorder act as the wildcard.
+- **`RegisterModel` rejects a whitespace-only `ID` or `Provider`** — previously only the empty
+  string was rejected, so a blank-after-trim value registered under a meaningless key.
+- **`FileStore` rejects `.` as a conversation id** — the reserved current-directory segment
+  slipped through id validation (`..` was already rejected) and wrote a `..json` file.
+
 ## [0.4.1] - 2026-06-17
 
 Patch release. A review pass over the v0.4.0 hardening — and an adversarial self-review of

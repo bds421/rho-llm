@@ -98,6 +98,19 @@ func (cb *CircuitBreaker) Allow() bool {
 	return admitted
 }
 
+// bumpProbeGen advances the probe generation and returns the new token,
+// skipping the two reserved values so a real probe token is always a distinct
+// identity — never 0 ("admitted while closed / no probe") and never anyProbe
+// (the wildcard that bypasses the identity check). This holds even across the
+// (practically impossible) 2^64 wrap. Must be called with cb.mu held.
+func (cb *CircuitBreaker) bumpProbeGen() uint64 {
+	cb.probeGen++
+	if cb.probeGen == 0 || cb.probeGen == anyProbe {
+		cb.probeGen = 1
+	}
+	return cb.probeGen
+}
+
 // allow is Allow with probe identity. When it admits a half-open probe it
 // returns a non-zero probeToken uniquely identifying that probe, so the caller
 // can later ReleaseProbe(token) for *its own* probe rather than an unrelated one
@@ -118,8 +131,7 @@ func (cb *CircuitBreaker) allow() (admitted bool, probeToken uint64) {
 		if time.Since(cb.openedAt) >= cb.cooldown {
 			from, to, changed := cb.setStateLocked(CircuitHalfOpen)
 			cb.probeStarted = time.Now()
-			cb.probeGen++
-			tok := cb.probeGen
+			tok := cb.bumpProbeGen()
 			cb.mu.Unlock()
 			if changed {
 				cb.fireCallback(from, to)
@@ -135,8 +147,7 @@ func (cb *CircuitBreaker) allow() (admitted bool, probeToken uint64) {
 		// than wedging half-open forever.
 		if time.Since(cb.probeStarted) >= cb.cooldown {
 			cb.probeStarted = time.Now()
-			cb.probeGen++
-			tok := cb.probeGen
+			tok := cb.bumpProbeGen()
 			cb.mu.Unlock()
 			return true, tok
 		}

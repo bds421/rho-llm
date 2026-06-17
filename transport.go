@@ -49,5 +49,13 @@ func SSEData(line string) (data string, ok bool) {
 	if !strings.HasPrefix(line, "data: ") {
 		return "", false
 	}
-	return strings.TrimPrefix(line, "data: "), true
+	data = strings.TrimPrefix(line, "data: ")
+	if data == "" {
+		// "data: " with an empty value carries no event (keep-alive/padding some
+		// servers emit). Report not-ok so callers skip it instead of trying — and
+		// failing — to JSON-parse an empty string, which would surface as a
+		// spurious mid-stream error that aborts an otherwise-complete turn.
+		return "", false
+	}
+	return data, true
 }

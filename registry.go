@@ -3,6 +3,7 @@ package llm
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -425,11 +426,11 @@ var modelAliases = map[string]string{
 // can be corrected in place. info.ID and info.Provider are required.
 // Safe for concurrent use.
 func RegisterModel(info ModelInfo) error {
-	if info.ID == "" {
-		return fmt.Errorf("llm: RegisterModel: ID is required")
+	if strings.TrimSpace(info.ID) == "" {
+		return fmt.Errorf("llm: RegisterModel: ID is required (non-blank)")
 	}
-	if info.Provider == "" {
-		return fmt.Errorf("llm: RegisterModel: Provider is required")
+	if strings.TrimSpace(info.Provider) == "" {
+		return fmt.Errorf("llm: RegisterModel: Provider is required (non-blank)")
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()

@@ -75,6 +75,22 @@ func TestRegisterModelEnablesCostEstimate(t *testing.T) {
 	}
 }
 
+// BUG 3/4: a whitespace-only ID or Provider passed the bare != "" check and got
+// stored under a meaningless key. Registration must reject blank-after-trim.
+func TestRegisterModelRejectsBlankIDOrProvider(t *testing.T) {
+	for _, ws := range []string{" ", "\t", "\n", "  \t  "} {
+		if err := llm.RegisterModel(llm.ModelInfo{ID: ws, Provider: "p"}); err == nil {
+			t.Errorf("RegisterModel with whitespace-only ID %q must error", ws)
+		}
+		if _, ok := llm.GetModelInfo(ws); ok {
+			t.Errorf("whitespace-only ID %q must not be registered", ws)
+		}
+		if err := llm.RegisterModel(llm.ModelInfo{ID: "ok-id-x", Provider: ws}); err == nil {
+			t.Errorf("RegisterModel with whitespace-only Provider %q must error", ws)
+		}
+	}
+}
+
 // R-M5: registering with missing required fields must error, not corrupt the
 // registry.
 func TestRegisterModelRejectsInvalid(t *testing.T) {

@@ -86,7 +86,7 @@ func NewFileStore(dir string) *FileStore {
 
 // path validates id and returns its on-disk path, rejecting traversal attempts.
 func (s *FileStore) path(id string) (string, error) {
-	if id == "" || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") || strings.ContainsRune(id, 0) {
+	if id == "" || id == "." || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") || strings.ContainsRune(id, 0) {
 		return "", fmt.Errorf("llm: invalid conversation id %q (must be a single path segment)", id)
 	}
 	return filepath.Join(s.dir, id+".json"), nil
