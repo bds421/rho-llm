@@ -42,6 +42,11 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   (Anthropic rejects it); now dropped (Gemini already skipped empties). Test:
   `TestAnthropicBuildRequestDropsEmptyContentMessage`.
 
+- **Pass 7 (v0.4.8):** OpenAI-family `buildRequest` empty-message. No defect — both adapters
+  already avoid a null-content message; confirming test added
+  (`TestOpenAIFamilyBuildRequestDropsEmptyContentMessage`). buildRequest empty-message area now
+  fully covered across all 4 adapters.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

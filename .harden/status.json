@@ -1,10 +1,9 @@
 {
-  "targeted_area": "adapter buildRequest message integrity (empty-content message)",
+  "targeted_area": "OpenAI-family buildRequest empty-message integrity (verification)",
   "new_serious_bugs": 0,
   "tests_added": 1,
   "untested_surface_remaining": true,
   "remaining_areas": [
-    "openai_compat / openai_responses adapters' empty-message handling (anthropic fixed, gemini already safe)",
     "structured-output / JSON-schema request handling",
     "ValidateImageSource has no direct test (document validator does)",
     "discovery.go, factory.go protocol resolution edges"

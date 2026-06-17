@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-06-17
+
+Hardening pass 7 — verified the OpenAI-compatible and Responses adapters do not emit an
+empty-content message (no defect found; regression coverage added).
+
 ## [0.4.7] - 2026-06-17
 
 Hardening pass 6 — adapter `buildRequest` message integrity.
