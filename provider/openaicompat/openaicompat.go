@@ -446,6 +446,12 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		case llm.ResponseFormatJSONObject:
 			apiReq.ResponseFormat = map[string]any{"type": "json_object"}
 		case llm.ResponseFormatJSONSchema:
+			if len(rf.Schema) == 0 {
+				// json_schema with no schema serializes to "schema": null, which the
+				// provider rejects. Degrade to plain JSON mode instead.
+				apiReq.ResponseFormat = map[string]any{"type": "json_object"}
+				break
+			}
 			name := rf.Name
 			if name == "" {
 				name = "response"

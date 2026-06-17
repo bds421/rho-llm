@@ -47,6 +47,10 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   (`TestOpenAIFamilyBuildRequestDropsEmptyContentMessage`). buildRequest empty-message area now
   fully covered across all 4 adapters.
 
+- **Pass 8 (v0.4.9):** structured output. No serious bug. Fixed a non-serious edge — a
+  `json_schema` format with no schema emitted `"schema":null`; now degrades to json_object.
+  Test: `TestOpenAICompatJSONSchemaWithoutSchemaDegrades`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

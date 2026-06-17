@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-06-17
+
+Hardening pass 8 — structured output.
+
+### Fixed
+
+- **A `json_schema` response format with no schema degrades to plain JSON mode** — it
+  previously serialized to `"schema": null`, which the provider rejects. (No serious bug found
+  in structured-output handling.)
+
 ## [0.4.8] - 2026-06-17
 
 Hardening pass 7 — verified the OpenAI-compatible and Responses adapters do not emit an

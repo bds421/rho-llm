@@ -1,10 +1,10 @@
 {
-  "targeted_area": "OpenAI-family buildRequest empty-message integrity (verification)",
+  "targeted_area": "structured output (response_format json_schema/json_object)",
   "new_serious_bugs": 0,
   "tests_added": 1,
   "untested_surface_remaining": true,
   "remaining_areas": [
-    "structured-output / JSON-schema request handling",
+    "ClampThinkingBudget math + simple.go wrappers (untested utilities)",
     "ValidateImageSource has no direct test (document validator does)",
     "discovery.go, factory.go protocol resolution edges"
   ],
