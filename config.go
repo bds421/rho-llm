@@ -94,7 +94,10 @@ func CheckBaseURL(cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("invalid base URL %q: %w", cfg.BaseURL, err)
 	}
-	host := u.Hostname()
+	// Normalize the host: a trailing dot ("localhost.", "127.0.0.1.") makes an
+	// absolute FQDN that resolvers still map to loopback, yet it evades both the
+	// literal "localhost" comparison and net.ParseIP — a guard bypass.
+	host := strings.TrimSuffix(u.Hostname(), ".")
 	if strings.EqualFold(host, "localhost") {
 		return fmt.Errorf("base URL host %q is not allowed (BlockPrivateBaseURL)", host)
 	}

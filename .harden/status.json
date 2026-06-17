@@ -1,11 +1,11 @@
 {
-  "targeted_area": "middleware.go LoggingClient nil-response safety",
+  "targeted_area": "SSRF guard CheckBaseURL (BlockPrivateBaseURL) host normalization",
   "new_serious_bugs": 1,
   "tests_added": 1,
   "untested_surface_remaining": true,
   "remaining_areas": [
-    "buildRequest with an empty model across the 4 adapters (sends model:\"\")",
-    "openai_compat sending a ContentDocument it cannot support (no clear rejection)",
+    "adapter buildRequest with adversarial content (huge/unicode/control-char text, nested tool input)",
+    "registry concurrency under extreme contention beyond the existing race test",
     "ValidateImageSource has no direct test (document validator does)",
     "discovery.go, factory.go protocol resolution edges"
   ],

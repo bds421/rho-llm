@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-06-17
+
+Hardening pass 5 — SSRF guard (`CheckBaseURL`).
+
+### Security
+
+- **The `BlockPrivateBaseURL` SSRF guard now normalizes a trailing-dot host** — `localhost.`
+  / `127.0.0.1.` is an absolute FQDN that resolvers still map to loopback, but it evaded both
+  the literal `localhost` comparison and `net.ParseIP`, slipping past the guard. The host is
+  now stripped of a trailing dot before the loopback/private-IP checks.
+
 ## [0.4.5] - 2026-06-17
 
 Hardening pass 4 — `LoggingClient` (`middleware.go`).

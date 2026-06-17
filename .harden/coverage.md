@@ -33,6 +33,10 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   dereferenced a `(nil,nil)` inner response while logging metadata. Test:
   `TestLoggingClientDoesNotPanicOnNilResponse`.
 
+- **Pass 5 (v0.4.6):** SSRF guard (`config.go CheckBaseURL`). Found & fixed a security bypass —
+  a trailing-dot host (`localhost.`, `127.0.0.1.`) evaded the loopback/private checks yet
+  resolves to loopback. Test: `TestCheckBaseURLBlocksTrailingDotBypass`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).
