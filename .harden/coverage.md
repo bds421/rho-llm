@@ -70,6 +70,10 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   surfaces and found nothing). `untested_surface_remaining=false`. Test:
   `TestAuthPoolKeyBaseURLSplit`.
 
+- **Pass 13 (v0.4.14):** Conversation serialization round-trip with hostile content (unicode,
+  NUL, control chars, all content kinds). No defect — round-trip is idempotent. Test:
+  `TestConversationRoundTripHostileContent`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

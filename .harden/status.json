@@ -1,5 +1,5 @@
 {
-  "targeted_area": "AuthPool key|baseurl split + auth/base resolution",
+  "targeted_area": "Conversation serialization round-trip (adversarial content)",
   "new_serious_bugs": 0,
   "tests_added": 1,
   "untested_surface_remaining": false,
