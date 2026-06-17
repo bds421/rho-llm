@@ -298,16 +298,19 @@ func (pc *PooledClient) retryPolicy() RetryPolicy {
 // cooldownForError returns rate-limit, overload, or default cooldown
 // based on the error type, using config values with defaults.
 func (pc *PooledClient) cooldownForError() (rateLimitCD, overloadCD, defaultCD time.Duration) {
+	// <= 0 (unset OR a nonsensical negative — e.g. a computed duration that went
+	// negative) falls back to the default; a negative cooldown would otherwise put
+	// a failed key in the past, silently disabling the cooldown entirely.
 	rateLimitCD = pc.cfg.CooldownRateLimit
-	if rateLimitCD == 0 {
+	if rateLimitCD <= 0 {
 		rateLimitCD = DefaultCooldownRateLimit
 	}
 	overloadCD = pc.cfg.CooldownOverload
-	if overloadCD == 0 {
+	if overloadCD <= 0 {
 		overloadCD = DefaultCooldownOverload
 	}
 	defaultCD = pc.cfg.CooldownDefault
-	if defaultCD == 0 {
+	if defaultCD <= 0 {
 		defaultCD = DefaultCooldownDefault
 	}
 	return
@@ -381,7 +384,7 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 	// dead configuration that never runs on this path.
 	if cfg.CircuitThreshold > 0 {
 		cooldown := cfg.CircuitCooldown
-		if cooldown == 0 {
+		if cooldown <= 0 { // negative would make an open circuit instantly probe-able (never blocks)
 			cooldown = DefaultCircuitCooldown
 		}
 		pc.breaker = NewCircuitBreaker(cfg.CircuitThreshold, cooldown)

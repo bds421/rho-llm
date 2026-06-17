@@ -624,5 +624,6 @@ func (p AuthProfile) MarshalJSON() ([]byte, error) {
 		tmp.LastError = redactSecret(tmp.LastError, tmp.APIKey)
 		tmp.APIKey = "REDACTED"
 	}
+	tmp.BaseURL = redactURLCredentials(tmp.BaseURL)
 	return json.Marshal(tmp)
 }

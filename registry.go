@@ -548,7 +548,13 @@ type CostInput struct {
 // register unlisted models via RegisterModel to get real estimates.
 func EstimateCost(input CostInput) float64 {
 	registryMu.RLock()
-	info, ok := modelRegistry[input.Model]
+	// Resolve an alias to its target under the same read lock (ResolveModelAlias
+	// takes the lock too, and RWMutex is not re-entrant — so inline it).
+	model := input.Model
+	if full, isAlias := modelAliases[model]; isAlias {
+		model = full
+	}
+	info, ok := modelRegistry[model]
 	registryMu.RUnlock()
 	if !ok {
 		return 0

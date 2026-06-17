@@ -36,6 +36,39 @@ func TestAuthProfileNeverSerializesAPIKeyEvenViaLastError(t *testing.T) {
 	}
 }
 
+// BUG 16/17: Config.MarshalJSON redacts APIKey but a credential embedded in
+// BaseURL (userinfo or a `key=`/`token=` query param) leaked through.
+func TestConfigMarshalRedactsBaseURLCredentials(t *testing.T) {
+	const pw = "badpass-secret-9876"
+	const q = "urlsecret-abc123"
+	cfg := Config{Provider: "anthropic", APIKey: "sk-x", BaseURL: "https://user:" + pw + "@proxy.internal:8080/v1?key=" + q}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+	if strings.Contains(s, pw) {
+		t.Fatalf("Config JSON leaked a password embedded in BaseURL: %s", s)
+	}
+	if strings.Contains(s, q) {
+		t.Fatalf("Config JSON leaked a credential query param in BaseURL: %s", s)
+	}
+}
+
+// BUG 18/19: AuthProfile.MarshalJSON must likewise scrub a credential embedded
+// in BaseURL (e.g. from the "apikey|baseurl" key form).
+func TestAuthProfileMarshalRedactsBaseURLCredentials(t *testing.T) {
+	const pw = "badpass-secret-9876"
+	p := AuthProfile{Name: "p1", APIKey: "sk-x", BaseURL: "https://user:" + pw + "@proxy.internal/v1"}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), pw) {
+		t.Fatalf("AuthProfile JSON leaked a password embedded in BaseURL: %s", b)
+	}
+}
+
 // BUG 9: the pool must not log the API key when a profile fails with an error
 // whose message echoes the key.
 func TestPoolDoesNotLogAPIKeyOnFailure(t *testing.T) {

@@ -308,14 +308,52 @@ func (c Config) EffectiveAnthropicVersion() string {
 	return DefaultAnthropicVersion
 }
 
-// MarshalJSON implements json.Marshaler. Redacts APIKey to prevent accidental
-// secret leakage when Config is serialized for logging or debugging.
-// Use the APIKey field directly when you need the actual value.
+// redactURLCredentials scrubs a credential embedded in a URL — userinfo
+// (user:password@) and common secret query parameters — while keeping the
+// host/path visible for debugging. A URL it can't parse, or one with no
+// credential, is returned unchanged (nothing safe to strip / preserve exact
+// formatting). Shared by Config and AuthProfile marshaling.
+func redactURLCredentials(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	changed := false
+	if u.User != nil {
+		u.User = url.User("REDACTED")
+		changed = true
+	}
+	q := u.Query()
+	qChanged := false
+	for k := range q {
+		switch strings.ToLower(k) {
+		case "key", "api_key", "apikey", "token", "access_token", "auth":
+			q.Set(k, "REDACTED")
+			qChanged = true
+		}
+	}
+	if qChanged {
+		u.RawQuery = q.Encode()
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	return u.String()
+}
+
+// MarshalJSON implements json.Marshaler. Redacts APIKey, and any credential
+// embedded in BaseURL, to prevent accidental secret leakage when Config is
+// serialized for logging or debugging. Use the fields directly for real values.
 func (c Config) MarshalJSON() ([]byte, error) {
 	type configAlias Config // break recursion
 	tmp := configAlias(c)
 	if tmp.APIKey != "" {
 		tmp.APIKey = "REDACTED"
 	}
+	tmp.BaseURL = redactURLCredentials(tmp.BaseURL)
 	return json.Marshal(tmp)
 }

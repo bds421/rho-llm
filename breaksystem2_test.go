@@ -165,6 +165,67 @@ func TestAnthropicTwoToolBlocksWithoutStopBothEmitted(t *testing.T) {
 	}
 }
 
+// BUG 10: a Gemini ThoughtSignature riding on a tool_use must NOT survive a
+// handoff to a foreign provider — same invariant the thinking handler enforces
+// for ThinkingSignature ("signatures don't transfer"). Kept same-provider.
+func TestNormalizeStripsThoughtSignatureCrossProvider(t *testing.T) {
+	mk := func() []llm.Message {
+		return []llm.Message{
+			{Role: llm.RoleAssistant, Provider: "gemini", Content: []llm.ContentPart{
+				{Type: llm.ContentToolUse, ToolUseID: "c1", ToolName: "f", ToolInput: map[string]any{}, ThoughtSignature: "gemini-sig-xyz"},
+			}},
+			llm.NewToolResultMessage("c1", "r", false),
+		}
+	}
+	// Cross-provider: signature must be gone.
+	for _, m := range llm.NormalizeForProvider(mk(), "openai") {
+		for _, p := range m.Content {
+			if p.Type == llm.ContentToolUse && p.ThoughtSignature != "" {
+				t.Fatalf("ThoughtSignature %q crossed to a foreign provider", p.ThoughtSignature)
+			}
+		}
+	}
+	// Same provider: signature preserved for the round-trip it exists for.
+	kept := false
+	for _, m := range llm.NormalizeForProvider(mk(), "gemini") {
+		for _, p := range m.Content {
+			if p.Type == llm.ContentToolUse && p.ThoughtSignature == "gemini-sig-xyz" {
+				kept = true
+			}
+		}
+	}
+	if !kept {
+		t.Fatal("ThoughtSignature was dropped on a same-provider replay")
+	}
+}
+
+// BUG 1: a thinking block that carries a signature but EMPTY text must not be
+// replayed verbatim (a provider rejects an empty thinking block) — it has no
+// reasoning to preserve, so it is dropped. The accompanying answer survives.
+func TestNormalizeDropsEmptyThinkingWithSignature(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: llm.RoleAssistant, Provider: "anthropic", Content: []llm.ContentPart{
+			{Type: llm.ContentThinking, Thinking: "", ThinkingSignature: "sig"},
+			{Type: llm.ContentText, Text: "answer"},
+		}},
+	}
+	out := llm.NormalizeForProvider(msgs, "anthropic") // same provider
+	for _, p := range out[0].Content {
+		if p.Type == llm.ContentThinking && p.Thinking == "" {
+			t.Fatalf("empty thinking block (signed, no text) replayed verbatim: %+v", p)
+		}
+	}
+	found := false
+	for _, p := range out[0].Content {
+		if p.Type == llm.ContentText && p.Text == "answer" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("answer text lost during normalization")
+	}
+}
+
 // NormalizeForProvider must produce unique tool_use IDs and correctly paired
 // results even when a literal "dup#1" coexists with a duplicated "dup" (whose
 // dedup target is also "dup#1").

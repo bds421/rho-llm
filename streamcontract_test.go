@@ -6,6 +6,7 @@ package llm_test
 // without its fix.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -350,6 +351,42 @@ func TestOpenAIResponsesStreamToolCallStopReason(t *testing.T) {
 			}
 			t.Fatal("no EventDone")
 		})
+	}
+}
+
+// BUG 6/2: a no-arg tool (nil InputSchema) and a replayed tool_use with nil
+// ToolInput must not serialize to `"input_schema":null` / `"input":null` —
+// Anthropic requires those fields to be JSON objects, so null gets rejected.
+func TestAnthropicNilToolSchemaAndInputNotNull(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"m","model":"claude-sonnet-4-6","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer srv.Close()
+	client, err := anthropic.New(llm.Config{Provider: "anthropic", Model: "claude-sonnet-4-6", APIKey: "k", BaseURL: srv.URL, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = client.Complete(context.Background(), llm.Request{
+		MaxTokens: 16,
+		Tools:     []llm.Tool{{Name: "now", Description: "current time", InputSchema: nil}}, // no-arg tool
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+				{Type: llm.ContentToolUse, ToolUseID: "c1", ToolName: "now", ToolInput: nil}, // nil input
+			}},
+			llm.NewToolResultMessage("c1", "12:00", false),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if bytes.Contains(body, []byte(`"input_schema":null`)) {
+		t.Fatalf("nil tool schema sent as null: %s", body)
+	}
+	if bytes.Contains(body, []byte(`"input":null`)) {
+		t.Fatalf("nil tool input sent as null: %s", body)
 	}
 }
 

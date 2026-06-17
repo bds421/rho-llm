@@ -148,6 +148,12 @@ func (s *Session) SendMessages(ctx context.Context, msgs ...Message) (*Response,
 		// caller; the transcript stays untouched.
 		return nil, fmt.Errorf("llm: client %q returned a nil response and nil error", provider)
 	}
+	if resp.Model == "" {
+		// A client that left Model empty still gets correct cost/provenance:
+		// attribute the turn to the model it actually ran against (Stream already
+		// stamps req.Model). Without this, EstimateCost("") silently returns $0.
+		resp.Model = req.Model
+	}
 	s.commitTurn(msgs, provider, resp)
 	return resp, nil
 }

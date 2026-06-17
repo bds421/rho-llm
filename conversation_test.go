@@ -7,6 +7,28 @@ import (
 	llm "github.com/bds421/rho-llm"
 )
 
+// BUG 3: a circular ToolInput makes json.Marshal fail (cycle detected), forcing
+// Clone's structural fallback, whose deepCopyJSONValue recursed with no cycle/
+// depth guard — a stack-overflow crash (not even recoverable). Clone must return
+// instead. (A real JSON-sourced ToolInput can't be cyclic; only hand-built Go
+// maps reach here — but a library deep-copy must never crash on its input.)
+func TestConversationCloneCircularToolInputDoesNotCrash(t *testing.T) {
+	conv := llm.NewConversation("sys")
+	circular := map[string]any{"k": "v"}
+	circular["self"] = circular // cycle
+	conv.Append(llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+		{Type: llm.ContentToolUse, ToolUseID: "c1", ToolName: "t", ToolInput: circular},
+	}})
+
+	cp := conv.Clone() // must not stack-overflow
+	if cp == nil {
+		t.Fatal("Clone returned nil")
+	}
+	if len(cp.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(cp.Messages))
+	}
+}
+
 func TestConversationSerializationRoundTrip(t *testing.T) {
 	conv := llm.NewConversation("be terse",
 		llm.Tool{Name: "get_weather", Description: "weather", InputSchema: map[string]any{"type": "object"}},

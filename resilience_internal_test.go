@@ -69,6 +69,36 @@ func (c *scriptedStreamClient) Provider() string { return "test" }
 func (c *scriptedStreamClient) Model() string    { return "test-model" }
 func (c *scriptedStreamClient) Close() error     { return nil }
 
+// BUG 15: a negative CircuitCooldown (e.g. a computed duration gone negative)
+// must be clamped, not silently disable the breaker — an open circuit with a
+// negative cooldown is instantly probe-able (time.Since(...) >= negative is
+// always true), so it never actually blocks.
+func TestNegativeCircuitCooldownClampedSoBreakerStillBlocks(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.CircuitThreshold = 1
+	cfg.CircuitCooldown = -30 * time.Second
+	pc, err := NewPooledClient(cfg, []string{"k"}, func(AuthProfile) (Client, error) {
+		return &alwaysOverloadedClient{}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+	defer pc.Close()
+
+	// Drive the breaker directly — a real Complete backs off for the (now
+	// clamped) cooldown, which would let it elapse and make this flaky.
+	pc.breaker.RecordFailure() // threshold 1 → open
+	if pc.breaker.State() != CircuitOpen {
+		t.Fatalf("breaker not open after a failure: %v", pc.breaker.State())
+	}
+	// Checked immediately: a positive (clamped) cooldown must still BLOCK. An
+	// unclamped negative cooldown makes time.Since(openedAt) >= cooldown true at
+	// once, so Allow would wrongly admit.
+	if pc.breaker.Allow() {
+		t.Fatal("negative CircuitCooldown left the breaker non-blocking (cooldown not clamped)")
+	}
+}
+
 // PIN (Round2/3): the v0.4.1 token-scoped breaker must be race-free under heavy
 // contention across every method, and never end in a torn/invalid state. The
 // -race detector is the real assertion here; the state check guards against a

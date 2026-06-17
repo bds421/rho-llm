@@ -363,11 +363,15 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					})
 				}
 			case llm.ContentToolUse:
+				input := part.ToolInput
+				if input == nil {
+					input = map[string]any{} // Anthropic requires input to be an object, not null
+				}
 				apiMsg.Content = append(apiMsg.Content, map[string]any{
 					"type":  "tool_use",
 					"id":    part.ToolUseID,
 					"name":  part.ToolName,
-					"input": part.ToolInput,
+					"input": input,
 				})
 			case llm.ContentToolResult:
 				block := map[string]any{
@@ -431,10 +435,14 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	// Convert tools (omit empty array — matches Gemini and OpenAI adapters)
 	if len(req.Tools) > 0 {
 		for _, tool := range req.Tools {
+			schema := tool.InputSchema
+			if schema == nil {
+				schema = map[string]any{"type": "object"} // required object, not null
+			}
 			at := anthropicTool{
 				Name:        tool.Name,
 				Description: tool.Description,
-				InputSchema: tool.InputSchema,
+				InputSchema: schema,
 			}
 			if tool.CacheControl {
 				at.CacheControl = &anthropicCacheControl{Type: "ephemeral"}

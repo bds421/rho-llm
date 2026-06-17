@@ -75,6 +75,23 @@ func TestRegisterModelEnablesCostEstimate(t *testing.T) {
 	}
 }
 
+// BUG 12: EstimateCost looked up the registry without resolving aliases, so a
+// caller passing an alias model name got a silent 0 cost instead of the target's
+// pricing.
+func TestEstimateCostResolvesAlias(t *testing.T) {
+	id := uniqueModelID("test-only-cost-target")
+	if err := llm.RegisterModel(llm.ModelInfo{ID: id, Provider: "custom", InputPricePer1M: 3.0}); err != nil {
+		t.Fatalf("RegisterModel: %v", err)
+	}
+	alias := uniqueModelID("test-only-cost-alias")
+	if err := llm.RegisterModelAlias(alias, id); err != nil {
+		t.Fatalf("RegisterModelAlias: %v", err)
+	}
+	if got := llm.EstimateCost(llm.CostInput{Model: alias, InputTokens: 1_000_000}); got != 3.0 {
+		t.Fatalf("EstimateCost(alias) = %v, want 3.0 (alias not resolved → silent 0 cost)", got)
+	}
+}
+
 // BUG 3/4: a whitespace-only ID or Provider passed the bare != "" check and got
 // stored under a meaningless key. Registration must reject blank-after-trim.
 func TestRegisterModelRejectsBlankIDOrProvider(t *testing.T) {

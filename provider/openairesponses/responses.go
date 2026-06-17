@@ -542,6 +542,10 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 	info, _ := llm.GetModelInfo(model)
 	if len(req.Tools) > 0 && !info.NoToolSupport {
 		for _, tool := range req.Tools {
+			params := tool.InputSchema
+			if params == nil {
+				params = map[string]any{"type": "object"} // valid object, not null
+			}
 			apiReq.Tools = append(apiReq.Tools, responsesTool{
 				Type: "function",
 				Function: struct {
@@ -551,7 +555,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 				}{
 					Name:        tool.Name,
 					Description: tool.Description,
-					Parameters:  tool.InputSchema,
+					Parameters:  params,
 				},
 			})
 		}

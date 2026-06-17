@@ -463,6 +463,10 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		info, _ := llm.GetModelInfo(model)
 		if !info.NoToolSupport {
 			for _, tool := range req.Tools {
+				params := tool.InputSchema
+				if params == nil {
+					params = map[string]any{"type": "object"} // valid object, not null
+				}
 				apiReq.Tools = append(apiReq.Tools, openaiTool{
 					Type: "function",
 					Function: struct {
@@ -472,7 +476,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 					}{
 						Name:        tool.Name,
 						Description: tool.Description,
-						Parameters:  tool.InputSchema,
+						Parameters:  params,
 					},
 				})
 			}

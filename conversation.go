@@ -203,21 +203,38 @@ func cloneTools(src []Tool) []Tool {
 	return out
 }
 
+// maxDeepCopyDepth bounds deepCopyJSONValue's recursion. This path is the
+// fallback only a non-JSON-serializable ToolInput reaches; a real JSON-sourced
+// value is acyclic and far shallower than this. The bound exists so a
+// hand-built *cyclic* Go map (which json.Marshal rejects, sending it here)
+// can't recurse forever into a stack-overflow crash — it bails and shares the
+// remainder instead of crashing the whole process.
+const maxDeepCopyDepth = 1000
+
 // deepCopyJSONValue deep-copies a JSON-shaped value (maps and slices of any).
 // Scalars and opaque values (chan/func/etc.) are returned as-is — they can't be
 // copied without reflection and aren't JSON-serializable in the first place.
 func deepCopyJSONValue(v any) any {
+	return deepCopyJSONValueDepth(v, 0)
+}
+
+func deepCopyJSONValueDepth(v any, depth int) any {
+	if depth >= maxDeepCopyDepth {
+		// Pathologically deep or cyclic — stop recursing and share the rest
+		// rather than overflowing the stack.
+		return v
+	}
 	switch x := v.(type) {
 	case map[string]any:
 		m := make(map[string]any, len(x))
 		for k, val := range x {
-			m[k] = deepCopyJSONValue(val)
+			m[k] = deepCopyJSONValueDepth(val, depth+1)
 		}
 		return m
 	case []any:
 		s := make([]any, len(x))
 		for i, val := range x {
-			s[i] = deepCopyJSONValue(val)
+			s[i] = deepCopyJSONValueDepth(val, depth+1)
 		}
 		return s
 	default:

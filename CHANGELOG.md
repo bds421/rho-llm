@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-A break-the-system campaign (three escalating rounds) over the v0.4.x surface found and
-fixed the issues below; each ships a regression test that fails without the fix.
+## [0.4.2] - 2026-06-17
+
+Two more break-the-system campaigns (resilience/streaming/persistence, then
+handoff/serialization/request-building) plus an adversarial hardening pass over the v0.4.x
+surface found and fixed the issues below; each ships a regression test that fails without the
+fix. `make ci` is clean (race + gosec + govulncheck).
 
 ### Security
 
@@ -19,9 +23,33 @@ fixed the issues below; each ships a regression test that fails without the fix.
   redaction is exact rather than heuristic — from error text before storing, logging, or
   marshaling it. (The error returned to the caller is left intact: the caller already holds
   the key, and scrubbing would lose debugging detail.)
+- **Credentials embedded in a `BaseURL` are redacted on marshal** — `Config.MarshalJSON` and
+  `AuthProfile.MarshalJSON` redacted `APIKey` but serialized `BaseURL` verbatim, leaking a
+  credential carried in the URL (`https://user:pass@host`, or a `?key=`/`token=` query param).
+  Both now scrub URL userinfo and secret query params while keeping host/path visible.
 
 ### Fixed
 
+- **`Conversation.Clone` no longer crashes on a cyclic `ToolInput`** — a circular `map`/slice
+  made `json.Marshal` fail and the structural-clone fallback recurse forever into a
+  stack-overflow (an unrecoverable crash). The deep-copy is now depth-bounded.
+- **Nil tool schema/input is sent as an object, not `null`** — a no-arg tool
+  (`InputSchema: nil`) or a replayed `tool_use` (`ToolInput: nil`) serialized to
+  `"input_schema":null` / `"input":null`, which providers (Anthropic) reject; all four
+  adapters now coerce nil to `{"type":"object"}` / `{}`.
+- **`EstimateCost` resolves model aliases** — it looked up the registry without resolving an
+  alias first, so an alias model name returned a silent `$0` cost.
+- **Streamed `openai_responses` tool calls / `Gemini` thought signatures handled on handoff**
+  — a Gemini `ThoughtSignature` on a `tool_use` no longer crosses to a foreign provider (same
+  rule the thinking handler already applied to `ThinkingSignature`), and a thinking block that
+  carries a signature but empty text is no longer replayed verbatim (a provider rejects it).
+- **A negative cooldown no longer silently disables resilience** — a negative
+  `CircuitCooldown` / key cooldown (e.g. a computed duration gone negative) made
+  `time.Since(...) >= cooldown` always true, so an open circuit never blocked and a failed key
+  was never actually cooled; negative values are now clamped to the default.
+- **A `Client` returning an empty `Response.Model` no longer zeroes the cost** — the session
+  attributes the turn to the model it actually ran against, so `EstimateCost` is no longer
+  called with `""` (which returns `$0`).
 - **An empty SSE `data:` line no longer aborts a stream** — `SSEData` returned an empty
   payload as a parseable event, so a keep-alive/padding `data: ` line mid-stream surfaced as
   a spurious malformed-event error that dropped an otherwise-complete turn. Empty data values

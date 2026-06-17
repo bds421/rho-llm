@@ -59,6 +59,11 @@ func NormalizeForProvider(msgs []Message, provider string) []Message {
 				remap[p.ToolUseID] = newID // results with this original ID now pair to newID
 				np := p
 				np.ToolUseID = newID
+				if m.Provider != provider {
+					// A Gemini thought signature is provider-bound, like a thinking
+					// signature — it must not cross to a foreign provider.
+					np.ThoughtSignature = ""
+				}
 				nm.Content = append(nm.Content, np)
 			case ContentToolResult:
 				target, ok := remap[p.ToolResultID]
@@ -70,12 +75,15 @@ func NormalizeForProvider(msgs []Message, provider string) []Message {
 				nm.Content = append(nm.Content, np)
 			case ContentThinking:
 				sameProvider := m.Provider != "" && m.Provider == provider
-				if sameProvider && (p.ThinkingSignature != "" || p.Redacted) {
-					nm.Content = append(nm.Content, p) // replay verbatim
+				// Replay verbatim only when it would be valid: a redacted block, or
+				// a signed block that actually has reasoning text. A signed-but-empty
+				// thinking block has nothing to preserve and a provider rejects it.
+				if sameProvider && (p.Redacted || (p.ThinkingSignature != "" && p.Thinking != "")) {
+					nm.Content = append(nm.Content, p)
 				} else if p.Thinking != "" && !p.Redacted {
 					nm.Content = append(nm.Content, ContentPart{Type: ContentText, Text: p.Thinking})
 				}
-				// else: empty or redacted-without-replay → drop
+				// else: empty (incl. signed-but-no-text) or redacted-without-replay → drop
 			default:
 				nm.Content = append(nm.Content, p)
 			}

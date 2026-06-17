@@ -434,10 +434,14 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	if len(req.Tools) > 0 {
 		tool := geminiTool{}
 		for _, t := range req.Tools {
+			params := t.InputSchema
+			if params == nil {
+				params = map[string]any{"type": "object"} // valid object, not null
+			}
 			tool.FunctionDeclarations = append(tool.FunctionDeclarations, geminiFunctionDeclaration{
 				Name:        t.Name,
 				Description: t.Description,
-				Parameters:  t.InputSchema,
+				Parameters:  params,
 			})
 		}
 		apiReq.Tools = []geminiTool{tool}
