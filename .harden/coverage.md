@@ -18,8 +18,13 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   return `$0`, silently under-reporting cost. Fix: `SendMessages` attributes the turn to the
   model it ran against. Test: `TestSessionCostFallsBackToRequestModelWhenResponseModelEmpty`.
 
+- **Pass 2 (v0.4.3):** `oauth.go` device flow. Found & fixed a serious hang — `PollDeviceToken`
+  ignored `expires_in` and could poll forever against a misbehaving server with no ctx deadline
+  (contradicting its own doc). Also clamped an overflow-prone poll interval and surfaced the
+  RFC `error_description`. Tests: `TestPollDeviceTokenStopsAtExpiry`, `TestClampPollInterval`,
+  `TestStartDeviceAuthSurfacesErrorDescription`.
+
 ## Still untested / weak (candidate future passes)
-- `oauth.go` device flow (token handling, error_description, polling/timeout paths).
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).
 - openai_compat sending a ContentDocument (PDF) it can't support (vs openai_responses' clear error).

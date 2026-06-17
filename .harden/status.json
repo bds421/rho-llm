@@ -1,15 +1,14 @@
 {
-  "targeted_area": "session cost/model provenance",
+  "targeted_area": "oauth.go device flow (RFC 8628)",
   "new_serious_bugs": 1,
-  "tests_added": 1,
+  "tests_added": 3,
   "untested_surface_remaining": true,
   "remaining_areas": [
-    "oauth.go device flow (token handling, error_description, polling/timeout)",
     "capabilities.go capability flags vs actual model support",
     "buildRequest with an empty model across the 4 adapters (sends model:\"\")",
     "openai_compat sending a ContentDocument it cannot support (no clear rejection)",
     "ValidateImageSource has no direct test (document validator does)",
-    "middleware.go logging, discovery.go, factory.go protocol resolution edges"
+    "middleware.go logging redaction, discovery.go, factory.go protocol resolution edges"
   ],
   "changed": true
 }

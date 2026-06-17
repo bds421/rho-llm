@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-17
+
+Hardening pass 2 — OAuth 2.0 device flow (`oauth.go`). Each fix ships a regression test that
+fails without it; `make ci` clean.
+
+### Fixed
+
+- **`PollDeviceToken` enforces `expires_in`** — it now stops polling once the device code's
+  lifetime elapses (as its doc already promised), instead of relying solely on the server
+  returning `expired_token` plus the caller's context. A server stuck on
+  `authorization_pending` with no context deadline could otherwise poll forever (a hang).
+- **Poll interval is clamped overflow-safely** — a hostile/huge server-supplied `interval`
+  overflowed `time.Duration(interval) * time.Second` and could wrap to a tiny (or negative)
+  delay, defeating the minimum; it is now clamped to `[1s, 300s]` (and `expires_in` is capped
+  before the deadline math).
+- **OAuth `error_description` is surfaced** — device-authorization and token errors now
+  include the RFC 8628 human-readable `error_description`, not just the bare `error` code.
+
 ## [0.4.2] - 2026-06-17
 
 Two more break-the-system campaigns (resilience/streaming/persistence, then
