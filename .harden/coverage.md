@@ -51,6 +51,11 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   `json_schema` format with no schema emitted `"schema":null`; now degrades to json_object.
   Test: `TestOpenAICompatJSONSchemaWithoutSchemaDegrades`.
 
+- **Pass 9 (v0.4.10):** `ValidateImageSource` direct coverage (no defect). Meaningful
+  untested behavior assessed as exhausted; `untested_surface_remaining=false`. Remaining code
+  (simple.go wrappers, discovery/factory) is trivial or transitively tested. Test:
+  `TestValidateImageSourceRejectsMalformed`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

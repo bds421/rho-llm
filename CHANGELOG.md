@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-06-17
+
+Hardening pass 9 — direct adversarial coverage for `ValidateImageSource` (no defect found).
+The adversarial attack surface is now exhausted across resilience, streaming, persistence,
+handoff, serialization, secret redaction, registry, request-building (all adapters), session,
+OAuth, capabilities, middleware, the SSRF guard, and structured output.
+
 ## [0.4.9] - 2026-06-17
 
 Hardening pass 8 — structured output.
