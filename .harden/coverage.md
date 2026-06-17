@@ -56,6 +56,11 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   (simple.go wrappers, discovery/factory) is trivial or transitively tested. Test:
   `TestValidateImageSourceRejectsMalformed`.
 
+- **Pass 10 (v0.4.11):** gemini URL construction. Found a low-severity URL-injection gap (model
+  not escaped in the path) — fixed with url.PathEscape. NOTE: finding this in a previously-
+  untested path showed pass 9's "surface exhausted" was premature, so reverted
+  untested_surface_remaining to true. Test: `TestGeminiEscapesModelInURL`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

@@ -1,8 +1,12 @@
 {
-  "targeted_area": "ValidateImageSource direct coverage + remaining-surface assessment",
+  "targeted_area": "gemini URL construction (model-name escaping)",
   "new_serious_bugs": 0,
   "tests_added": 1,
-  "untested_surface_remaining": false,
-  "remaining_areas": [],
+  "untested_surface_remaining": true,
+  "remaining_areas": [
+    "confirm the other adapters' URL paths are injection-free (fixed paths; likely safe)",
+    "ResolveAuthHeader / '|' base-url split edges",
+    "cache_control passthrough"
+  ],
   "changed": true
 }

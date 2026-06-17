@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-06-17
+
+Hardening pass 10 — defense-in-depth.
+
+### Security
+
+- **The Gemini adapter URL-escapes the model name** — the model is interpolated into the
+  request URL path (`/{model}:generateContent`); an unescaped model containing URL
+  metacharacters (`?`, `#`, `/`) could inject a query parameter or manipulate the path
+  (same-host; no auth bypass — Gemini auth is header-based). The model is now `url.PathEscape`d.
+
 ## [0.4.10] - 2026-06-17
 
 Hardening pass 9 — direct adversarial coverage for `ValidateImageSource` (no defect found).

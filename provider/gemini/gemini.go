@@ -11,6 +11,7 @@ import (
 	"iter"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/bds421/rho-llm"
@@ -81,7 +82,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	if model == "" {
 		model = c.config.Model
 	}
-	url := fmt.Sprintf("%s/%s:generateContent", c.baseURL, model)
+	url := fmt.Sprintf("%s/%s:generateContent", c.baseURL, url.PathEscape(model))
 
 	apiReq, err := c.buildRequest(req)
 	if err != nil {
@@ -126,7 +127,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		if model == "" {
 			model = c.config.Model
 		}
-		url := fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse", c.baseURL, model)
+		url := fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse", c.baseURL, url.PathEscape(model))
 
 		apiReq, err := c.buildRequest(req)
 		if err != nil {
