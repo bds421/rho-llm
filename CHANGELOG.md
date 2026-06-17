@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-06-17
+
+Hardening pass 12 — verified the `apikey|baseurl` auth-pool split and `ResolveAuthHeader`/
+`ResolveBaseURL` resolution handle edge inputs correctly (no defect; regression coverage). The
+adversarial attack surface is exhausted on an evidence basis (the last two passes probed fresh
+surfaces and found nothing).
+
 ## [0.4.12] - 2026-06-17
 
 Hardening pass 11 — verified the Anthropic / OpenAI-compatible / Responses adapters use fixed

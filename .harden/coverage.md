@@ -65,6 +65,11 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   openai_responses use fixed paths; a hostile model can't inject. URL surface now fully
   covered. Test: `TestFixedPathAdaptersIgnoreHostileModelInURL`.
 
+- **Pass 12 (v0.4.13):** AuthPool `key|baseurl` split + auth/base resolution. No defect — edge
+  keys split correctly. Surface now exhausted on an evidence basis (passes 11-12 probed fresh
+  surfaces and found nothing). `untested_surface_remaining=false`. Test:
+  `TestAuthPoolKeyBaseURLSplit`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

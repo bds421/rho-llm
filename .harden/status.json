@@ -1,11 +1,8 @@
 {
-  "targeted_area": "fixed-path adapter URL injection-safety (verification)",
+  "targeted_area": "AuthPool key|baseurl split + auth/base resolution",
   "new_serious_bugs": 0,
   "tests_added": 1,
-  "untested_surface_remaining": true,
-  "remaining_areas": [
-    "ResolveAuthHeader / '|' base-url split edge keys",
-    "cache_control passthrough"
-  ],
+  "untested_surface_remaining": false,
+  "remaining_areas": [],
   "changed": true
 }
