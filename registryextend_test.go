@@ -7,16 +7,39 @@ package llm_test
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	llm "github.com/bds421/rho-llm"
 )
 
+// regTestSeq hands out process-unique suffixes so a test whose precondition is
+// "this model is not registered yet" stays valid across repeated runs (e.g.
+// `go test -count=2`), since RegisterModel mutates the process-global registry.
+var regTestSeq atomic.Uint64
+
+func uniqueModelID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, regTestSeq.Add(1))
+}
+
+// countOccurrences reports how many times id appears in s.
+func countOccurrences(s []string, id string) int {
+	n := 0
+	for _, v := range s {
+		if v == id {
+			n++
+		}
+	}
+	return n
+}
+
 // R-M5: an unlisted model must be registrable at runtime so it gets a real
 // cost estimate instead of the silent 0.
 func TestRegisterModelEnablesCostEstimate(t *testing.T) {
-	const id = "test-only-custom-model-v1"
+	id := uniqueModelID("test-only-custom-model")
 	if got := llm.EstimateCost(llm.CostInput{Model: id, InputTokens: 1_000_000}); got != 0 {
 		t.Fatalf("unlisted model should cost 0 before registration, got %v", got)
 	}
@@ -101,6 +124,93 @@ func TestRegistryConcurrentAccessRaceFree(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// #6: GetAvailableModels (the curated discovery list) must stay in sync with the
+// registry across an override. The old code gated the append on `!existed`, so
+// re-registering a model already in modelRegistry but absent from
+// availableModels never reached discovery. Re-register such a built-in (with its
+// own metadata, unchanged) and it must surface.
+func TestRegisterModelOverrideSurfacesInAvailableModels(t *testing.T) {
+	var gapID, gapProvider string
+	for _, m := range llm.Models() {
+		if !slices.Contains(llm.GetAvailableModels(m.Provider), m.ID) {
+			gapID, gapProvider = m.ID, m.Provider
+			break
+		}
+	}
+	if gapID == "" {
+		t.Skip("no built-in is currently absent from GetAvailableModels; nothing to pin")
+	}
+	info, ok := llm.GetModelInfo(gapID)
+	if !ok {
+		t.Fatalf("GetModelInfo(%q) missing", gapID)
+	}
+	// Re-register identical metadata — non-destructive, but exercises the
+	// override path (existed == true).
+	if err := llm.RegisterModel(info); err != nil {
+		t.Fatalf("RegisterModel: %v", err)
+	}
+	if !slices.Contains(llm.GetAvailableModels(gapProvider), gapID) {
+		t.Fatalf("after RegisterModel override, %q still absent from GetAvailableModels(%q) — override never reached discovery", gapID, gapProvider)
+	}
+	if c := countOccurrences(llm.GetAvailableModels(gapProvider), gapID); c != 1 {
+		t.Fatalf("model %q appears %d times in discovery, want exactly 1 (no duplicates)", gapID, c)
+	}
+}
+
+// #6: an override that moves a model to a different provider must update both
+// providers' discovery lists — add to the new, remove from the old — and never
+// duplicate. The old `!existed` append-gate left the new provider missing it.
+func TestRegisterModelProviderChangeUpdatesDiscovery(t *testing.T) {
+	const id = "test-only-move-provider-v1"
+	const p1, p2 = "test-only-p1", "test-only-p2"
+
+	if err := llm.RegisterModel(llm.ModelInfo{ID: id, Provider: p1, InputPricePer1M: 1}); err != nil {
+		t.Fatalf("RegisterModel p1: %v", err)
+	}
+	if !slices.Contains(llm.GetAvailableModels(p1), id) {
+		t.Fatal("new model missing from its provider's discovery list")
+	}
+
+	// Move it to a different provider.
+	if err := llm.RegisterModel(llm.ModelInfo{ID: id, Provider: p2, InputPricePer1M: 1}); err != nil {
+		t.Fatalf("RegisterModel p2: %v", err)
+	}
+	if !slices.Contains(llm.GetAvailableModels(p2), id) {
+		t.Fatal("override to a new provider didn't add the model to the new provider's discovery (append gated on !existed)")
+	}
+	if slices.Contains(llm.GetAvailableModels(p1), id) {
+		t.Fatal("override to a new provider left a stale entry in the old provider's discovery")
+	}
+
+	// Re-register under the same provider: still exactly one entry, no dup.
+	if err := llm.RegisterModel(llm.ModelInfo{ID: id, Provider: p2, InputPricePer1M: 2}); err != nil {
+		t.Fatalf("RegisterModel p2 again: %v", err)
+	}
+	if c := countOccurrences(llm.GetAvailableModels(p2), id); c != 1 {
+		t.Fatalf("model appears %d times after same-provider re-register, want 1", c)
+	}
+}
+
+// #10: an alias key equal to a real model ID would shadow that model
+// (ResolveModelAlias checks aliases first) — RegisterModelAlias must reject it,
+// and the real model must keep resolving to itself.
+func TestRegisterModelAliasRejectsShadowingRealModel(t *testing.T) {
+	const a = "test-only-shadow-a-v1"
+	const b = "test-only-shadow-b-v1"
+	if err := llm.RegisterModel(llm.ModelInfo{ID: a, Provider: "custom", InputPricePer1M: 1}); err != nil {
+		t.Fatalf("RegisterModel a: %v", err)
+	}
+	if err := llm.RegisterModel(llm.ModelInfo{ID: b, Provider: "custom", InputPricePer1M: 2}); err != nil {
+		t.Fatalf("RegisterModel b: %v", err)
+	}
+	if err := llm.RegisterModelAlias(a, b); err == nil {
+		t.Fatal("RegisterModelAlias with an alias key equal to an existing model ID must be rejected (would shadow it)")
+	}
+	if got := llm.ResolveModelAlias(a); got != a {
+		t.Fatalf("real model %q was shadowed by an alias: ResolveModelAlias(%q) = %q", a, a, got)
+	}
 }
 
 // R-M5 end-to-end: a client built for an unlisted model/provider (via BaseURL)

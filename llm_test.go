@@ -2230,14 +2230,17 @@ func TestAuthPoolStatusUnhealthy(t *testing.T) {
 	}
 }
 
-// TestNewClientWithKeysEmpty verifies NewClientWithKeys with no keys falls back to config.
+// TestNewClientWithKeysEmpty verifies NewClientWithKeys with no keys still
+// builds a working client from the config (R-L1: it now routes through a
+// PooledClient with a single config-derived profile rather than a bare single
+// client, so it gets the same retry/breaker wrapping as a multi-key pool).
 func TestNewClientWithKeysEmpty(t *testing.T) {
 	cfg := llm.Config{
 		Provider: "ollama",
 		Model:    "llama3",
 	}
 
-	// Empty keys should fall back to newSingleClient
+	// Empty keys fall back to the config's own credentials, wrapped in a pool.
 	client, err := llm.NewClientWithKeys(cfg, []string{})
 	if err != nil {
 		t.Fatalf("NewClientWithKeys error: %v", err)

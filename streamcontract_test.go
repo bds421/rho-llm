@@ -293,3 +293,125 @@ func TestAnthropicStopSequenceNormalized(t *testing.T) {
 		t.Fatal("no EventDone")
 	})
 }
+
+// A streamed openai_responses turn that emitted a function call must report
+// StopReason == tool_use on EventDone — matching the non-streaming parseResponse
+// path, which sets "tool_use" for any function_call output item *regardless of
+// status* (completed OR incomplete/max_tokens). Otherwise an agent loop keying
+// on resp.StopReason==StopToolUse stops after a streamed tool call even though
+// ToolCalls is populated, and the two code paths disagree for the same turn.
+func TestOpenAIResponsesStreamToolCallStopReason(t *testing.T) {
+	cases := []struct {
+		name           string
+		completedEvent string
+	}{
+		{
+			name:           "completed",
+			completedEvent: `data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":5,"output_tokens":3}}}`,
+		},
+		{
+			// A truncated (max_output_tokens) turn that still emitted a function
+			// call: tool_use must win over max_tokens, mirroring parseResponse.
+			name:           "incomplete-max-tokens",
+			completedEvent: `data: {"type":"response.completed","response":{"id":"resp_1","status":"incomplete","usage":{"input_tokens":5,"output_tokens":3}}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := sseServer(
+				`data: {"type":"response.output_item.added","item":{"type":"function_call","name":"search","call_id":"call_1"}}`,
+				`data: {"type":"response.function_call_arguments.delta","delta":"{\"q\":\"go\"}"}`,
+				`data: {"type":"response.function_call_arguments.done","name":"search","call_id":"call_1","arguments":"{\"q\":\"go\"}"}`,
+				tc.completedEvent,
+			)
+			defer srv.Close()
+			client, err := openairesponses.New(llm.Config{Provider: "openai_responses", Model: "gpt-5.2", APIKey: "test-key", BaseURL: srv.URL, Timeout: 10 * time.Second})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			events, errs := collectStream(t, client)
+			if len(errs) != 0 {
+				t.Fatalf("unexpected errors: %v", errs)
+			}
+			var sawTool bool
+			for _, ev := range events {
+				if ev.Type == llm.EventToolUse {
+					sawTool = true
+				}
+				if ev.Type == llm.EventDone {
+					if !sawTool {
+						t.Fatal("EventDone arrived before any EventToolUse")
+					}
+					if ev.StopReason != llm.StopToolUse {
+						t.Fatalf("streamed tool call reported StopReason %q, want %q (diverges from Complete)", ev.StopReason, llm.StopToolUse)
+					}
+					return
+				}
+			}
+			t.Fatal("no EventDone")
+		})
+	}
+}
+
+// A complete Anthropic turn whose FINAL tool_use block is missing its
+// content_block_stop (spec violation) must still deliver the tool call with its
+// accumulated input — the terminal message_delta must flush it before Done, not
+// drop it while reporting a clean tool_use turn.
+func TestAnthropicTerminalToolCallFlushedOnMissingStop(t *testing.T) {
+	srv := sseServer(
+		`data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}`,
+		`data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"call_1","name":"search"}}`,
+		`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"q\":\"go\"}"}}`,
+		// NO content_block_stop — straight to the terminal event
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}`,
+	)
+	defer srv.Close()
+	client, err := anthropic.New(llm.Config{Provider: "anthropic", Model: "claude-sonnet-4-6", APIKey: "test-key", BaseURL: srv.URL, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	events, errs := collectStream(t, client)
+	if len(errs) != 0 {
+		t.Fatalf("a complete (non-truncated) turn must not error: %v", errs)
+	}
+	if !hasDone(events) {
+		t.Fatal("no EventDone")
+	}
+	var tool *llm.ToolCall
+	for i := range events {
+		if events[i].Type == llm.EventToolUse && events[i].ToolCall != nil {
+			tool = events[i].ToolCall
+		}
+	}
+	if tool == nil {
+		t.Fatal("terminal tool call dropped on missing content_block_stop before message_delta")
+	}
+	if tool.ID != "call_1" {
+		t.Fatalf("tool call ID = %q, want call_1", tool.ID)
+	}
+	m, ok := tool.Input.(map[string]any)
+	if !ok || m["q"] != "go" {
+		t.Fatalf("accumulated tool input not preserved: %#v", tool.Input)
+	}
+}
+
+// StreamWithBoundaries must honor a consumer that stops during the injected
+// block-End event on the error path: it must NOT call yield again with the
+// error. Calling yield after it returned false violates the iter.Seq2 contract
+// and panics the range-over-func runtime — so a regression makes this test
+// panic (and fail) rather than pass.
+func TestStreamWithBoundariesErrorPathHonorsConsumerStop(t *testing.T) {
+	seq := func(yield func(llm.StreamEvent, error) bool) {
+		// Open a text block, then error mid-block (forces closeBlock to emit a
+		// TextEnd before the error propagates).
+		if !yield(llm.StreamEvent{Type: llm.EventContent, Text: "hi"}, nil) {
+			return
+		}
+		yield(llm.StreamEvent{}, errors.New("boom"))
+	}
+	for ev, err := range llm.StreamWithBoundaries(seq) {
+		if err == nil && ev.Type == llm.EventTextEnd {
+			break // stop exactly on the injected End — the wrapper must not yield again
+		}
+	}
+}

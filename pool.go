@@ -246,14 +246,23 @@ func newRefCountedClient(client Client) *refCountedClient {
 }
 
 // Acquire increments the reference count. Must be called inside pc.mu.RLock().
+// Nil-safe: a no-op on a nil receiver (defense in depth against a rotation/close
+// race that could hand back a nil reference).
 func (rc *refCountedClient) Acquire() {
+	if rc == nil {
+		return
+	}
 	rc.refs.Add(1)
 }
 
 // Release decrements the reference count. When it reaches zero, the
 // underlying client is closed exactly once. Close errors are logged
 // because there is no caller to return them to.
+// Nil-safe: a no-op on a nil receiver.
 func (rc *refCountedClient) Release() {
+	if rc == nil {
+		return
+	}
 	if rc.refs.Add(-1) == 0 {
 		rc.once.Do(func() {
 			if err := rc.client.Close(); err != nil {
@@ -348,17 +357,17 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 		retryHook:  cfg.RetryHook,
 	}
 
-	// Wire circuit breaker from config
+	// Wire circuit breaker from config. The pool drives the breaker manually
+	// (Allow/RecordSuccess/RecordFailure) rather than through Execute, and it
+	// already skips RecordFailure for auth errors inline ("bad key ≠ broken
+	// endpoint"), so no WithSuccessPredicate is needed here — wiring one would be
+	// dead configuration that never runs on this path.
 	if cfg.CircuitThreshold > 0 {
 		cooldown := cfg.CircuitCooldown
 		if cooldown == 0 {
 			cooldown = DefaultCircuitCooldown
 		}
-		pc.breaker = NewCircuitBreaker(cfg.CircuitThreshold, cooldown,
-			WithSuccessPredicate(func(err error) bool {
-				return IsAuthError(err)
-			}),
-		)
+		pc.breaker = NewCircuitBreaker(cfg.CircuitThreshold, cooldown)
 	}
 
 	return pc, nil
@@ -390,8 +399,11 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 	for i := 0; i < maxRetries; i++ {
 		// Circuit breaker gate: if open, fail fast. The circuit's own cooldown
 		// timer controls when the next probe is allowed — burning retry
-		// iterations with backoff delays accomplishes nothing.
-		if !pc.breaker.Allow() {
+		// iterations with backoff delays accomplishes nothing. probeTok identifies
+		// the half-open probe if this attempt was admitted as one, so a later
+		// ReleaseProbe re-arms only this attempt's own probe.
+		admitted, probeTok := pc.breaker.allow()
+		if !admitted {
 			pc.emitRetryEvent(RetryEvent{Type: RetryCircuitOpen, Attempt: i})
 			if lastErr != nil {
 				return nil, fmt.Errorf("circuit breaker open: %w", lastErr)
@@ -413,7 +425,7 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 		rc.Release()
 		if err == nil {
 			pc.pool.MarkSuccessByName(usedName)
-			pc.breaker.RecordSuccess()
+			pc.breaker.recordSuccess(probeTok)
 			return resp, nil
 		}
 
@@ -421,7 +433,10 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 
 		// The caller's context is done — this is not a provider failure. Don't
 		// poison key health or the breaker, and don't retry with a dead context.
+		// If this request was a half-open probe, re-arm it so the cancellation
+		// doesn't strand other traffic for a full cooldown.
 		if ctx.Err() != nil {
+			pc.breaker.ReleaseProbe(probeTok)
 			return nil, err
 		}
 
@@ -429,19 +444,26 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 
 		// Auth errors and retryable errors trigger rotation to try another key.
 		// Other errors (400 bad request, etc.) are not key-related — return immediately.
+		// A reachable endpoint that returns a client-side error is not a breaker
+		// failure; re-arm a consumed half-open probe so it doesn't wedge.
 		if !IsRetryable(err) && !IsAuthError(err) {
+			pc.breaker.ReleaseProbe(probeTok)
 			return nil, err
 		}
 
 		// Auth errors do NOT trip the circuit — bad key ≠ broken endpoint
 		if !IsAuthError(err) {
-			pc.breaker.RecordFailure()
+			pc.breaker.recordFailure(probeTok)
 		}
 
 		// Mark failed (auth errors get permanently disabled, others get cooldown)
 		pc.markFailed(usedName, err)
 
 		if rotErr := pc.rotateClient(usedName); rotErr != nil {
+			// Pool closed concurrently — fail fast rather than backing off.
+			if errors.Is(rotErr, ErrClientClosed) {
+				return nil, ErrClientClosed
+			}
 			// Rotation failed (all keys in cooldown or single-key pool).
 			// Auth errors are permanent — no point retrying with the same dead key.
 			if IsAuthError(err) {
@@ -494,7 +516,9 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 		var lastErr error
 		for attempt := 0; attempt < maxRetries; attempt++ {
 			// Circuit breaker gate: if open, fail fast (see Complete for rationale).
-			if !pc.breaker.Allow() {
+			// probeTok identifies this attempt's half-open probe (if admitted as one).
+			admitted, probeTok := pc.breaker.allow()
+			if !admitted {
 				pc.emitRetryEvent(RetryEvent{Type: RetryCircuitOpen, Attempt: attempt})
 				if lastErr != nil {
 					yield(StreamEvent{}, fmt.Errorf("stream: circuit breaker open: %w", lastErr))
@@ -531,11 +555,20 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 					// provider failure still counts against key health and the
 					// breaker, exactly like a pre-data failure; a caller-cancelled
 					// context counts against neither.
-					if ctx.Err() == nil && (IsRetryable(err) || IsAuthError(err)) {
+					switch {
+					case ctx.Err() != nil:
+						// Caller cancelled — not a provider failure. Re-arm a
+						// consumed half-open probe so it doesn't strand traffic.
+						pc.breaker.ReleaseProbe(probeTok)
+					case IsRetryable(err) || IsAuthError(err):
 						pc.markFailed(usedName, err)
 						if !IsAuthError(err) {
-							pc.breaker.RecordFailure()
+							pc.breaker.recordFailure(probeTok)
 						}
+					default:
+						// Non-retryable, non-auth (e.g. 400): endpoint reachable,
+						// not a breaker failure; re-arm a consumed half-open probe.
+						pc.breaker.ReleaseProbe(probeTok)
 					}
 					rc.Release()
 					yield(StreamEvent{}, err)
@@ -544,7 +577,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				firstEvent = false
 				if !yield(event, nil) {
 					pc.pool.MarkSuccessByName(usedName)
-					pc.breaker.RecordSuccess()
+					pc.breaker.recordSuccess(probeTok)
 					rc.Release()
 					return
 				}
@@ -555,12 +588,14 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			if !retryable {
 				// Stream completed normally
 				pc.pool.MarkSuccessByName(usedName)
-				pc.breaker.RecordSuccess()
+				pc.breaker.recordSuccess(probeTok)
 				return
 			}
 
 			// The caller's context is done — not a provider failure (see Complete).
+			// Re-arm a consumed half-open probe so cancellation doesn't wedge it.
 			if ctx.Err() != nil {
+				pc.breaker.ReleaseProbe(probeTok)
 				yield(StreamEvent{}, lastErr)
 				return
 			}
@@ -569,12 +604,17 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 
 			// Auth errors do NOT trip the circuit — bad key ≠ broken endpoint
 			if !IsAuthError(lastErr) {
-				pc.breaker.RecordFailure()
+				pc.breaker.recordFailure(probeTok)
 			}
 
 			// Pre-data retryable error — rotate and retry
 			pc.markFailed(usedName, lastErr)
 			if rotErr := pc.rotateClient(usedName); rotErr != nil {
+				// Pool closed concurrently — fail fast rather than backing off.
+				if errors.Is(rotErr, ErrClientClosed) {
+					yield(StreamEvent{}, ErrClientClosed)
+					return
+				}
 				// Rotation failed (all keys in cooldown or single-key pool).
 				// Auth errors are permanent — no point retrying with the same dead key.
 				if IsAuthError(lastErr) {
@@ -650,6 +690,18 @@ func (pc *PooledClient) rotateClient(failedName string) error {
 	}
 
 	pc.mu.Lock()
+	if pc.rc == nil {
+		// The pool was closed concurrently: Close() niled rc (and released the
+		// pool's own reference) while we were creating newClient outside the
+		// lock. Do NOT resurrect rc — that would leak a client that nothing will
+		// ever Close, and calling Release() on the nil old reference would panic.
+		// Close the just-created client and report the pool closed.
+		pc.mu.Unlock()
+		if cerr := newClient.Close(); cerr != nil {
+			slog.Warn("rotate: closing client created for an already-closed pool", "error", cerr)
+		}
+		return ErrClientClosed
+	}
 	old := pc.rc
 	pc.rc = newRefCountedClient(newClient)
 	pc.activeName = profile.Name

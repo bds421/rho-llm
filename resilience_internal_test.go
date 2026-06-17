@@ -9,6 +9,9 @@ import (
 	"errors"
 	"iter"
 	"net/url"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -65,6 +68,171 @@ func (c *scriptedStreamClient) Stream(_ context.Context, _ Request) iter.Seq2[St
 func (c *scriptedStreamClient) Provider() string { return "test" }
 func (c *scriptedStreamClient) Model() string    { return "test-model" }
 func (c *scriptedStreamClient) Close() error     { return nil }
+
+// alwaysOverloadedClient always returns a retryable 503, ignoring its context —
+// it forces the pool to rotate (Complete) or treat the failure as retryable.
+type alwaysOverloadedClient struct{}
+
+func (c *alwaysOverloadedClient) Complete(_ context.Context, _ Request) (*Response, error) {
+	return nil, NewOverloadedError("test", "503 always")
+}
+
+func (c *alwaysOverloadedClient) Stream(_ context.Context, _ Request) iter.Seq2[StreamEvent, error] {
+	return func(yield func(StreamEvent, error) bool) {
+		yield(StreamEvent{}, NewOverloadedError("test", "503 always"))
+	}
+}
+
+func (c *alwaysOverloadedClient) Provider() string { return "test" }
+func (c *alwaysOverloadedClient) Model() string    { return "test-model" }
+func (c *alwaysOverloadedClient) Close() error     { return nil }
+
+// probeTestClient runs a swappable per-call behavior, so a test can open the
+// breaker and then control what the half-open probe and the following request
+// each return. Safe for concurrent use.
+type probeTestClient struct {
+	fn atomic.Pointer[func(context.Context) (*Response, error)]
+}
+
+func newProbeTestClient(f func(context.Context) (*Response, error)) *probeTestClient {
+	c := &probeTestClient{}
+	c.fn.Store(&f)
+	return c
+}
+
+func (c *probeTestClient) set(f func(context.Context) (*Response, error)) { c.fn.Store(&f) }
+
+func (c *probeTestClient) Complete(ctx context.Context, _ Request) (*Response, error) {
+	return (*c.fn.Load())(ctx)
+}
+
+func (c *probeTestClient) Stream(ctx context.Context, _ Request) iter.Seq2[StreamEvent, error] {
+	return func(yield func(StreamEvent, error) bool) {
+		resp, err := (*c.fn.Load())(ctx)
+		if err != nil {
+			yield(StreamEvent{}, err)
+			return
+		}
+		yield(StreamEvent{Type: EventDone, StopReason: "end_turn"}, nil)
+		_ = resp
+	}
+}
+
+func (c *probeTestClient) Provider() string { return "test" }
+func (c *probeTestClient) Model() string    { return "test-model" }
+func (c *probeTestClient) Close() error     { return nil }
+
+// halfOpenPool builds a single-key PooledClient whose breaker is OPEN and has
+// cooled, so the NEXT Complete/Stream is admitted as a half-open probe. It
+// returns the pool and its shared client (swap the client's behavior with .set
+// to control the probe and the following request). Key cooldowns are tiny so
+// key health doesn't interfere; the breaker cooldown is 40ms.
+func halfOpenPool(t *testing.T) (*PooledClient, *probeTestClient) {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.CircuitThreshold = 1
+	cfg.CircuitCooldown = 40 * time.Millisecond
+	cfg.CooldownOverload = time.Millisecond
+	cfg.CooldownDefault = time.Millisecond
+	cfg.CooldownRateLimit = time.Millisecond
+	cfg.MaxRetries = 2
+
+	client := newProbeTestClient(func(context.Context) (*Response, error) {
+		return nil, NewOverloadedError("test", "503") // trips the breaker
+	})
+	pc, err := NewPooledClient(cfg, []string{"key-a"}, func(AuthProfile) (Client, error) {
+		return client, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+	_, _ = pc.Complete(context.Background(), Request{}) // one failure opens it (threshold 1)
+	if pc.breaker.State() != CircuitOpen {
+		t.Fatalf("setup: breaker not open, got %v", pc.breaker.State())
+	}
+	time.Sleep(50 * time.Millisecond) // let the breaker cooldown elapse
+	return pc, client
+}
+
+func isCircuitOpenErr(err error) bool {
+	return err != nil && (errors.Is(err, ErrCircuitOpen) || strings.Contains(err.Error(), "circuit breaker open"))
+}
+
+// cancelURLError is the *url.Error net/http produces when the caller's context
+// is cancelled (looks like a net.Error to a naive classifier).
+func cancelURLError(ctx context.Context) error {
+	return &url.Error{Op: "Post", URL: "https://api.example.com/v1", Err: ctx.Err()}
+}
+
+// R2: the Complete caller-cancel ReleaseProbe wiring — a cancelled half-open
+// probe must re-arm so the NEXT request is admitted, not rejected for an extra
+// breaker cooldown. Without the pc.breaker.ReleaseProbe call this goes red
+// (the follow-up Complete is rejected with a circuit-open error).
+func TestPoolCompleteCancelReArmsHalfOpenProbe(t *testing.T) {
+	pc, client := halfOpenPool(t)
+	defer pc.Close()
+
+	client.set(func(ctx context.Context) (*Response, error) { return nil, cancelURLError(ctx) })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = pc.Complete(ctx, Request{}) // the half-open probe, caller-cancelled
+
+	client.set(func(context.Context) (*Response, error) { return &Response{Content: "ok"}, nil })
+	_, err := pc.Complete(context.Background(), Request{})
+	if isCircuitOpenErr(err) {
+		t.Fatalf("cancelled half-open probe was not re-armed: next request rejected: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("unexpected error after a re-armed probe: %v", err)
+	}
+}
+
+// R2: the Complete non-retryable-non-auth (e.g. 400) ReleaseProbe wiring — a
+// reachable endpoint returning a client-side error is not a breaker failure, so
+// it must re-arm the probe rather than wedge the circuit for an extra cooldown.
+func TestPoolCompleteNonRetryableReArmsHalfOpenProbe(t *testing.T) {
+	pc, client := halfOpenPool(t)
+	defer pc.Close()
+
+	client.set(func(context.Context) (*Response, error) {
+		return nil, &APIError{StatusCode: 400, Message: "bad request", Provider: "test", Retryable: false}
+	})
+	_, _ = pc.Complete(context.Background(), Request{}) // the half-open probe, 400
+
+	client.set(func(context.Context) (*Response, error) { return &Response{Content: "ok"}, nil })
+	_, err := pc.Complete(context.Background(), Request{})
+	if isCircuitOpenErr(err) {
+		t.Fatalf("400 half-open probe was not re-armed: next request rejected: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("unexpected error after a re-armed probe: %v", err)
+	}
+}
+
+// R2: the Stream caller-cancel ReleaseProbe wiring — same invariant on the
+// streaming pre-data path.
+func TestPoolStreamCancelReArmsHalfOpenProbe(t *testing.T) {
+	pc, client := halfOpenPool(t)
+	defer pc.Close()
+
+	client.set(func(ctx context.Context) (*Response, error) { return nil, cancelURLError(ctx) })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, err := range pc.Stream(ctx, Request{}) { // the half-open probe, cancelled
+		_ = err
+	}
+
+	client.set(func(context.Context) (*Response, error) { return &Response{Content: "ok"}, nil })
+	var gotErr error
+	for _, err := range pc.Stream(context.Background(), Request{}) {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if isCircuitOpenErr(gotErr) {
+		t.Fatalf("cancelled half-open stream probe was not re-armed: %v", gotErr)
+	}
+}
 
 // poolHealth reports whether the single profile of pc is still usable and the
 // breaker state, under the pool's lock.
@@ -226,5 +394,222 @@ func TestCircuitBreakerAbandonedProbeDoesNotWedgeHalfOpen(t *testing.T) {
 	time.Sleep(25 * time.Millisecond)
 	if !cb.Allow() {
 		t.Fatal("abandoned probe wedged the circuit half-open: no new probe after another cooldown")
+	}
+}
+
+// Close() concurrent with an in-flight Complete that is mid-rotation must not
+// panic (Release on a nil refCountedClient) or resurrect/leak a client. The
+// factory deterministically signals when a rotation is in flight (its 2nd call,
+// which happens between GetAvailable and the rc swap) and holds that window open
+// so Close races the swap every iteration. Without the closed-check in
+// rotateClient, `old := pc.rc` reads nil and old.Release() panics.
+func TestCloseDuringRotationDoesNotPanic(t *testing.T) {
+	// Millisecond cooldowns + a bounded context so that an iteration where Close
+	// loses the 300us window (rotation completes, both keys then 503 into
+	// cooldown) backs off in ms and the context expires fast — instead of the
+	// Complete goroutine sleeping a 30s default cooldown on a Background context.
+	cfg := DefaultConfig()
+	cfg.CooldownOverload = time.Millisecond
+	cfg.CooldownDefault = time.Millisecond
+	cfg.CooldownRateLimit = time.Millisecond
+
+	for it := 0; it < 100; it++ {
+		var calls atomic.Int32
+		inRotate := make(chan struct{})
+		factory := func(AuthProfile) (Client, error) {
+			// Call 1 is NewPooledClient's initial client; call 2 is the first
+			// rotation — we're now inside rotateClient, before the rc swap.
+			if calls.Add(1) == 2 {
+				close(inRotate)
+				time.Sleep(300 * time.Microsecond) // hold the rotate window open
+			}
+			return &alwaysOverloadedClient{}, nil
+		}
+		pc, err := NewPooledClient(cfg, []string{"key-a", "key-b"}, factory)
+		if err != nil {
+			t.Fatalf("NewPooledClient: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = pc.Complete(ctx, Request{}) // forces a rotation
+		}()
+		go func() {
+			defer wg.Done()
+			<-inRotate     // wait until a rotation is mid-flight
+			_ = pc.Close() // race the rc swap
+		}()
+		wg.Wait()
+		cancel()
+
+		// After Close races the rotation, the pool must be truly closed: rc nil,
+		// nothing resurrected. Without the closed-check, rotateClient sets
+		// pc.rc = newRefCountedClient(...) after Close already niled it — a client
+		// that nothing will ever Close. (This catches the bug even when the
+		// nil-safe Release suppresses the would-be panic.)
+		pc.mu.Lock()
+		leaked := pc.rc != nil
+		pc.mu.Unlock()
+		if leaked {
+			t.Fatalf("iter %d: rotateClient resurrected rc after Close — leaked client", it)
+		}
+	}
+}
+
+// #14: isolates the pool.go `if ctx.Err() != nil` early-return from the
+// IsRetryable(context.Canceled)==false classification. The client returns a
+// *retryable* 503 (not context.Canceled) while the caller's context is already
+// cancelled. IsRetryable(503)==true, so only the pool's early-return keeps this
+// from recording a breaker failure / cooling the key. Remove that early-return
+// and the breaker trips — proving this test pins it.
+func TestCompleteCancelledContextWithRetryableErrorDoesNotPoisonPool(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.CircuitThreshold = 1
+	pc, err := NewPooledClient(cfg, []string{"key-a"}, func(AuthProfile) (Client, error) {
+		return &alwaysOverloadedClient{}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+	defer pc.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err = pc.Complete(ctx, Request{}); err == nil {
+		t.Fatal("want error from cancelled context")
+	}
+	available, state := poolHealth(pc)
+	if state != CircuitClosed {
+		t.Fatalf("retryable error under a cancelled context tripped the breaker: state=%v", state)
+	}
+	if !available {
+		t.Fatal("retryable error under a cancelled context put the key in cooldown")
+	}
+}
+
+// The half-open probe re-arm (ReleaseProbe): a probe admitted but whose outcome
+// is non-diagnostic (caller cancelled, or a client-side 400) must not strand
+// other traffic for a full extra cooldown. ReleaseProbe re-admits a fresh probe
+// immediately. Without the re-arm, the second Allow() below stays rejected.
+func TestCircuitBreakerReleaseProbeReArmsHalfOpen(t *testing.T) {
+	cb := NewCircuitBreaker(1, 50*time.Millisecond)
+	cb.RecordFailure() // open
+	if cb.Allow() {
+		t.Fatal("circuit must be open immediately after the failure")
+	}
+	time.Sleep(60 * time.Millisecond)
+	admitted, tok := cb.allow()
+	if !admitted {
+		t.Fatal("cooldown elapsed — the first probe must be admitted")
+	}
+	if tok == 0 {
+		t.Fatal("a half-open probe admission must return a non-zero probe token")
+	}
+	if cb.State() != CircuitHalfOpen {
+		t.Fatalf("want half-open after admitting a probe, got %v", cb.State())
+	}
+	if cb.Allow() {
+		t.Fatal("a second request must be rejected while the probe is in flight")
+	}
+	// The probe's outcome was non-diagnostic — re-arm instead of recording.
+	cb.ReleaseProbe(tok)
+	if !cb.Allow() {
+		t.Fatal("ReleaseProbe must re-admit a fresh probe immediately, not after another cooldown")
+	}
+	if cb.State() != CircuitHalfOpen {
+		t.Fatal("still half-open until a probe actually resolves")
+	}
+}
+
+// Probe identity: ReleaseProbe must re-arm ONLY the probe its token identifies.
+// A stale token — from a request that never held the probe slot (admitted while
+// closed → token 0) or that has been superseded by a newer probe — must be
+// ignored, otherwise a second concurrent probe would be admitted while the live
+// one is still in flight (violating "one probe at a time").
+func TestCircuitBreakerReleaseProbeIgnoresForeignToken(t *testing.T) {
+	cb := NewCircuitBreaker(1, 50*time.Millisecond)
+
+	// A request admitted while CLOSED never holds a probe slot → token 0.
+	admitted, closedTok := cb.allow()
+	if !admitted || closedTok != 0 {
+		t.Fatalf("closed admission: admitted=%v token=%d, want true/0", admitted, closedTok)
+	}
+
+	// Trip open, cool down, admit the real single probe.
+	cb.RecordFailure()
+	time.Sleep(60 * time.Millisecond)
+	_, probeTok := cb.allow()
+	if probeTok == 0 {
+		t.Fatal("half-open probe admission must return a non-zero token")
+	}
+	if cb.Allow() {
+		t.Fatal("a second request must be rejected while the probe is in flight")
+	}
+
+	// The closed-admitted request returns/cancels and calls ReleaseProbe with its
+	// (zero) token — must NOT re-arm the live probe.
+	cb.ReleaseProbe(closedTok)
+	if cb.Allow() {
+		t.Fatal("a foreign/zero token re-armed the live probe — would admit a 2nd concurrent probe")
+	}
+
+	// Re-arm with the real token (admits a fresh probe, bumping the generation),
+	// then replay the now-superseded token — it must be ignored.
+	cb.ReleaseProbe(probeTok)
+	_, newTok := cb.allow()
+	if newTok == probeTok {
+		t.Fatal("a re-armed probe must get a fresh token/generation")
+	}
+	cb.ReleaseProbe(probeTok)
+	if cb.Allow() {
+		t.Fatal("a superseded token re-armed the current probe — would admit a 2nd concurrent probe")
+	}
+}
+
+// Probe identity for outcome recording: a half-open probe is single-owner, so a
+// stale/foreign success must not CLOSE it and a stale/foreign failure must not
+// RE-OPEN it — only the request holding the current probe (or the public
+// wildcard) may resolve the circuit. Without the probeGen check, a request
+// admitted while the circuit was closed (token 0) that resolves late would flip
+// an unrelated goroutine's probe.
+func TestCircuitBreakerRecordIgnoresForeignToken(t *testing.T) {
+	// recordSuccess: a foreign success must not close the live probe.
+	cb := NewCircuitBreaker(1, 50*time.Millisecond)
+	_, closedTok := cb.allow() // admitted while closed → token 0
+	if closedTok != 0 {
+		t.Fatalf("closed admission token = %d, want 0", closedTok)
+	}
+	cb.RecordFailure() // open (threshold 1)
+	time.Sleep(60 * time.Millisecond)
+	_, probeTok := cb.allow() // the half-open probe
+	if cb.State() != CircuitHalfOpen {
+		t.Fatalf("want half-open after admitting the probe, got %v", cb.State())
+	}
+	cb.recordSuccess(closedTok) // the closed-admitted request resolves late
+	if cb.State() != CircuitHalfOpen {
+		t.Fatalf("a foreign success closed the live probe: state=%v", cb.State())
+	}
+	cb.recordSuccess(probeTok) // the probe's own success
+	if cb.State() != CircuitClosed {
+		t.Fatalf("the probe's own success did not close the circuit: state=%v", cb.State())
+	}
+
+	// recordFailure: a foreign failure must not re-open the live probe.
+	cb2 := NewCircuitBreaker(1, 50*time.Millisecond)
+	_, closedTok2 := cb2.allow() // token 0
+	cb2.RecordFailure()          // open
+	time.Sleep(60 * time.Millisecond)
+	_, probeTok2 := cb2.allow() // the half-open probe
+	cb2.recordFailure(closedTok2)
+	if cb2.State() != CircuitHalfOpen {
+		t.Fatalf("a foreign failure changed the live probe: state=%v", cb2.State())
+	}
+	cb2.recordFailure(probeTok2) // the probe's own failure
+	if cb2.State() != CircuitOpen {
+		t.Fatalf("the probe's own failure did not re-open the circuit: state=%v", cb2.State())
 	}
 }

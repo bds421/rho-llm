@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	llm "github.com/bds421/rho-llm"
 	"github.com/bds421/rho-llm/provider/anthropic"
 	"github.com/bds421/rho-llm/provider/gemini"
+	"github.com/bds421/rho-llm/provider/openaicompat"
 	"github.com/bds421/rho-llm/provider/openairesponses"
 )
 
@@ -156,6 +158,26 @@ func TestStreamGarbageAfterDoneIgnored(t *testing.T) {
 		done, errs := drain(t, c)
 		if !done || errs != 0 {
 			t.Fatalf("done=%v errs=%d — trailing garbage after Done not ignored", done, errs)
+		}
+	})
+
+	// openai_compat structurally CANNOT return right after finish_reason: usage
+	// arrives in a separate trailing chunk, so the scan continues. A garbage line
+	// after finish_reason+usage but with NO [DONE] (what loose local servers like
+	// Ollama/vLLM/LM Studio emit) must be ignored, not surfaced as an error that
+	// masks the completed turn.
+	t.Run("openaicompat", func(t *testing.T) {
+		srv := sseSrv(
+			`data: {"choices":[{"delta":{"content":"hi"}}]}`,
+			`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+			`data: {GARBAGE not json}`, // no [DONE] — trailing noise
+		)
+		defer srv.Close()
+		c, _ := openaicompat.New(llm.Config{Provider: "openai", Model: "gpt-4.1", APIKey: "k", BaseURL: srv.URL, Timeout: 10 * time.Second})
+		done, errs := drain(t, c)
+		if !done || errs != 0 {
+			t.Fatalf("done=%v errs=%d — trailing garbage after finish_reason not ignored", done, errs)
 		}
 	})
 }
@@ -310,6 +332,18 @@ func TestFileStoreConcurrentSaveLoadDelete(t *testing.T) {
 	wg.Wait()
 	if corrupt != nil {
 		t.Fatalf("concurrent store ops produced an error: %v", corrupt)
+	}
+
+	// The atomic-save path (temp file + rename) must never leak a temp file,
+	// regardless of which op ran last under contention.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("leftover temp file from atomic save: %s", e.Name())
+		}
 	}
 }
 

@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-17
+
+Patch release. A review pass over the v0.4.0 hardening — and an adversarial self-review of
+that pass — found and fixed a crash, several streaming/registry correctness gaps, and a
+circuit-breaker probe-identity concurrency flaw. Each fix ships with a regression test that
+fails without it; `make ci` is clean (race + gosec + govulncheck).
+
+### Fixed
+
+- **`Close()` racing key rotation no longer panics or leaks a client** — `rotateClient`
+  swapped `pc.rc` under the pool mutex but never checked whether `Close()` had concurrently
+  niled it; the window between creating the new client and re-taking the lock let `Close()`
+  interleave, after which `old.Release()` dereferenced a nil `*refCountedClient` (panic) and
+  the just-created client was resurrected into `pc.rc` and never closed (leak). `rotateClient`
+  now bails out as `ErrClientClosed` (closing the new client) when the pool was closed, and
+  `refCountedClient.Acquire`/`Release` are nil-safe. Close-during-rotation is inside the
+  intended concurrency envelope, so this was reachable in normal teardown.
+- **Streamed `openai_responses` tool calls report `tool_use`** — the streaming
+  `response.completed` handler hardcoded `end_turn`, so a streamed turn that emitted function
+  calls disagreed with the non-streaming path (which reports `tool_use`). An agent loop keying
+  on `resp.StopReason == StopToolUse` stopped after a streamed tool call despite a populated
+  `ToolCalls`. The stream now reports `tool_use` when it emitted a function call.
+- **`openai_compat` trailing noise no longer masks a completed turn** — unlike the other
+  adapters it cannot return on the terminal event (usage arrives in a later chunk), so a
+  malformed SSE line after `finish_reason` but before/without `[DONE]` (common from
+  Ollama/vLLM/LM Studio) surfaced as a spurious error and made a `Session` drop the turn. A
+  malformed line after `finish_reason` is now ignored as trailing noise.
+- **Anthropic flushes the *terminal* tool call on a missing `content_block_stop`** — the
+  v0.4.0 flush-on-new-block fix did not cover the final tool block: a dropped
+  `content_block_stop` immediately followed by `message_delta` silently lost the accumulated
+  call while still reporting a clean `tool_use` turn. `message_delta` now flushes a pending
+  tool call before emitting `EventDone`.
+- **`StreamWithBoundaries` honors a consumer that stops on the error path** — on an
+  underlying-stream error it closed the open block and then called `yield` again
+  unconditionally; if the consumer stopped during the injected block-`End`, the extra `yield`
+  violated the `iter.Seq2` contract and could panic composed iterators. It now returns when
+  `closeBlock()` reports the consumer stopped.
+- **`RegisterModel` overrides reach discovery** — the append to `availableModels` was gated on
+  the model being new, so correcting a built-in already in the registry but absent from the
+  curated list (20 such built-ins) never surfaced it in `GetAvailableModels`, and an override
+  that changed a model's provider left a stale entry. The discovery list is now kept in sync
+  on every override (add to the new provider, remove from the old, never duplicate).
+- **Caller cancellation / client-side errors can't wedge a half-open circuit** — a half-open
+  probe that returned via caller cancellation or a non-retryable client error (e.g. 400)
+  recorded neither success nor failure, stranding other traffic until a second cooldown
+  elapsed. The breaker now re-arms the probe (`CircuitBreaker.ReleaseProbe(token)`) on those
+  paths so a fresh probe is admitted immediately.
+- **The half-open probe is now strictly single-owner** — the breaker's admission path hands
+  back a probe token, and probe re-arm *and* outcome recording are scoped to it: `ReleaseProbe`,
+  and (internally) the pool's success/failure recording, act only on the request holding the
+  current probe. A stale or foreign outcome — from a request admitted while the circuit was
+  closed (token 0), or whose probe a newer one already superseded — can no longer re-arm,
+  close, or re-open an unrelated goroutine's in-flight probe (which could otherwise admit a
+  second concurrent probe or flip the circuit state). The public `RecordSuccess`/`RecordFailure`
+  keep their original state-based behavior for direct callers (e.g. `Execute`).
+
+### Changed
+
+- **`RegisterModelAlias` rejects an alias key that equals a real model ID** — such an alias
+  would silently shadow the model (aliases resolve first), redirecting every request for it.
+  It is now rejected with an error.
+- **`FileStore.Save` is durable, not just reader-atomic** — it now `fsync`s the temp file
+  before the rename and best-effort `fsync`s the directory after, so the documented
+  crash-safety holds across a power loss, not only for concurrent readers.
+- **Removed dead circuit-breaker configuration** — `NewPooledClient` wired a
+  `WithSuccessPredicate` that the pool's manual `Allow`/`RecordSuccess`/`RecordFailure` drive
+  never consults (the auth-error exemption is applied inline); the misleading dead config is
+  gone.
+
+### Documentation
+
+- **Backfilled two v0.4.0 changelog omissions** (the `[0.4.0]` section itself is left frozen
+  to match its tag): **R-M3** — `IsRetryable` classifies a `*tls.CertificateVerificationError`
+  as non-retryable (an endpoint-identity/configuration problem no retry or key rotation can
+  fix; it previously surfaced as a `net.Error` and was retried); and **R-L6** — `SSEData(line)`
+  is the shared SSE `data:` parser hoisted out of the four adapters. Both shipped in v0.4.0;
+  only their changelog entries were missing.
+
 ## [0.4.0] - 2026-06-10
 
 This release lands the fixes from the 2026-06-10 architecture review (finding ids

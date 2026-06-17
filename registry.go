@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -432,9 +433,22 @@ func RegisterModel(info ModelInfo) error {
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	_, existed := modelRegistry[info.ID]
+	prev, existed := modelRegistry[info.ID]
 	modelRegistry[info.ID] = info
-	if !existed {
+
+	// Keep availableModels (the discovery list) in sync with modelRegistry,
+	// independent of whether the model already existed. Two cases the old
+	// `if !existed` guard got wrong: (1) correcting a built-in that is in
+	// modelRegistry but absent from availableModels — it must now surface in
+	// discovery; (2) an override that moves a model to a different provider —
+	// it must leave the old provider's list.
+	if existed && prev.Provider != info.Provider {
+		availableModels[prev.Provider] = slices.DeleteFunc(
+			availableModels[prev.Provider],
+			func(id string) bool { return id == info.ID },
+		)
+	}
+	if !slices.Contains(availableModels[info.Provider], info.ID) {
 		availableModels[info.Provider] = append(availableModels[info.Provider], info.ID)
 	}
 	return nil
@@ -451,6 +465,12 @@ func RegisterModelAlias(alias, modelID string) error {
 	defer registryMu.Unlock()
 	if _, ok := modelRegistry[modelID]; !ok {
 		return fmt.Errorf("llm: RegisterModelAlias: unknown model %q (register it first)", modelID)
+	}
+	// An alias key that collides with a real model ID would silently shadow that
+	// model: ResolveModelAlias checks aliases first, so every request for the real
+	// model would be redirected to the alias target. Reject it.
+	if _, ok := modelRegistry[alias]; ok {
+		return fmt.Errorf("llm: RegisterModelAlias: alias %q is already a registered model ID (would shadow it)", alias)
 	}
 	modelAliases[alias] = modelID
 	return nil

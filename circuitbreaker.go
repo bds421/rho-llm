@@ -71,6 +71,7 @@ type CircuitBreaker struct {
 	cooldown      time.Duration
 	openedAt      time.Time
 	probeStarted  time.Time // when the current half-open probe was admitted
+	probeGen      uint64    // identity of the current half-open probe (bumped on each admission)
 	isSuccess     func(error) bool
 	onStateChange func(from, to CircuitState)
 }
@@ -93,27 +94,40 @@ func NewCircuitBreaker(threshold int, cooldown time.Duration, opts ...CircuitBre
 // Returns false if the circuit is open and cooldown has not elapsed.
 // Nil-safe: always returns true on nil receiver.
 func (cb *CircuitBreaker) Allow() bool {
+	admitted, _ := cb.allow()
+	return admitted
+}
+
+// allow is Allow with probe identity. When it admits a half-open probe it
+// returns a non-zero probeToken uniquely identifying that probe, so the caller
+// can later ReleaseProbe(token) for *its own* probe rather than an unrelated one
+// admitted by another goroutine in the meantime. A request admitted while the
+// circuit is closed (or rejected) returns token 0 — it never held a probe slot.
+// Nil-safe: returns (true, 0).
+func (cb *CircuitBreaker) allow() (admitted bool, probeToken uint64) {
 	if cb == nil {
-		return true
+		return true, 0
 	}
 	cb.mu.Lock()
 
 	switch cb.state {
 	case CircuitClosed:
 		cb.mu.Unlock()
-		return true
+		return true, 0
 	case CircuitOpen:
 		if time.Since(cb.openedAt) >= cb.cooldown {
 			from, to, changed := cb.setStateLocked(CircuitHalfOpen)
 			cb.probeStarted = time.Now()
+			cb.probeGen++
+			tok := cb.probeGen
 			cb.mu.Unlock()
 			if changed {
 				cb.fireCallback(from, to)
 			}
-			return true
+			return true, tok
 		}
 		cb.mu.Unlock()
-		return false
+		return false, 0
 	case CircuitHalfOpen:
 		// Only one probe at a time; additional requests are rejected until the
 		// probe completes. If the probe never reports back (abandoned iterator,
@@ -121,24 +135,48 @@ func (cb *CircuitBreaker) Allow() bool {
 		// than wedging half-open forever.
 		if time.Since(cb.probeStarted) >= cb.cooldown {
 			cb.probeStarted = time.Now()
+			cb.probeGen++
+			tok := cb.probeGen
 			cb.mu.Unlock()
-			return true
+			return true, tok
 		}
 		cb.mu.Unlock()
-		return false
+		return false, 0
 	default:
 		cb.mu.Unlock()
-		return true
+		return true, 0
 	}
 }
+
+// anyProbe is the wildcard probe token used by the public RecordSuccess /
+// RecordFailure: it bypasses the half-open probe-identity check, preserving
+// their original state-blind behavior for direct callers (e.g. Execute, which
+// runs Allow→fn→Record in one goroutine). The pool passes the real token from
+// allow() so a stale/foreign outcome can't resolve a probe it doesn't own.
+// (probeGen would have to wrap 2^64 admissions to collide with this.)
+const anyProbe = ^uint64(0)
 
 // RecordSuccess resets the failure counter and closes the circuit if half-open.
 // Nil-safe: no-op on nil receiver.
 func (cb *CircuitBreaker) RecordSuccess() {
+	cb.recordSuccess(anyProbe)
+}
+
+// recordSuccess is RecordSuccess scoped to a probe token. When the circuit is
+// half-open, only the caller holding the current probe (token == probeGen, or
+// the anyProbe wildcard) may close it; a stale/foreign success — from a request
+// admitted while the circuit was closed (token 0), or whose probe a newer one
+// already superseded — is ignored so it can't close a probe it doesn't own.
+// Nil-safe.
+func (cb *CircuitBreaker) recordSuccess(token uint64) {
 	if cb == nil {
 		return
 	}
 	cb.mu.Lock()
+	if cb.state == CircuitHalfOpen && token != anyProbe && cb.probeGen != token {
+		cb.mu.Unlock()
+		return
+	}
 	cb.failures = 0
 	from, to, changed := CircuitClosed, CircuitClosed, false
 	if cb.state == CircuitHalfOpen {
@@ -155,10 +193,25 @@ func (cb *CircuitBreaker) RecordSuccess() {
 // it re-opens immediately.
 // Nil-safe: no-op on nil receiver.
 func (cb *CircuitBreaker) RecordFailure() {
+	cb.recordFailure(anyProbe)
+}
+
+// recordFailure is RecordFailure scoped to a probe token. When the circuit is
+// half-open, only the caller holding the current probe (or the anyProbe
+// wildcard) may re-open it; a stale/foreign failure is ignored — the unhealthy
+// signal is already reflected in the open/half-open state, so dropping it can't
+// lose information but does stop it re-opening an unrelated goroutine's probe.
+// In the closed state the token is irrelevant: every failure counts toward the
+// threshold. Nil-safe.
+func (cb *CircuitBreaker) recordFailure(token uint64) {
 	if cb == nil {
 		return
 	}
 	cb.mu.Lock()
+	if cb.state == CircuitHalfOpen && token != anyProbe && cb.probeGen != token {
+		cb.mu.Unlock()
+		return
+	}
 	cb.failures++
 
 	var from, to CircuitState
@@ -203,6 +256,32 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 	}
 	cb.RecordFailure()
 	return err
+}
+
+// ReleaseProbe re-arms the half-open probe identified by token — admitted but
+// whose outcome is non-diagnostic (the caller cancelled before it resolved, or
+// it drew a client-side error like 400 that says nothing about endpoint health).
+// It records neither success nor failure: the circuit stays half-open, but the
+// next allow() admits a fresh probe immediately instead of stranding real
+// traffic for a full extra cooldown.
+//
+// token is the value allow() returned when it admitted this request as a probe.
+// Re-arming is single-owner: a token of 0 (the request was admitted while
+// closed, so it never held a probe slot) is a no-op, and so is a token that a
+// newer probe has already superseded. This prevents a stale cancel/error from
+// resetting an unrelated goroutine's in-flight probe (which would admit a second
+// concurrent probe). No-op unless still half-open with this exact probe. Nil-safe.
+func (cb *CircuitBreaker) ReleaseProbe(token uint64) {
+	if cb == nil || token == 0 {
+		return
+	}
+	cb.mu.Lock()
+	if cb.state == CircuitHalfOpen && cb.probeGen == token {
+		// Zero time reads as "probe elapsed" to allow's half-open branch, so the
+		// next caller is admitted as a fresh probe.
+		cb.probeStarted = time.Time{}
+	}
+	cb.mu.Unlock()
 }
 
 // State returns the current circuit state.

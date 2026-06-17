@@ -13,6 +13,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -137,6 +138,7 @@ func TestAnthropicTwoToolBlocksWithoutStopBothEmitted(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := anthropic.New(llm.Config{Provider: "anthropic", Model: "claude-sonnet-4-6", APIKey: "k", BaseURL: srv.URL, Timeout: 10 * time.Second})
+	inputs := map[string]any{}
 	var ids []string
 	for ev, err := range c.Stream(context.Background(), llm.Request{Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "x")}}) {
 		if err != nil {
@@ -144,10 +146,22 @@ func TestAnthropicTwoToolBlocksWithoutStopBothEmitted(t *testing.T) {
 		}
 		if ev.Type == llm.EventToolUse && ev.ToolCall != nil {
 			ids = append(ids, ev.ToolCall.ID)
+			inputs[ev.ToolCall.ID] = ev.ToolCall.Input
 		}
 	}
 	if len(ids) != 2 {
 		t.Fatalf("got tool calls %v, want both call_A and call_B — first lost on missing content_block_stop", ids)
+	}
+	// The whole point of the flush-on-new-block fix is that call_A's ACCUMULATED
+	// input survives — not just its ID. Pin the parsed input for both calls so a
+	// regression that emitted call_A with empty/garbage input would still fail.
+	wantA := map[string]any{"a": float64(1)}
+	wantB := map[string]any{"b": float64(2)}
+	if got, ok := inputs["call_A"].(map[string]any); !ok || !reflect.DeepEqual(got, wantA) {
+		t.Fatalf("call_A input = %#v, want %#v — accumulated input lost on missing stop", inputs["call_A"], wantA)
+	}
+	if got, ok := inputs["call_B"].(map[string]any); !ok || !reflect.DeepEqual(got, wantB) {
+		t.Fatalf("call_B input = %#v, want %#v", inputs["call_B"], wantB)
 	}
 }
 

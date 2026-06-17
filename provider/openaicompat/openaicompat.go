@@ -577,6 +577,16 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			// Unlike the other adapters, this one cannot return immediately on the
+			// terminal event: usage arrives in a SEPARATE chunk after
+			// finish_reason, so the scan must continue past it. Once the turn has
+			// completed (finish_reason captured), a later malformed line is
+			// trailing server noise — exactly what loose local servers
+			// (Ollama/vLLM/LM Studio) emit before/without [DONE]. Ignore it rather
+			// than surfacing a spurious error that would mask the completed turn.
+			if finishReason != "" {
+				continue
+			}
 			if !yield(llm.StreamEvent{}, fmt.Errorf("malformed SSE event from %s: %w", c.providerName, err)) {
 				return
 			}

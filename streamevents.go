@@ -44,8 +44,13 @@ func StreamWithBoundaries(seq iter.Seq2[StreamEvent, error]) iter.Seq2[StreamEve
 		for ev, err := range seq {
 			if err != nil {
 				// Close any open block first so every Start has a matching End,
-				// even when the underlying stream errors mid-block.
-				closeBlock()
+				// even when the underlying stream errors mid-block. If the
+				// consumer stops during that injected End event, honor it and do
+				// NOT call yield again — calling yield after it has returned false
+				// violates the iter.Seq2 contract and can panic composed iterators.
+				if !closeBlock() {
+					return
+				}
 				yield(StreamEvent{}, err)
 				return
 			}

@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of June 2026 (v0.4.0).
+> **Status:** Reflects the actual implementation as of June 2026 (v0.4.1).
 
 ---
 
@@ -374,9 +374,10 @@ CircuitHalfOpen ──(probe failure)──────────────�
 - **Nil-safe:** all methods are no-ops on nil receiver (circuit always allows)
 - **Thread-safe:** `sync.Mutex` protects all state transitions
 - **Callback-safe:** `WithOnStateChange` callbacks are invoked outside the mutex, so they may safely call back into the circuit breaker
-- **Auth-aware:** `WithSuccessPredicate` excludes auth errors from failure counting (bad key ≠ broken endpoint)
+- **Auth-aware:** the optional `WithSuccessPredicate` lets `Execute` exclude an error class (e.g. auth errors) from failure counting. The `PooledClient` doesn't use it — it drives the breaker manually and applies the auth exemption inline (bad key ≠ broken endpoint) — so no dead predicate is wired on the pool's breaker.
 - **Fail-fast on open:** when the circuit is open, `Complete` and `Stream` return `ErrCircuitOpen` immediately instead of burning retry iterations
 - **No half-open wedge (v0.4.0):** a half-open probe admits one request and rejects the rest until it reports back. If that probe is abandoned (iterator dropped, goroutine died) without recording success or failure, a fresh probe is admitted after another cooldown elapses rather than wedging the circuit half-open forever.
+- **Probe re-arm (Unreleased):** a probe whose outcome is non-diagnostic — the caller cancelled, or it drew a client-side error (400) that says nothing about endpoint health — is re-armed immediately (`ReleaseProbe`) instead of stranding other traffic for an extra cooldown. Re-arming is probe-identity-scoped (`allow()` hands back a probe token; `ReleaseProbe(token)` re-arms only that exact probe), so a stale cancel/error from a superseded or never-admitted request can't reset an unrelated goroutine's in-flight probe.
 - Enabled by default via `DefaultConfig()` with threshold=5, cooldown=30s
 
 ### Retry Hook (`retrypolicy.go`)
@@ -655,9 +656,9 @@ tokens and pricing once at the end would be wrong when models differ.
 Persistence is a pluggable `Store` (`Save`/`Load`/`Delete` by id) kept **out** of the message
 model: `MemoryStore` (mutex-guarded, stores serialized bytes so loads are independent copies)
 and `FileStore` (one JSON file per id; ids are restricted to a single path segment, so traversal
-like `../evil` is rejected; **writes are atomic** — temp file + rename — so a crash or a
-concurrent reader never sees a half-written conversation, v0.4.0) ship in the library, both
-stdlib-only. Under the hood it is still just
+like `../evil` is rejected; **writes are atomic and durable** — temp file + fsync + rename, then
+a best-effort directory fsync — so neither a concurrent reader nor a crash ever sees a
+half-written conversation, v0.4.0) ship in the library, both stdlib-only. Under the hood it is still just
 `json.Marshal(conv)` / `LoadConversation(blob)`. `LoadConversation` validates
 `schema_version` (tolerating pre-versioned blobs as v1, rejecting versions newer than the
 build) — the format is keyed by explicit JSON tags and is **not** tied to Go type/package

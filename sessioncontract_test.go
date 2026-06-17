@@ -167,6 +167,13 @@ func TestSessionTurnsStillSerialized(t *testing.T) {
 // R-M7: FileStore.Save must be atomic — a reader (or a crash) must never
 // observe a partially written conversation. With in-place writes the file is
 // truncated first, so concurrent readers see invalid JSON.
+//
+// NOTE: this is a *probabilistic* regression test — it relies on a reader
+// landing inside the writer's truncate/write window. Against the buggy
+// (non-atomic) implementation it catches the corruption most of the time but
+// not every run; the deterministic guarantees (no leftover temp file, valid
+// final JSON) are asserted unconditionally below. Run with -count to raise
+// confidence in the racing assertion.
 func TestFileStoreSaveIsAtomic(t *testing.T) {
 	dir := t.TempDir()
 	store := llm.NewFileStore(dir)

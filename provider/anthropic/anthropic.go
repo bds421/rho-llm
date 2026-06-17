@@ -645,6 +645,15 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 
 		case "message_delta":
+			// Flush a still-open tool call before completing. If the final
+			// tool_use block's content_block_stop was dropped (truncated /
+			// spec-violating stream) and message_delta arrives directly, the
+			// accumulated call would otherwise be silently lost while Done still
+			// reports a clean tool_use turn. The new-content_block_start flush
+			// only covers a *following* block; this covers the terminal one.
+			if !flushToolCall() {
+				return
+			}
 			// The terminal event: emit Done and stop. Returning here means any
 			// trailing bytes the server sends after the turn is complete
 			// (including malformed lines) can't surface as a spurious error that

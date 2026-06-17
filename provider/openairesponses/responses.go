@@ -177,6 +177,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// We accumulate deltas as a safety net but prefer the done event's values.
 	var inputBuffer strings.Builder
 	var completed bool
+	var emittedToolCall bool // the stream emitted at least one function call
 
 	for scanner.Scan() {
 		data, ok := llm.SSEData(scanner.Text())
@@ -262,6 +263,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}, nil) {
 				return
 			}
+			emittedToolCall = true
 			inputBuffer.Reset()
 
 		case "response.reasoning_summary_text.delta":
@@ -299,6 +301,14 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				stopReason = "max_tokens"
 			} else if ev.Response.Status == "failed" {
 				stopReason = "error"
+			}
+			// A streamed function call wins over the status-based reason, exactly
+			// like the non-streaming parseResponse path (which unconditionally sets
+			// "tool_use" for any function_call output item, even on an
+			// incomplete/failed status) — so an agent loop keying on StopReason
+			// behaves identically whether it used Complete or Stream.
+			if emittedToolCall {
+				stopReason = llm.StopToolUse
 			}
 			// The terminal event: emit Done and stop. Returning here means any
 			// trailing bytes after the turn is complete (including malformed

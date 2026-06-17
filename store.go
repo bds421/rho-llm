@@ -93,8 +93,10 @@ func (s *FileStore) path(id string) (string, error) {
 }
 
 // Save writes conv to `<dir>/<id>.json` (0600), creating dir if needed.
-// The write is atomic (temp file + rename): a crash mid-write or a concurrent
-// reader can never observe a partially written conversation.
+// The write is atomic and durable (temp file + fsync + rename, then a
+// best-effort directory fsync): a concurrent reader always sees either the old
+// or the new complete file, and a crash mid-write cannot leave a partially
+// written or empty conversation behind.
 func (s *FileStore) Save(_ context.Context, id string, conv *Conversation) error {
 	if conv == nil {
 		return fmt.Errorf("llm: cannot save nil conversation")
@@ -121,6 +123,14 @@ func (s *FileStore) Save(_ context.Context, id string, conv *Conversation) error
 		_ = os.Remove(tmp.Name())
 		return err
 	}
+	// fsync the data before the rename so a crash can't leave the renamed file
+	// pointing at unflushed (empty/partial) contents — this is what makes the
+	// atomicity guarantee hold across a power loss, not just a concurrent reader.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmp.Name())
 		return err
@@ -128,6 +138,13 @@ func (s *FileStore) Save(_ context.Context, id string, conv *Conversation) error
 	if err := os.Rename(tmp.Name(), p); err != nil {
 		_ = os.Remove(tmp.Name())
 		return err
+	}
+	// fsync the directory so the rename itself is durable (best-effort: not all
+	// platforms/filesystems support directory fsync, and a failure here doesn't
+	// invalidate the already-renamed file).
+	if dir, derr := os.Open(s.dir); derr == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
 	}
 	return nil
 }
