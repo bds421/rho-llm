@@ -255,12 +255,20 @@ func doRaw(_ context.Context, cfg Config, httpReq *http.Request) ([]byte, error)
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, cfg.EffectiveMaxResponseBodyBytes()))
+	name := cfg.ProviderName
+	if name == "" {
+		name = cfg.Provider
+	}
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, cfg.EffectiveMaxResponseBodyBytes()))
+	if readErr != nil {
+		// A mid-read failure (connection dropped, Content-Length mismatch) must
+		// abort, not silently return a truncated body. This matters most for raw
+		// payloads like SynthesizeSpeech, where there's no later decode to catch
+		// the truncation. (A LimitReader hitting the cap returns nil error, so a
+		// bounded read is unaffected.)
+		return nil, fmt.Errorf("llm: incomplete response body from %s: %w", name, readErr)
+	}
 	if resp.StatusCode != http.StatusOK {
-		name := cfg.ProviderName
-		if name == "" {
-			name = cfg.Provider
-		}
 		return nil, NewAPIErrorFromStatusWithLimit(name, resp.StatusCode, string(data), cfg.EffectiveMaxErrorMessageLen())
 	}
 	return data, nil

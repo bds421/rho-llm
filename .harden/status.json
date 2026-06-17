@@ -1,10 +1,9 @@
 {
-  "targeted_area": "oauth.go device flow (RFC 8628)",
+  "targeted_area": "capabilities.go (embeddings/image/audio HTTP body integrity)",
   "new_serious_bugs": 1,
-  "tests_added": 3,
+  "tests_added": 1,
   "untested_surface_remaining": true,
   "remaining_areas": [
-    "capabilities.go capability flags vs actual model support",
     "buildRequest with an empty model across the 4 adapters (sends model:\"\")",
     "openai_compat sending a ContentDocument it cannot support (no clear rejection)",
     "ValidateImageSource has no direct test (document validator does)",

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-06-17
+
+Hardening pass 3 — non-chat capabilities (`capabilities.go`).
+
+### Fixed
+
+- **A truncated capabilities response no longer passes as success** — `doRaw` swallowed the
+  HTTP body-read error, so a connection drop mid-read (or a `Content-Length` mismatch) returned
+  a truncated body as complete. For `SynthesizeSpeech` (raw audio, with no later JSON decode to
+  catch it) this was silent data corruption; the read error is now surfaced.
+
 ## [0.4.3] - 2026-06-17
 
 Hardening pass 2 — OAuth 2.0 device flow (`oauth.go`). Each fix ships a regression test that

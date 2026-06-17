@@ -24,6 +24,11 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   RFC `error_description`. Tests: `TestPollDeviceTokenStopsAtExpiry`, `TestClampPollInterval`,
   `TestStartDeviceAuthSurfacesErrorDescription`.
 
+- **Pass 3 (v0.4.4):** `capabilities.go` HTTP body integrity. Found & fixed silent data
+  corruption — `doRaw` swallowed the body-read error, so a truncated response (connection drop /
+  Content-Length mismatch) returned partial bytes as success (worst for `SynthesizeSpeech` raw
+  audio). Test: `TestSynthesizeSpeechRejectsTruncatedBody`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).
