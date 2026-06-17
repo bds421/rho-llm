@@ -74,6 +74,10 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   NUL, control chars, all content kinds). No defect — round-trip is idempotent. Test:
   `TestConversationRoundTripHostileContent`.
 
+- **Pass 14 (v0.4.15):** EstimateCost math (all token types + sentinel clamp). No defect — cost
+  correct, finite, never negative. Test: `TestEstimateCostAllTokenTypesAndSentinel`.
+  → 3rd consecutive clean pass; clean streak reached 3.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-06-17
+
+Hardening pass 14 — verified `EstimateCost` across all five token types (input/output/thinking/
+cache-write/cache-read) and the `TokensNotReported (-1)` sentinel clamp; cost is correct,
+finite, and never negative (no defect; regression coverage).
+
 ## [0.4.14] - 2026-06-17
 
 Hardening pass 13 — verified `Conversation` JSON serialization round-trips losslessly for
