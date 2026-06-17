@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-06-17
+
+Hardening pass 4 — `LoggingClient` (`middleware.go`).
+
+### Fixed
+
+- **`LoggingClient.Complete` no longer panics on a `(nil, nil)` inner response** — it checked
+  the returned error but then dereferenced `resp` to log token/cost metadata, so a misbehaving
+  inner `Client` returning `(nil, nil)` crashed the decorator (the `Session` already guards
+  this). It now logs and passes the nil response through for the caller to handle.
+
 ## [0.4.4] - 2026-06-17
 
 Hardening pass 3 — non-chat capabilities (`capabilities.go`).

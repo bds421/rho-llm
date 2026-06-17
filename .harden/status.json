@@ -1,5 +1,5 @@
 {
-  "targeted_area": "capabilities.go (embeddings/image/audio HTTP body integrity)",
+  "targeted_area": "middleware.go LoggingClient nil-response safety",
   "new_serious_bugs": 1,
   "tests_added": 1,
   "untested_surface_remaining": true,
@@ -7,7 +7,7 @@
     "buildRequest with an empty model across the 4 adapters (sends model:\"\")",
     "openai_compat sending a ContentDocument it cannot support (no clear rejection)",
     "ValidateImageSource has no direct test (document validator does)",
-    "middleware.go logging redaction, discovery.go, factory.go protocol resolution edges"
+    "discovery.go, factory.go protocol resolution edges"
   ],
   "changed": true
 }

@@ -29,6 +29,10 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   Content-Length mismatch) returned partial bytes as success (worst for `SynthesizeSpeech` raw
   audio). Test: `TestSynthesizeSpeechRejectsTruncatedBody`.
 
+- **Pass 4 (v0.4.5):** `middleware.go` LoggingClient. Found & fixed a crash — `Complete`
+  dereferenced a `(nil,nil)` inner response while logging metadata. Test:
+  `TestLoggingClientDoesNotPanicOnNilResponse`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

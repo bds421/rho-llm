@@ -51,6 +51,15 @@ func (l *LoggingClient) Complete(ctx context.Context, req Request) (*Response, e
 			"elapsed", elapsed.Round(time.Millisecond), "error", err)
 		return resp, err
 	}
+	if resp == nil {
+		// A misbehaving inner client returned (nil, nil). Don't panic
+		// dereferencing it for the response log; pass the (nil, nil) through for
+		// the caller (e.g. Session) to handle.
+		l.logger.Warn("complete returned a nil response and nil error",
+			"provider", l.inner.Provider(), "model", model,
+			"elapsed", elapsed.Round(time.Millisecond))
+		return nil, nil
+	}
 
 	cost := EstimateCost(CostInput{
 		Model:             model,
