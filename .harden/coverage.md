@@ -37,6 +37,11 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   a trailing-dot host (`localhost.`, `127.0.0.1.`) evaded the loopback/private checks yet
   resolves to loopback. Test: `TestCheckBaseURLBlocksTrailingDotBypass`.
 
+- **Pass 6 (v0.4.7):** adapter `buildRequest` message integrity. No serious bug. Fixed a
+  non-serious gap — the Anthropic adapter emitted an empty-content message as `"content":null`
+  (Anthropic rejects it); now dropped (Gemini already skipped empties). Test:
+  `TestAnthropicBuildRequestDropsEmptyContentMessage`.
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).

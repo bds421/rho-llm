@@ -410,6 +410,12 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				apiMsg.Content = append(apiMsg.Content, block)
 			}
 		}
+		if len(apiMsg.Content) == 0 {
+			// Everything filtered out (e.g. an empty-text part, or thinking dropped
+			// when thinking is off). Skip it — Anthropic rejects an empty-content
+			// message, and NormalizeForProvider drops empties the same way.
+			continue
+		}
 		apiReq.Messages = append(apiReq.Messages, apiMsg)
 	}
 

@@ -1,11 +1,11 @@
 {
-  "targeted_area": "SSRF guard CheckBaseURL (BlockPrivateBaseURL) host normalization",
-  "new_serious_bugs": 1,
+  "targeted_area": "adapter buildRequest message integrity (empty-content message)",
+  "new_serious_bugs": 0,
   "tests_added": 1,
   "untested_surface_remaining": true,
   "remaining_areas": [
-    "adapter buildRequest with adversarial content (huge/unicode/control-char text, nested tool input)",
-    "registry concurrency under extreme contention beyond the existing race test",
+    "openai_compat / openai_responses adapters' empty-message handling (anthropic fixed, gemini already safe)",
+    "structured-output / JSON-schema request handling",
     "ValidateImageSource has no direct test (document validator does)",
     "discovery.go, factory.go protocol resolution edges"
   ],

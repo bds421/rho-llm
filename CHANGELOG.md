@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-06-17
+
+Hardening pass 6 — adapter `buildRequest` message integrity.
+
+### Fixed
+
+- **The Anthropic adapter drops an empty-content message** — a message whose content all
+  filtered out (an empty-text part, or a thinking block dropped because thinking is off) was
+  emitted as `"content": null`, which Anthropic rejects. It is now skipped, matching
+  `NormalizeForProvider`. (The Gemini adapter already skipped empties.)
+
 ## [0.4.6] - 2026-06-17
 
 Hardening pass 5 — SSRF guard (`CheckBaseURL`).
