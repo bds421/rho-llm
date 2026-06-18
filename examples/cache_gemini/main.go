@@ -160,8 +160,8 @@ func createCache(apiKey, systemInstruction string) (string, error) {
 		return "", fmt.Errorf("marshal: %w", err)
 	}
 
-	url := fmt.Sprintf("%s?key=%s", cacheAPIBase, apiKey)
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body)) // #nosec G107 -- example only; constant base + the caller's own key (Gemini cache API requires ?key=)
+	endpoint := fmt.Sprintf("%s?key=%s", cacheAPIBase, apiKey)
+	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(body)) // #nosec G107 -- example only; constant base + the caller's own key (Gemini cache API requires ?key=)
 	if err != nil {
 		return "", fmt.Errorf("POST: %w", err)
 	}
@@ -185,8 +185,8 @@ func createCache(apiKey, systemInstruction string) (string, error) {
 
 // deleteCache deletes a CachedContent resource.
 func deleteCache(apiKey, cacheName string) error {
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/%s?key=%s", cacheName, apiKey)
-	req, err := http.NewRequest("DELETE", url, nil)
+	endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/%s?key=%s", cacheName, apiKey)
+	req, err := http.NewRequest("DELETE", endpoint, nil)
 	if err != nil {
 		return err
 	}

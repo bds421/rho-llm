@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-06-18
+
+### Changed
+
+- **No local variable shadows an imported package** — the Gemini adapter named its request-URL
+  local `url`, shadowing the imported `net/url` package; renamed to `endpoint` there and, for
+  consistency, in the OpenAI-compatible / Responses adapters and the `cache_gemini` example.
+  No behavior change.
+
 ## [0.4.15] - 2026-06-17
 
 Hardening pass 14 — verified `EstimateCost` across all five token types (input/output/thinking/

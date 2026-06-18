@@ -82,7 +82,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	if model == "" {
 		model = c.config.Model
 	}
-	url := fmt.Sprintf("%s/%s:generateContent", c.baseURL, url.PathEscape(model))
+	endpoint := fmt.Sprintf("%s/%s:generateContent", c.baseURL, url.PathEscape(model))
 
 	apiReq, err := c.buildRequest(req)
 	if err != nil {
@@ -94,7 +94,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -127,7 +127,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		if model == "" {
 			model = c.config.Model
 		}
-		url := fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse", c.baseURL, url.PathEscape(model))
+		endpoint := fmt.Sprintf("%s/%s:streamGenerateContent?alt=sse", c.baseURL, url.PathEscape(model))
 
 		apiReq, err := c.buildRequest(req)
 		if err != nil {
@@ -141,7 +141,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 			return
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 		if err != nil {
 			yield(llm.StreamEvent{}, fmt.Errorf("failed to create request: %w", err))
 			return
