@@ -63,12 +63,11 @@ finished task lives in the changelog, not the todo list.
   alongside the team's other `bds421/rho/*` projects). Releases can go to either or both.
 - ⚠️ **`bds421/rho/pdf` is a DIFFERENT project** (an AI PDF-extraction service, cloned at
   `../rho-pdf`) — never push rho-llm there or merge the two.
-- **Committer identity.** One identity, globally configured (`~/.gitconfig`):
-  **`renebd421 <rene@bds421.com>`** — used for all commits and tags on **both** remotes
-  (GitHub and GitLab). A plain `git commit` / `git tag -a` picks it up automatically;
-  never set per-commit `GIT_COMMITTER_*` overrides, and remove any stale per-repo
-  `user.name`/`user.email`. Historical identities (`Rene Heinzl`,
-  `reneheinzl@macbookpro.lan`) are folded into the canonical one via `.mailmap`.
+- **Committer identity.** Commit under **your own** git identity — whatever your global
+  `user.name`/`user.email` is set to. Authorship on a public repo should reflect who
+  actually made the change, so don't impersonate another contributor or set per-commit
+  `GIT_COMMITTER_*` / author overrides to forge one. A plain `git commit` / `git tag -a`
+  uses your configured identity automatically.
 - **Before pushing to GitHub** (public, and the Go module source) ALWAYS check first: (1) **no
   leaked credentials** in tracked files / the diff — secret grep over `git ls-files`, only test
   fakes allowed, `.gitignore` covers `.env`/`.claude`; (2) **`README.md` is up to date**; and
