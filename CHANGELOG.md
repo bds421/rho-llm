@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Asynchronous Batch API** — a new `BatchClient` interface (the bulk counterpart to `Client`)
+  for offline, ~50%-cheaper request processing. `NewBatchClient(cfg)` resolves a per-protocol
+  batch driver via a parallel registry (`RegisterBatchProvider`, mirroring the `Client` driver
+  pattern). First implementation: **OpenAI** (`provider/openaibatch`), covering
+  `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`. Each batch line is built and
+  parsed by the **same wire-translation code** as the synchronous adapters (new
+  `BuildChatBatchLineBody`/`ParseChatBatchResultBody` on `openaicompat`, the responses
+  equivalents on `openairesponses`, and `BuildEmbeddingsBatchLineBody`/
+  `ParseEmbeddingsBatchResultBody` in the root package) — a parity test asserts the batch line
+  body is byte-identical to what `Complete` POSTs. The interface is provider-agnostic so
+  Anthropic Message Batches and others can register later; transport differences (OpenAI's
+  Files-API upload/download vs. Anthropic's inline submit) live inside each driver.
+  - `BatchItem` (a `custom_id` + a chat `Request` **xor** an `EmbeddingRequest`), `BatchResult`,
+    `BatchOptions`, `BatchStatus`, and a serializable, versioned `BatchHandle`
+    (`schema_version`/`LoadBatchHandle`) so a batch can be submitted, persisted, and polled after
+    a process restart. `Endpoint` on the handle drives result parsing on resume (the items are
+    gone). `WaitForBatch` offers caller-controlled polling that honors `context` cancellation.
+  - Cost: `CostInput.Batch` applies the 50% batch discount in `EstimateCost`, and
+    `Usage.AddBatchResponse` folds batch results at batch pricing (token clamping shared with
+    `AddResponse`).
+  - Config: `ProviderPreset.SupportsBatch` gates batch availability (true for OpenAI only —
+    most `openai_compat` resellers do not expose `/v1/batches`); `Config.MaxBatchDownloadBytes`
+    (default 256 MB) caps result-file downloads, far above the 32 MB sync-response cap so real
+    batches are not silently truncated.
+
 ## [0.4.16] - 2026-06-18
 
 ### Changed

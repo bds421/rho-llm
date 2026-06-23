@@ -39,29 +39,65 @@ type EmbeddingResponse struct {
 	InputTokens int
 }
 
+// embeddingsAPIResponse is the OpenAI-compatible /embeddings response shape, shared by
+// the live GenerateEmbeddings call and the batch result parser so the decode lives in
+// one place.
+type embeddingsAPIResponse struct {
+	Model string `json:"model"`
+	Data  []struct {
+		Index     int       `json:"index"`
+		Embedding []float64 `json:"embedding"`
+	} `json:"data"`
+	Usage struct {
+		PromptTokens int `json:"prompt_tokens"`
+	} `json:"usage"`
+}
+
+// toResponse converts the wire shape to the neutral EmbeddingResponse.
+func (r *embeddingsAPIResponse) toResponse() *EmbeddingResponse {
+	res := &EmbeddingResponse{Model: r.Model, InputTokens: r.Usage.PromptTokens}
+	for _, d := range r.Data {
+		res.Embeddings = append(res.Embeddings, Embedding{Index: d.Index, Vector: d.Embedding})
+	}
+	return res
+}
+
+// embeddingsRequestBody is the OpenAI-compatible /embeddings request body, shared by
+// the live call and the batch line builder so the request shape lives in one place.
+func embeddingsRequestBody(req EmbeddingRequest) map[string]any {
+	return map[string]any{"model": req.Model, "input": req.Input}
+}
+
 // GenerateEmbeddings calls an OpenAI-compatible /embeddings endpoint.
 func GenerateEmbeddings(ctx context.Context, cfg Config, req EmbeddingRequest) (*EmbeddingResponse, error) {
 	if len(req.Input) == 0 {
 		return nil, fmt.Errorf("llm: embeddings require at least one input")
 	}
-	var out struct {
-		Model string `json:"model"`
-		Data  []struct {
-			Index     int       `json:"index"`
-			Embedding []float64 `json:"embedding"`
-		} `json:"data"`
-		Usage struct {
-			PromptTokens int `json:"prompt_tokens"`
-		} `json:"usage"`
-	}
-	if err := postJSON(ctx, cfg, "/embeddings", map[string]any{"model": req.Model, "input": req.Input}, &out); err != nil {
+	var out embeddingsAPIResponse
+	if err := postJSON(ctx, cfg, "/embeddings", embeddingsRequestBody(req), &out); err != nil {
 		return nil, err
 	}
-	res := &EmbeddingResponse{Model: out.Model, InputTokens: out.Usage.PromptTokens}
-	for _, d := range out.Data {
-		res.Embeddings = append(res.Embeddings, Embedding{Index: d.Index, Vector: d.Embedding})
+	return out.toResponse(), nil
+}
+
+// BuildEmbeddingsBatchLineBody builds the "body" object for one OpenAI batch line
+// targeting /v1/embeddings, reusing the same request shape as GenerateEmbeddings. Used
+// by the OpenAI batch driver (provider/openaibatch). No network call.
+func BuildEmbeddingsBatchLineBody(req EmbeddingRequest) (json.RawMessage, error) {
+	if len(req.Input) == 0 {
+		return nil, fmt.Errorf("llm: embeddings require at least one input")
 	}
-	return res, nil
+	return json.Marshal(embeddingsRequestBody(req))
+}
+
+// ParseEmbeddingsBatchResultBody parses one batch output line's response.body (an
+// /v1/embeddings response) into the neutral EmbeddingResponse.
+func ParseEmbeddingsBatchResultBody(raw json.RawMessage) (*EmbeddingResponse, error) {
+	var out embeddingsAPIResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("llm: decode embeddings batch result body: %w", err)
+	}
+	return out.toResponse(), nil
 }
 
 // =============================================================================

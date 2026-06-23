@@ -537,9 +537,10 @@ type CostInput struct {
 	Model             string
 	InputTokens       int
 	OutputTokens      int
-	ThinkingTokens    int // Gemini: separate from output; Anthropic: 0 (bundled in OutputTokens)
-	CacheCreateTokens int // Anthropic: tokens written to cache
-	CacheReadTokens   int // Anthropic/Gemini: tokens read from cache
+	ThinkingTokens    int  // Gemini: separate from output; Anthropic: 0 (bundled in OutputTokens)
+	CacheCreateTokens int  // Anthropic: tokens written to cache
+	CacheReadTokens   int  // Anthropic/Gemini: tokens read from cache
+	Batch             bool // request was processed via the Batch API (billed at 50% of the sync rate)
 }
 
 // EstimateCost returns the estimated cost in USD for a request/response.
@@ -585,5 +586,13 @@ func EstimateCost(input CostInput) float64 {
 		cacheCost += float64(cacheReadTok) * info.CacheReadPricePer1M / 1_000_000
 	}
 
-	return inputCost + outputCost + cacheCost
+	total := inputCost + outputCost + cacheCost
+
+	// Batch APIs (OpenAI, Anthropic) bill at half the synchronous rate. Apply the
+	// discount once to the final total so it composes uniformly with cache pricing.
+	if input.Batch {
+		total *= 0.5
+	}
+
+	return total
 }

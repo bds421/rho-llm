@@ -28,12 +28,26 @@ type Usage struct {
 }
 
 // AddResponse folds one response's usage into the running totals, estimating its
-// cost from the response's own model (registry pricing). Nil-safe.
+// cost from the response's own model (registry pricing) at the synchronous rate.
+// Nil-safe.
 //
 // Token counts are clamped to >= 0 first: a streamed turn whose provider never
 // reported usage carries the TokensNotReported (-1) sentinel, which must not
 // pollute the accumulated totals or produce a negative cost.
 func (u *Usage) AddResponse(resp *Response) {
+	u.add(resp, false)
+}
+
+// AddBatchResponse is like AddResponse but prices the response at the Batch API
+// rate (50% of synchronous). Token accumulation is identical — only the estimated
+// cost differs. Use it when folding results from a BatchClient.
+func (u *Usage) AddBatchResponse(resp *Response) {
+	u.add(resp, true)
+}
+
+// add is the shared accumulator for AddResponse/AddBatchResponse, keeping the
+// TokensNotReported (-1) clamp in exactly one place. batch selects batch pricing.
+func (u *Usage) add(resp *Response, batch bool) {
 	if resp == nil {
 		return
 	}
@@ -55,6 +69,7 @@ func (u *Usage) AddResponse(resp *Response) {
 		ThinkingTokens:    think,
 		CacheCreateTokens: cacheW,
 		CacheReadTokens:   cacheR,
+		Batch:             batch,
 	})
 }
 
