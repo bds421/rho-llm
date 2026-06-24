@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     most `openai_compat` resellers do not expose `/v1/batches`); `Config.MaxBatchDownloadBytes`
     (default 256 MB) caps result-file downloads, far above the 32 MB sync-response cap so real
     batches are not silently truncated.
+  - Two further adversarial hardening rounds on the merged batch code closed the coverage holes
+    the original suite left at 0% — `WaitForBatch` (poll-to-terminal, ctx-cancel mid-poll, Get-error
+    propagation), `BatchStatus.Terminal`, `Usage.AddBatchResponse` (half-cost + `TokensNotReported`
+    clamp), the full `/v1/responses` and embeddings **Submit** paths, the upload/create/download/cancel
+    non-2xx paths, batch-level `errors.data[]` surfacing, the exact oversize-download boundary
+    (cap vs cap+1), a newline-less final line, a >64 KB single line, cross-file `custom_id` dedup, and
+    hostile-body decode errors. No defect found (the merged code was correct); the off-by-one
+    download cap, the `Terminal` set, and the 50% discount were each proven red without their logic.
+    Added `batch_harden_test.go`, `batch_harden2_test.go`, `provider/openaibatch/batch_harden_internal_test.go`.
 
 ### Changed
 
