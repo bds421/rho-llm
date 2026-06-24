@@ -35,7 +35,9 @@ github.com/bds421/rho-llm/
 ├── provider.go       # Provider presets, protocol resolution, URL/auth resolution
 ├── registry.go       # ModelRegistry, ModelAliases, cost estimation, ResolveModelAlias()
 ├── register.go       # RegisterProvider() + provider factory registry
-├── factory.go        # NewClient() / NewClientWithKeys() — registry lookup entry point
+├── batch.go          # BatchClient interface + BatchItem/BatchResult/BatchHandle (async, serializable)
+├── batchregister.go  # RegisterBatchProvider() + batch driver registry (parallels register.go)
+├── factory.go        # NewClient() / NewClientWithKeys() / NewBatchClient() — registry lookup entry points
 ├── conversation.go      # Conversation (serializable transcript) + Usage + versioned JSON
 ├── session.go           # Session (concurrency-safe driver) + provider handoff (SwitchProvider)
 ├── normalize.go         # NormalizeForProvider() — cross-provider transcript translation
@@ -62,7 +64,8 @@ github.com/bds421/rho-llm/
     ├── anthropic/anthropic.go       # Native Anthropic API adapter
     ├── gemini/gemini.go             # Native Google Gemini API adapter
     ├── openaicompat/openaicompat.go # OpenAI-compatible adapter (18+ providers)
-    └── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning)
+    ├── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning)
+    └── openaibatch/openaibatch.go   # OpenAI Batch API driver (async; Files + Batches REST)
 ```
 
 Provider implementations register themselves via `init()` using `llm.RegisterProvider()`. Consumers that call `llm.NewClient()` must add a blank import: `_ "github.com/bds421/rho-llm/provider"`.
@@ -666,7 +669,66 @@ names, so stored conversations stay portable across versions.
 
 ---
 
-## 14. Design Decisions
+## 14. Batch API (async)
+
+The Batch layer is the **asynchronous, bulk counterpart** to `Client`. It sits beside the
+synchronous stack (it does not wrap or modify it) for offline processing at ~50% cost: submit
+many requests, poll, then fetch results — possibly across process restarts.
+
+### Interface & registry
+
+`BatchClient` (`batch.go`) is a separate interface — `Submit` / `Get` / `Results` / `Cancel` /
+`Close` — that deliberately does **not** satisfy `Client`, since batch is submit→poll→fetch, not
+one-in/one-out. Drivers register per protocol via `RegisterBatchProvider` (`batchregister.go`), a
+parallel of the `Client` driver registry; `NewBatchClient(cfg)` (`factory.go`) gates on
+`ProviderPreset.SupportsBatch` (OpenAI only — most `openai_compat` resellers don't expose
+`/v1/batches`), then resolves the driver by protocol. `WaitForBatch` polls `Get` to a terminal
+status under caller-controlled `context`.
+
+### Neutral types
+
+- `BatchItem` — a `custom_id` plus exactly one of a chat `Request` **xor** an `EmbeddingRequest`.
+- `BatchResult` — correlated by `custom_id`; carries a `*Response`, an `*EmbeddingResponse`, or an
+  `*APIError`.
+- `BatchHandle` — serializable and **versioned** (`schema_version` / `LoadBatchHandle`, mirroring
+  `Conversation`). Its `Endpoint` is load-bearing on resume: `Results` selects the response parser
+  from it, because the original items (which implied the kind) are gone after a restart.
+
+### OpenAI driver (`provider/openaibatch/`)
+
+OpenAI batches go through the **Files API**: assemble a JSONL file (one `{custom_id, method, url,
+body}` line per item), upload it (`purpose=batch`), create a batch referencing it, poll, then
+**download** the result file. A batch targets a single endpoint, so `Submit` validates that all
+items are homogeneous (all `/v1/chat/completions`, all `/v1/responses`, or all `/v1/embeddings`)
+and rejects mixed/duplicate/empty sets **before any network effect**. The per-item chat-vs-responses
+split reuses the live `ResolveProtocol` rule, so a GPT-5 item batches to `/v1/responses` exactly as
+`Complete` would send it.
+
+### Single source of wire-format truth
+
+Each batch line's `body` is built — and each result line parsed — by the **same** translation code
+as a live call, exposed as thin same-package helpers (`openaicompat.BuildChatBatchLineBody` /
+`ParseChatBatchResultBody`, the `openairesponses` equivalents, and root-package
+`BuildEmbeddingsBatchLineBody` / `ParseEmbeddingsBatchResultBody`). A parity test asserts a batch
+line body is **byte-identical** to what `Complete` POSTs, so the two paths can never drift.
+
+### Cost & limits
+
+`CostInput.Batch` applies the 50% discount in `EstimateCost`; `Usage.AddBatchResponse` folds batch
+results at batch pricing (sharing the `TokensNotReported` clamp with `AddResponse`).
+`Config.MaxBatchDownloadBytes` (default 256 MB) bounds result-file downloads — far above the 32 MB
+sync-response cap, so a large completed batch is not silently truncated.
+
+### Cross-provider shape
+
+The interface is provider-agnostic by design: the Files-API transport is OpenAI-specific, while
+Anthropic Message Batches (inline submit + `results_url`) would register a sibling driver reusing
+the Anthropic adapter's translation the same way. Only the transport differs; results normalize to
+the same `[]BatchResult`.
+
+---
+
+## 15. Design Decisions
 
 ### Why a unified interface over provider SDKs?
 

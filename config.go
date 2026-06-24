@@ -16,9 +16,13 @@ const (
 	DefaultMaxErrorBodyBytes    = 1 << 20    // 1 MB — caps error response body reads
 	DefaultMaxSSELineBytes      = 256 * 1024 // 256 KB — caps per-line SSE buffer
 	DefaultMaxResponseBodyBytes = 32 << 20   // 32 MB — caps success response body reads
-	DefaultMaxToolInputBytes    = 1 << 20    // 1 MB — caps accumulated tool input JSON
-	DefaultMaxErrorMessageLen   = 4096       // bytes — caps stored error message length
-	DefaultAnthropicVersion     = "2023-06-01"
+	// DefaultMaxBatchDownloadBytes caps batch result-file downloads. Far larger than
+	// the sync-response cap: a completed batch's output JSONL can be hundreds of MB,
+	// and reusing the 32 MB cap would silently truncate real batches.
+	DefaultMaxBatchDownloadBytes = 256 << 20 // 256 MB — caps batch result-file downloads
+	DefaultMaxToolInputBytes     = 1 << 20   // 1 MB — caps accumulated tool input JSON
+	DefaultMaxErrorMessageLen    = 4096      // bytes — caps stored error message length
+	DefaultAnthropicVersion      = "2023-06-01"
 )
 
 // Backward-compatible package-level vars — used as the process-wide fallback when
@@ -30,10 +34,11 @@ const (
 // BEFORE creating clients or issuing requests. Mutating them while requests
 // are in flight is a data race.
 var (
-	MaxErrorBodyBytes    int64 = DefaultMaxErrorBodyBytes
-	MaxSSELineBytes      int   = DefaultMaxSSELineBytes
-	MaxResponseBodyBytes int64 = DefaultMaxResponseBodyBytes
-	MaxToolInputBytes    int   = DefaultMaxToolInputBytes
+	MaxErrorBodyBytes     int64 = DefaultMaxErrorBodyBytes
+	MaxSSELineBytes       int   = DefaultMaxSSELineBytes
+	MaxResponseBodyBytes  int64 = DefaultMaxResponseBodyBytes
+	MaxBatchDownloadBytes int64 = DefaultMaxBatchDownloadBytes
+	MaxToolInputBytes     int   = DefaultMaxToolInputBytes
 )
 
 // sensitiveHeaders are stripped on cross-origin redirects (scheme or host change)
@@ -209,11 +214,12 @@ type Config struct {
 	AnthropicVersion string `json:"anthropic_version,omitempty"`
 
 	// Safety limits — zero values use the corresponding Default* constants.
-	MaxErrorBodyBytes    int `json:"max_error_body_bytes,omitempty"`
-	MaxSSELineBytes      int `json:"max_sse_line_bytes,omitempty"`
-	MaxResponseBodyBytes int `json:"max_response_body_bytes,omitempty"`
-	MaxToolInputBytes    int `json:"max_tool_input_bytes,omitempty"`
-	MaxErrorMessageLen   int `json:"max_error_message_len,omitempty"`
+	MaxErrorBodyBytes     int `json:"max_error_body_bytes,omitempty"`
+	MaxSSELineBytes       int `json:"max_sse_line_bytes,omitempty"`
+	MaxResponseBodyBytes  int `json:"max_response_body_bytes,omitempty"`
+	MaxBatchDownloadBytes int `json:"max_batch_download_bytes,omitempty"`
+	MaxToolInputBytes     int `json:"max_tool_input_bytes,omitempty"`
+	MaxErrorMessageLen    int `json:"max_error_message_len,omitempty"`
 }
 
 // DefaultTimeout is applied when Config.Timeout is zero (the time.Duration zero value).
@@ -285,6 +291,22 @@ func (c Config) EffectiveMaxResponseBodyBytes() int64 {
 		return int64(c.MaxResponseBodyBytes)
 	}
 	return MaxResponseBodyBytes
+}
+
+// EffectiveMaxBatchDownloadBytes returns the configured or default cap for batch
+// result-file downloads. Defaults far above the 32 MB sync-response cap because a
+// completed batch's output file can legitimately be hundreds of MB. The result is
+// always positive: a non-positive override (or a negative process-wide var) would make
+// the bounded download read zero bytes and silently truncate results, so it falls back
+// to the default rather than disabling the cap.
+func (c Config) EffectiveMaxBatchDownloadBytes() int64 {
+	if c.MaxBatchDownloadBytes > 0 {
+		return int64(c.MaxBatchDownloadBytes)
+	}
+	if MaxBatchDownloadBytes > 0 {
+		return MaxBatchDownloadBytes
+	}
+	return DefaultMaxBatchDownloadBytes
 }
 
 // EffectiveMaxToolInputBytes returns the configured or default limit.

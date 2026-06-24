@@ -1,6 +1,6 @@
 # rho-llm
 
-Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports only the Go standard library (the `examples/` use `joho/godotenv`).
+Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), an async **Batch API** (~50% cheaper bulk processing), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports only the Go standard library (the `examples/` use `joho/godotenv`).
 
 **Requires Go 1.26.4+** (`go 1.26.4` in `go.mod`; 1.26.4 fixes stdlib CVEs in `net/textproto` and `crypto/x509`).
 
@@ -580,6 +580,39 @@ img, _ := llm.GenerateImages(ctx, cfg, llm.ImageRequest{Model: "gpt-image-1", Pr
 wav, _ := llm.SynthesizeSpeech(ctx, cfg, llm.SpeechRequest{Model: "tts-1", Input: "hello", Voice: "alloy"})
 text, _ := llm.TranscribeAudio(ctx, cfg, llm.TranscriptionRequest{Model: "whisper-1", Audio: bytes, Filename: "a.mp3"})
 ```
+
+### Batch API (async, ~50% cheaper)
+
+For bulk work whose results you don't need immediately, `NewBatchClient` submits many requests at
+once (OpenAI: chat, responses, and embeddings). It returns a serializable `BatchHandle` you can
+persist and poll later — even after a restart. The interface is provider-agnostic; OpenAI is the
+first driver.
+
+```go
+cfg := llm.DefaultConfig(); cfg.Provider = "openai"; cfg.APIKey = os.Getenv("OPENAI_API_KEY")
+bc, _ := llm.NewBatchClient(cfg)           // gated by ProviderPreset.SupportsBatch
+defer bc.Close()
+
+handle, _ := bc.Submit(ctx, []llm.BatchItem{
+    {CustomID: "q1", Request: &llm.Request{Model: "gpt-5.3-chat-latest",
+        Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "classify: ..."}}}}}},
+    {CustomID: "q2", Request: &llm.Request{Model: "gpt-5.3-chat-latest", /* ... */ }},
+}, llm.BatchOptions{}) // CompletionWindow defaults to "24h"
+
+blob, _ := json.Marshal(handle)            // persist; resume after a restart with llm.LoadBatchHandle(blob)
+
+done, _ := llm.WaitForBatch(ctx, bc, handle.ID, 30*time.Second) // polls until terminal; honors ctx
+if done.Status == llm.BatchCompleted {
+    results, _ := bc.Results(ctx, handle.ID)   // correlated by CustomID
+    for _, r := range results {
+        if r.Error != nil { /* failed line */ } else { /* r.Response (or r.Embedding) */ }
+    }
+}
+```
+
+Each batch targets a single endpoint, so all items must be the same kind (all chat, all responses,
+or all embeddings); `Submit` rejects mixed/duplicate/empty sets before any upload. Batch cost is
+estimated at 50% via `CostInput{Batch: true}` / `Usage.AddBatchResponse`.
 
 ### OAuth (device flow)
 

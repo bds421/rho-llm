@@ -23,6 +23,43 @@ func NewClientWithKeys(cfg Config, keys []string) (Client, error) {
 	return newPooledClient(cfg, keys)
 }
 
+// NewBatchClient creates an asynchronous batch client for bulk request processing.
+// Batch is a separate execution mode from Complete/Stream — submit → poll → fetch —
+// so it returns a BatchClient, not a Client. Only providers whose preset advertises
+// SupportsBatch (currently first-party OpenAI) are accepted; anything else returns a
+// clear error rather than falling through to a nil-factory panic.
+//
+// cfg.Model is optional here: the model is taken per-item from each BatchItem's
+// Request/Embedding, so a single batch client can submit mixed models (subject to the
+// driver's single-endpoint homogeneity rule).
+func NewBatchClient(cfg Config) (BatchClient, error) {
+	cfg.Model = ResolveModelAlias(cfg.Model)
+
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultTimeout
+	}
+
+	preset, known := PresetFor(cfg.Provider)
+	if !known {
+		return nil, fmt.Errorf("unknown provider %q: the batch API is not supported (set a known provider)", cfg.Provider)
+	}
+	if !preset.SupportsBatch {
+		return nil, fmt.Errorf("provider %q does not support the batch API", cfg.Provider)
+	}
+
+	// Opt-in SSRF hardening, consistent with newSingleClient.
+	if err := CheckBaseURL(cfg); err != nil {
+		return nil, err
+	}
+
+	protocol := ResolveProtocol(cfg)
+	factory := getBatchProviderFactory(protocol)
+	if factory == nil {
+		return nil, fmt.Errorf("no registered batch driver for protocol %q (provider %q)", protocol, cfg.Provider)
+	}
+	return factory(cfg)
+}
+
 // newSingleClient creates a single (non-pooled) client based on protocol routing.
 func newSingleClient(cfg Config) (Client, error) {
 	// Resolve model alias to its full identifier

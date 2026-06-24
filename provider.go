@@ -5,6 +5,10 @@ type ProviderPreset struct {
 	BaseURL    string // Default API base URL
 	AuthHeader string // Auth header prefix ("Bearer", "", etc.)
 	Protocol   string // Wire protocol: "anthropic", "gemini", "openai_compat"
+	// SupportsBatch advertises that the provider implements the OpenAI Files + Batches
+	// REST API at BaseURL (NewBatchClient gates on it). Only true for first-party
+	// OpenAI today — most openai_compat resellers do NOT expose /v1/batches.
+	SupportsBatch bool
 }
 
 // presets maps provider names to their default configuration.
@@ -17,10 +21,10 @@ var presets = map[string]ProviderPreset{
 	"google":    {BaseURL: "https://generativelanguage.googleapis.com/v1beta/models", Protocol: "gemini"},
 
 	// OpenAI Responses API (explicit provider selection)
-	"openai_responses": {BaseURL: "https://api.openai.com/v1", AuthHeader: "Bearer", Protocol: "openai_responses"},
+	"openai_responses": {BaseURL: "https://api.openai.com/v1", AuthHeader: "Bearer", Protocol: "openai_responses", SupportsBatch: true},
 
 	// OpenAI-compatible: cloud providers
-	"openai":     {BaseURL: "https://api.openai.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"openai":     {BaseURL: "https://api.openai.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat", SupportsBatch: true},
 	"xai":        {BaseURL: "https://api.x.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"grok":       {BaseURL: "https://api.x.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"groq":       {BaseURL: "https://api.groq.com/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
