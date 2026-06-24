@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Per-request model aliases now resolve before the wire** (openai_compat adapter). `NewClient`
+  resolved `cfg.Model` at construction, but a per-call `Request{Model: "glm"}` / `"minimax-m3"` /
+  `"kimi"` override shipped the alias verbatim to the provider, which only recognizes the canonical
+  ID — silently breaking the request. `buildRequest` now applies `ResolveModelAlias` (unknown IDs
+  pass through untouched). Found by the break-rounds campaign; pinned by
+  `TestPerRequestAliasResolvesToCanonicalWireModel`.
+- **Auth-pool credential leak: per-key `apikey|baseurl` BaseURL secrets are now scrubbed from error
+  text.** `redactErr`, `AuthProfile.MarkFailed`, and `AuthProfile.MarshalJSON` previously redacted
+  only the APIKey, so userinfo (`user:pass@`) or a `?token=`/`?key=` secret embedded in a per-key
+  BaseURL override leaked into logs, `LastError`, and serialized JSON whenever an upstream error
+  echoed the URL (the BaseURL *field* was already redacted — this closes the matching gap in the
+  free-text paths). New shared helper `redactProfileSecrets` keeps the host/path visible for
+  debugging. Pinned by `TestAuthProfileDoesNotLeakBaseURLCredsInLastError` and
+  `TestRedactErrStripsBaseURLCredentials`.
+
+### Added
+
+- Three first-class OpenAI-compatible providers (presets + native registry entries), so they
+  resolve, route, and cost-estimate without a custom `BaseURL`:
+  - **Z.ai / GLM** (`zai`, aliases `z-ai`/`glm`) → `https://api.z.ai/api/openai/v1`; default
+    model `glm-5.2` (1M context, $1.40/$4.40 per 1M, cache-read $0.26, MIT open weights).
+  - **MiniMax** (`minimax`) → `https://api.minimax.io/v1`; default model `MiniMax-M3`
+    (1M context, multimodal; native pay-go **standard** tier $0.60/$2.40 per 1M, cache-read
+    $0.12; the >512K long-context tier is 2× and not modeled; open weights).
+  - **Moonshot / Kimi** (`moonshot`, alias `kimi`) → `https://api.moonshot.ai/v1`; default
+    model `kimi-k2.7-code` (262K context, $0.95/$4.00 per 1M, cache-read $0.16, always-thinking
+    multimodal coder, modified-MIT open weights).
+  - Adversarial test coverage in `harden_newproviders_test.go` (fail-closed mis-case, alias
+    cross-map agreement, case-exact reverse map, cache/sentinel cost math, discovery integrity,
+    cross-host auth-strip, concurrent alias resolution under `-race`).
+  - Bumps the documented provider count 20 → 23 (README, ARCHITECTURE, CLAUDE.md).
+
+### Changed
+
+- Registry: refreshed the Fireworks block (snapshot 2026-06-22) with three new open-weight
+  releases, tracked under the Fireworks host (matching the existing `kimi-k2p6` precedent),
+  prices cross-checked against each provider + Together AI:
+  - **Kimi K2.7 Code** (`…/kimi-k2p7-code`, Moonshot, released 2026-06-12, modified-MIT) —
+    262K context, $0.95/$4.00 per 1M, thinking-capable multimodal coder.
+  - **GLM-5.2** (`…/glm-5p2`, Z.ai, released 2026-06-13, MIT) — 1M context, $1.40/$4.40 per 1M,
+    long-horizon reasoning/coding model.
+  - **MiniMax M3** (`…/minimax-m3`, released 2026-06-01, open-weight) — 1M context, multimodal,
+    $0.30/$1.20 per 1M (Fireworks host rate).
+
 ## [0.4.16] - 2026-06-18
 
 ### Changed

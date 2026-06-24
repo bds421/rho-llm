@@ -30,21 +30,24 @@ go get github.com/bds421/rho-llm
 | NVIDIA NIM | OpenAI-compat | Bearer | integrate.api.nvidia.com/v1 |
 | Perplexity | OpenAI-compat | Bearer | api.perplexity.ai |
 | DeepInfra | OpenAI-compat | Bearer | api.deepinfra.com/v1/openai |
+| Z.ai/GLM | OpenAI-compat | Bearer | api.z.ai/api/openai/v1 |
+| MiniMax | OpenAI-compat | Bearer | api.minimax.io/v1 |
+| Moonshot/Kimi | OpenAI-compat | Bearer | api.moonshot.ai/v1 |
 | Ollama | OpenAI-compat | None | localhost:11434/v1 |
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
-> **Counting:** 20 built-in provider presets across 4 wire protocols — the OpenAI
+> **Counting:** 23 built-in provider presets across 4 wire protocols — the OpenAI
 > row spans two (`openai_compat` and the auto-selected `openai_responses` for GPT-5
-> reasoning models), and `claude`/`google`/`grok`/`qwen` are aliases of providers
-> already listed. 15 of them ship curated **model metadata** (pricing + capabilities)
+> reasoning models), and `claude`/`google`/`grok`/`qwen`/`z-ai`/`glm`/`kimi` are aliases
+> of providers already listed. 18 of them ship curated **model metadata** (pricing + capabilities)
 > for cost estimation and discovery; the rest work fully — any model ID can be passed
 > directly — and you can add metadata for any model at runtime (see
 > [Model Registry](#model-registry)). Unknown providers work too via `Config.BaseURL`.
 
 ## Quick Start
 
-This example demonstrates a complete request using Google Gemini, but the code is identical for all 20 providers.
+This example demonstrates a complete request using Google Gemini, but the code is identical for all 23 providers.
 
 ```go
 import _ "github.com/bds421/rho-llm/provider" // required: register adapters

@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty providers across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
+`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-three providers across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
 
 **Key capabilities:**
 - Single `Client` interface for all providers and protocols

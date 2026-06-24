@@ -36,6 +36,12 @@ var presets = map[string]ProviderPreset{
 	"nvidia":     {BaseURL: "https://integrate.api.nvidia.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"perplexity": {BaseURL: "https://api.perplexity.ai", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"deepinfra":  {BaseURL: "https://api.deepinfra.com/v1/openai", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"zai":        {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"z-ai":       {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"glm":        {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"minimax":    {BaseURL: "https://api.minimax.io/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"moonshot":   {BaseURL: "https://api.moonshot.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"kimi":       {BaseURL: "https://api.moonshot.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 
 	// Providers requiring auth that the preset model can't express are intentionally
 	// NOT listed: Amazon Bedrock (AWS SigV4) and Google Vertex AI (GCP service-account

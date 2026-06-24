@@ -144,6 +144,16 @@ var modelRegistry = map[string]ModelInfo{
 	// Cohere — OpenAI-compatible API (2026-04-04)
 	"command-a-03-2025": {ID: "command-a-03-2025", Provider: "cohere", MaxTokens: 4096, ContextWindow: 256000, InputPricePer1M: 2.50, OutputPricePer1M: 10.00, Thinking: true, Label: "Command A"},
 
+	// Z.ai / GLM — OpenAI-compatible API at api.z.ai (2026-06-22). Open weights (MIT). Native pay-go price per docs.z.ai/guides/overview/pricing.
+	"glm-5.2": {ID: "glm-5.2", Provider: "zai", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, CacheReadPricePer1M: 0.26, Thinking: true, Label: "GLM-5.2"},
+
+	// MiniMax — OpenAI-compatible API at api.minimax.io (2026-06-22). Open weights. Multimodal (text/image/video in).
+	// Native pay-go STANDARD tier (<=512K context); the >512K long-context tier is exactly 2x (1.20/4.80, not modeled here).
+	"MiniMax-M3": {ID: "MiniMax-M3", Provider: "minimax", ContextWindow: 1048576, InputPricePer1M: 0.60, OutputPricePer1M: 2.40, CacheReadPricePer1M: 0.12, Label: "MiniMax M3"},
+
+	// Moonshot / Kimi — OpenAI-compatible API at api.moonshot.ai (2026-06-22). Open weights (modified MIT). Multimodal, always-thinking coder.
+	"kimi-k2.7-code": {ID: "kimi-k2.7-code", Provider: "moonshot", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.95, OutputPricePer1M: 4.00, CacheReadPricePer1M: 0.16, Thinking: true, Label: "Kimi K2.7 Code"},
+
 	// Perplexity — Sonar API (from docs.perplexity.ai/getting-started/pricing, 2026-06-08).
 	// Representative subset; the registry only affects cost estimation + discovery — any model ID can be passed directly.
 	"sonar":               {ID: "sonar", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 1.00, OutputPricePer1M: 1.00, Label: "Sonar"},
@@ -151,8 +161,12 @@ var modelRegistry = map[string]ModelInfo{
 	"sonar-reasoning-pro": {ID: "sonar-reasoning-pro", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "Sonar Reasoning Pro"},
 	"sonar-deep-research": {ID: "sonar-deep-research", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "Sonar Deep Research"},
 
-	// Fireworks — serverless (from docs.fireworks.ai/serverless/pricing, 2026-06-08).
+	// Fireworks — serverless (from docs.fireworks.ai/serverless/pricing, 2026-06-22).
+	// Open-weight families (GLM/Z.ai, MiniMax, Kimi) tracked under the host you'd call; prices cross-checked vs the provider + Together.
+	"accounts/fireworks/models/fireworks/kimi-k2p7-code":    {ID: "accounts/fireworks/models/fireworks/kimi-k2p7-code", Provider: "fireworks", ContextWindow: 262144, InputPricePer1M: 0.95, OutputPricePer1M: 4.00, Thinking: true, Label: "Kimi K2.7 Code"},
 	"accounts/fireworks/models/fireworks/kimi-k2p6":         {ID: "accounts/fireworks/models/fireworks/kimi-k2p6", Provider: "fireworks", ContextWindow: 262144, InputPricePer1M: 0.95, OutputPricePer1M: 4.00, Label: "Kimi K2.6"},
+	"accounts/fireworks/models/fireworks/glm-5p2":           {ID: "accounts/fireworks/models/fireworks/glm-5p2", Provider: "fireworks", ContextWindow: 1048576, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, Thinking: true, Label: "GLM-5.2"},
+	"accounts/fireworks/models/fireworks/minimax-m3":        {ID: "accounts/fireworks/models/fireworks/minimax-m3", Provider: "fireworks", ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, Label: "MiniMax M3"},
 	"accounts/fireworks/models/fireworks/deepseek-v4-pro":   {ID: "accounts/fireworks/models/fireworks/deepseek-v4-pro", Provider: "fireworks", ContextWindow: 163840, InputPricePer1M: 1.74, OutputPricePer1M: 3.48, Thinking: true, Label: "DeepSeek V4 Pro"},
 	"accounts/fireworks/models/fireworks/deepseek-v4-flash": {ID: "accounts/fireworks/models/fireworks/deepseek-v4-flash", Provider: "fireworks", ContextWindow: 163840, InputPricePer1M: 0.14, OutputPricePer1M: 0.28, Thinking: true, Label: "DeepSeek V4 Flash"},
 	"accounts/fireworks/models/fireworks/qwen3p6-plus":      {ID: "accounts/fireworks/models/fireworks/qwen3p6-plus", Provider: "fireworks", ContextWindow: 262144, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, Thinking: true, Label: "Qwen 3.6 Plus"},
@@ -205,6 +219,12 @@ var defaultModels = map[string]string{
 	"mistral":   "mistral-small-2603",
 	"deepseek":  "deepseek-chat",
 	"cohere":    "command-a-03-2025",
+	"zai":       "glm-5.2",
+	"z-ai":      "glm-5.2",
+	"glm":       "glm-5.2",
+	"minimax":   "MiniMax-M3",
+	"moonshot":  "kimi-k2.7-code",
+	"kimi":      "kimi-k2.7-code",
 	"dashscope": "qwen3.6-plus",
 	"qwen":      "qwen3.6-plus",
 	"ollama":    "qwen3:8b",
@@ -306,6 +326,15 @@ var availableModels = map[string][]string{
 	"cohere": {
 		"command-a-03-2025",
 	},
+	"zai": {
+		"glm-5.2",
+	},
+	"minimax": {
+		"MiniMax-M3",
+	},
+	"moonshot": {
+		"kimi-k2.7-code",
+	},
 	"dashscope": {
 		"qwen3.6-plus",
 		"qwen3.5-omni-plus",
@@ -379,6 +408,20 @@ var modelAliases = map[string]string{
 	// Cohere aliases
 	"cohere":    "command-a-03-2025",
 	"command-a": "command-a-03-2025",
+
+	// Z.ai / GLM aliases
+	"glm":     "glm-5.2",
+	"glm5.2":  "glm-5.2",
+	"glm-5-2": "glm-5.2",
+
+	// MiniMax aliases
+	"minimax":    "MiniMax-M3",
+	"minimax-m3": "MiniMax-M3",
+
+	// Moonshot / Kimi aliases
+	"kimi":      "kimi-k2.7-code",
+	"kimi-k2.7": "kimi-k2.7-code",
+	"k2.7":      "kimi-k2.7-code",
 
 	// DashScope aliases
 	"qwen-cloud": "qwen3.6-plus",

@@ -151,7 +151,7 @@ func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimi
 	// Auth errors permanently disable the key — it's revoked, not temporarily overloaded.
 	// Scrub the key from the (logged + stored) error: a 401 body may echo it.
 	if IsAuthError(err) {
-		redacted := redactSecret(err.Error(), profile.APIKey)
+		redacted := redactProfileSecrets(err.Error(), profile.APIKey, profile.BaseURL)
 		profile.IsHealthy = false
 		profile.LastError = redacted
 		slog.Warn("profile permanently disabled (auth error)", "profile", profile.Name, "error", redacted)
@@ -168,7 +168,7 @@ func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimi
 		slog.Warn("profile overloaded", "profile", profile.Name, "cooldown", cooldown)
 	} else {
 		cooldown = defaultCD
-		slog.Warn("profile failed", "profile", profile.Name, "error", redactSecret(err.Error(), profile.APIKey), "cooldown", cooldown)
+		slog.Warn("profile failed", "profile", profile.Name, "error", redactProfileSecrets(err.Error(), profile.APIKey, profile.BaseURL), "cooldown", cooldown)
 	}
 
 	profile.MarkFailed(err, cooldown)
@@ -331,7 +331,7 @@ func (pc *PooledClient) redactErr(err error) string {
 	s := err.Error()
 	pc.pool.mu.RLock()
 	for _, prof := range pc.pool.profiles {
-		s = redactSecret(s, prof.APIKey)
+		s = redactProfileSecrets(s, prof.APIKey, prof.BaseURL)
 	}
 	pc.pool.mu.RUnlock()
 	return s

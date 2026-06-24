@@ -597,11 +597,12 @@ func (p *AuthProfile) MarkUsed() {
 }
 
 // MarkFailed marks the profile as failed with cooldown. The error text is
-// scrubbed of this profile's own API key first, so a server response that echoed
-// the key can't lodge it in LastError (which is logged and serialized).
+// scrubbed of this profile's own API key AND any credentials embedded in a
+// per-key BaseURL override first, so a server response that echoed either can't
+// lodge it in LastError (which is logged and serialized).
 func (p *AuthProfile) MarkFailed(err error, cooldownDuration time.Duration) {
 	if err != nil {
-		p.LastError = redactSecret(err.Error(), p.APIKey)
+		p.LastError = redactProfileSecrets(err.Error(), p.APIKey, p.BaseURL)
 	}
 	p.Cooldown = time.Now().Add(cooldownDuration)
 }
@@ -620,8 +621,8 @@ func (p *AuthProfile) MarkHealthy() {
 func (p AuthProfile) MarshalJSON() ([]byte, error) {
 	type profileAlias AuthProfile // break recursion
 	tmp := profileAlias(p)
+	tmp.LastError = redactProfileSecrets(tmp.LastError, tmp.APIKey, tmp.BaseURL)
 	if tmp.APIKey != "" {
-		tmp.LastError = redactSecret(tmp.LastError, tmp.APIKey)
 		tmp.APIKey = "REDACTED"
 	}
 	tmp.BaseURL = redactURLCredentials(tmp.BaseURL)

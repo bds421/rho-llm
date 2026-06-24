@@ -252,6 +252,11 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 	if model == "" {
 		model = c.config.Model
 	}
+	// Resolve a per-request alias/variant (e.g. "glm", "minimax-m3") to its
+	// canonical registry ID before it hits the wire — providers only recognize
+	// the exact ID. (factory.go resolves cfg.Model at construction, but a
+	// Request{Model: alias} override bypasses that.) Unknown IDs pass through.
+	model = llm.ResolveModelAlias(model)
 
 	maxTok := req.MaxTokens
 	if maxTok == 0 {

@@ -316,6 +316,38 @@ func (c Config) EffectiveAnthropicVersion() string {
 // host/path visible for debugging. A URL it can't parse, or one with no
 // credential, is returned unchanged (nothing safe to strip / preserve exact
 // formatting). Shared by Config and AuthProfile marshaling.
+// redactProfileSecrets scrubs an auth profile's APIKey AND any credentials
+// embedded in its (possibly per-key "apikey|baseurl") BaseURL out of a free-text
+// string before it is logged or serialized. The BaseURL host/path stay visible
+// for debugging; userinfo and secret query params (token/key/…) are stripped —
+// both as a verbatim-URL replacement and as bare substrings, in case the error
+// echoed only the credential rather than the whole URL.
+func redactProfileSecrets(s, apiKey, baseURL string) string {
+	s = redactSecret(s, apiKey)
+	if baseURL == "" {
+		return s
+	}
+	if red := redactURLCredentials(baseURL); red != baseURL {
+		s = strings.ReplaceAll(s, baseURL, red)
+		if u, err := url.Parse(baseURL); err == nil {
+			if u.User != nil {
+				if pw, ok := u.User.Password(); ok {
+					s = redactSecret(s, pw)
+				}
+			}
+			for k, vs := range u.Query() {
+				switch strings.ToLower(k) {
+				case "key", "api_key", "apikey", "token", "access_token", "auth":
+					for _, v := range vs {
+						s = redactSecret(s, v)
+					}
+				}
+			}
+		}
+	}
+	return s
+}
+
 func redactURLCredentials(raw string) string {
 	if raw == "" {
 		return raw
