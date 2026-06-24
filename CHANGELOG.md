@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-24
+
 ### Added
 
 - Three first-class OpenAI-compatible providers (presets + native registry entries), so they

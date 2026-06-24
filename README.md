@@ -821,7 +821,9 @@ Provider implementations live in sub-packages under `provider/`, following the `
 llm/
   types.go, config.go, errors.go, ...   # Core types and interfaces
   register.go                            # RegisterProvider() registry
-  factory.go                             # NewClient() -> registry lookup
+  factory.go                             # NewClient() / NewBatchClient() -> registry lookup
+  batch.go                               # BatchClient interface + BatchItem/BatchResult/BatchHandle (async)
+  batchregister.go                       # RegisterBatchProvider() + batch driver registry
   conversation.go                        # Conversation + Usage + versioned serialization
   session.go                             # Session (stateful driver) + provider handoff
   normalize.go                           # NormalizeForProvider() cross-provider handoff pass
@@ -842,6 +844,7 @@ llm/
     gemini/gemini.go                     # Google Gemini adapter
     openaicompat/openaicompat.go         # OpenAI-compatible adapter (18+ providers)
     openairesponses/responses.go         # OpenAI Responses API adapter (GPT-5 reasoning)
+    openaibatch/openaibatch.go           # OpenAI Batch API driver (async; Files + Batches REST)
 ```
 
 Consumers that call `llm.NewClient()` must add a blank import in their `main.go`:
