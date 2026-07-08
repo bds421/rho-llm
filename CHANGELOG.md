@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **New Ant Ling provider preset** (`antling`, alias `ling`) → `https://api.ant-ling.com/v1`
+  (OpenAI-compatible, Ling/Ring model family; no registry pricing yet — model IDs pass through
+  directly).
+- **New models**: `grok-build-0.1` (xAI's coding-specific model, 256K context, $1.00/$2.00 per
+  1M), `qwen/qwen3.6-27b` (Groq, 131K context, $0.60/$3.00 per 1M) as a Groq Llama replacement,
+  `command-a-plus-05-2026` (Cohere Command A+, Apache 2.0, 218B/25B MoE, 128K context — price
+  unconfirmed, left at 0), `qwen3.7-max`/`qwen3.7-plus` (Alibaba DashScope, superseding
+  `qwen3.6-plus` as flagship — price unconfirmed, left at 0), `gemma4:12b`/`gemma4:e2b`
+  (Ollama).
+
+### Changed
+
+- **Repointed the `pi` cross-reference** in CLAUDE.md/README.md from `badlogic/pi-mono` to
+  `earendil-works/pi` (the upstream repo was transferred/renamed; the old path 301-redirects).
+- **DeepSeek registry replaced**: `deepseek-chat` → `deepseek-v4-flash` (new default) and
+  `deepseek-v4-pro`, ahead of DeepSeek's 2026-07-24 deprecation of `deepseek-chat`/
+  `deepseek-reasoner`. New pricing (per api-docs.deepseek.com): V4 Flash $0.14/$0.28 per 1M
+  (cache-read $0.0028), V4 Pro $0.435/$0.87 per 1M (cache-read $0.003625), both 1M context /
+  384K max output. `deepseek-cloud`/`deepseek-v4` aliases now resolve to `deepseek-v4-flash`.
+
+### Removed
+
+- **Groq's deprecated Llama models**: `llama-3.3-70b-versatile` and `llama-3.1-8b-instant`
+  (Groq shuts them down 2026-08-16) and `meta-llama/llama-4-scout-17b-16e-instruct` (shuts down
+  2026-07-17) — per console.groq.com/docs/deprecations. New Groq default: `openai/gpt-oss-120b`
+  (was `llama-3.3-70b-versatile`). The `llama`/`llama-70b`/`llama-8b`/`llama4`/`llama-4-scout`
+  aliases are removed with no replacement — Groq no longer hosts any Llama model.
+
+### Fixed
+
+- **Two consistency defects in this refresh, caught pre-release** by a new adversarial
+  cross-map invariant suite (`harden_registry_invariants_test.go`): `gemma4:12b`/`gemma4:e2b`
+  had registry rows but were missing from `availableModels["ollama"]` (registered yet
+  undiscoverable via `GetAvailableModels`); and `deepseek-v4-pro` was registered as an alias
+  pointing at itself (a redundant self-alias that violates the rule `RegisterModelAlias`
+  enforces — an alias key must not collide with a real model ID). Both are now corrected.
+
+### Tests
+
+- **Adversarial registry-refresh coverage** (`harden_registry_invariants_test.go`,
+  `harden_registry_refresh_test.go`): global sweeps asserting every alias/default/discovery
+  entry resolves to a registered model, provider keys match embedded `ModelInfo.Provider`, no
+  alias shadows a real model ID, defaults belong to their provider's endpoint, and retired
+  models are gone from every map; plus contract PINs on the public seam (unpriced models stay
+  registered-but-zero-cost, repointed deepseek/groq defaults, cohere default stays priced,
+  retired Groq Llama aliases are dead passthroughs, and antling/ling preset wiring + mis-case
+  fail-closed).
+
 ## [0.5.0] - 2026-06-24
 
 ### Added

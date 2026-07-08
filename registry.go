@@ -69,6 +69,7 @@ var modelRegistry = map[string]ModelInfo{
 	"grok-code-fast-1":                  {ID: "grok-code-fast-1", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 0.20, OutputPricePer1M: 1.50, Thinking: true, Label: "Grok Code"},
 	"grok-3":                            {ID: "grok-3", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 3"},
 	"grok-3-mini":                       {ID: "grok-3-mini", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 3 Mini"},
+	"grok-build-0.1":                    {ID: "grok-build-0.1", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 1.00, OutputPricePer1M: 2.00, Thinking: true, Label: "Grok Build"},
 
 	// Gemini — from ai.google.dev/gemini-api/docs/pricing (2026-06-03)
 	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
@@ -116,14 +117,15 @@ var modelRegistry = map[string]ModelInfo{
 	"o3-pro":  {ID: "o3-pro", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 20.00, OutputPricePer1M: 80.00, Thinking: true, Label: "O3 Pro"},
 	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O4 Mini"},
 
-	// Groq — cloud inference (2026-02-21)
-	"llama-3.3-70b-versatile":                   {ID: "llama-3.3-70b-versatile", Provider: "groq", MaxTokens: 32768, ContextWindow: 128000, InputPricePer1M: 0.59, OutputPricePer1M: 0.79, Label: "Llama 3.3 70B"},
-	"llama-3.1-8b-instant":                      {ID: "llama-3.1-8b-instant", Provider: "groq", MaxTokens: 8192, ContextWindow: 128000, InputPricePer1M: 0.05, OutputPricePer1M: 0.08, Label: "Llama 3.1 8B"},
-	"openai/gpt-oss-120b":                       {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 3.00, OutputPricePer1M: 8.00, Label: "GPT-OSS 120B"},
-	"openai/gpt-oss-20b":                        {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.30, OutputPricePer1M: 0.80, Label: "GPT-OSS 20B"},
-	"deepseek-r1-distill-llama-70b":             {ID: "deepseek-r1-distill-llama-70b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.75, OutputPricePer1M: 0.99, Thinking: true, Label: "DeepSeek R1 70B"},
-	"deepseek-r1-distill-qwen-32b":              {ID: "deepseek-r1-distill-qwen-32b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.69, OutputPricePer1M: 0.69, Thinking: true, Label: "DeepSeek R1 32B"},
-	"meta-llama/llama-4-scout-17b-16e-instruct": {ID: "meta-llama/llama-4-scout-17b-16e-instruct", Provider: "groq", MaxTokens: 16384, ContextWindow: 327680, InputPricePer1M: 0.11, OutputPricePer1M: 0.34, Label: "Llama 4 Scout"},
+	// Groq — cloud inference (2026-07-08). llama-3.3-70b-versatile, llama-3.1-8b-instant, and
+	// meta-llama/llama-4-scout-17b-16e-instruct are REMOVED: Groq deprecated them
+	// (console.groq.com/docs/deprecations) — Scout shuts down 2026-07-17, the two llama-3.x
+	// models shut down 2026-08-16. Recommended replacements added below.
+	"openai/gpt-oss-120b":           {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 3.00, OutputPricePer1M: 8.00, Label: "GPT-OSS 120B"},
+	"openai/gpt-oss-20b":            {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.30, OutputPricePer1M: 0.80, Label: "GPT-OSS 20B"},
+	"qwen/qwen3.6-27b":              {ID: "qwen/qwen3.6-27b", Provider: "groq", ContextWindow: 131000, InputPricePer1M: 0.60, OutputPricePer1M: 3.00, Thinking: true, Label: "Qwen3.6 27B"},
+	"deepseek-r1-distill-llama-70b": {ID: "deepseek-r1-distill-llama-70b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.75, OutputPricePer1M: 0.99, Thinking: true, Label: "DeepSeek R1 70B"},
+	"deepseek-r1-distill-qwen-32b":  {ID: "deepseek-r1-distill-qwen-32b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.69, OutputPricePer1M: 0.69, Thinking: true, Label: "DeepSeek R1 32B"},
 
 	// Mistral — cloud API (2026-03-18)
 	"mistral-large-2512":    {ID: "mistral-large-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.50, OutputPricePer1M: 1.50, Label: "Mistral Large"},
@@ -138,11 +140,16 @@ var modelRegistry = map[string]ModelInfo{
 	"ministral-8b-2512":     {ID: "ministral-8b-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.15, OutputPricePer1M: 0.15, Label: "Ministral 8B"},
 	"ministral-14b-2512":    {ID: "ministral-14b-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.20, OutputPricePer1M: 0.20, Label: "Ministral 14B"},
 
-	// DeepSeek — cloud API (2026-04-04)
-	"deepseek-chat": {ID: "deepseek-chat", Provider: "deepseek", MaxTokens: 16384, ContextWindow: 1000000, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "DeepSeek V4"},
+	// DeepSeek — cloud API (2026-07-08, from api-docs.deepseek.com/quick_start/pricing).
+	// deepseek-chat/deepseek-reasoner are REMOVED: deprecated 2026-07-24 in favor of these.
+	"deepseek-v4-flash": {ID: "deepseek-v4-flash", Provider: "deepseek", MaxTokens: 384000, ContextWindow: 1000000, InputPricePer1M: 0.14, OutputPricePer1M: 0.28, CacheReadPricePer1M: 0.0028, Thinking: true, Label: "DeepSeek V4 Flash"},
+	"deepseek-v4-pro":   {ID: "deepseek-v4-pro", Provider: "deepseek", MaxTokens: 384000, ContextWindow: 1000000, InputPricePer1M: 0.435, OutputPricePer1M: 0.87, CacheReadPricePer1M: 0.003625, Thinking: true, Label: "DeepSeek V4 Pro"},
 
-	// Cohere — OpenAI-compatible API (2026-04-04)
-	"command-a-03-2025": {ID: "command-a-03-2025", Provider: "cohere", MaxTokens: 4096, ContextWindow: 256000, InputPricePer1M: 2.50, OutputPricePer1M: 10.00, Thinking: true, Label: "Command A"},
+	// Cohere — OpenAI-compatible API (2026-04-04; command-a-plus-05-2026 confirmed live via
+	// docs.cohere.com/docs/models on 2026-07-08, but cohere.com/pricing does not list a price
+	// for it yet — left at 0 rather than guessed).
+	"command-a-plus-05-2026": {ID: "command-a-plus-05-2026", Provider: "cohere", ContextWindow: 128000, Thinking: true, Label: "Command A+ (price unconfirmed)"},
+	"command-a-03-2025":      {ID: "command-a-03-2025", Provider: "cohere", MaxTokens: 4096, ContextWindow: 256000, InputPricePer1M: 2.50, OutputPricePer1M: 10.00, Thinking: true, Label: "Command A"},
 
 	// Z.ai / GLM — OpenAI-compatible API at api.z.ai (2026-06-22). Open weights (MIT). Native pay-go price per docs.z.ai/guides/overview/pricing.
 	"glm-5.2": {ID: "glm-5.2", Provider: "zai", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, CacheReadPricePer1M: 0.26, Thinking: true, Label: "GLM-5.2"},
@@ -184,7 +191,12 @@ var modelRegistry = map[string]ModelInfo{
 	"nvidia/llama-3.1-nemotron-70b-instruct": {ID: "nvidia/llama-3.1-nemotron-70b-instruct", Provider: "nvidia", ContextWindow: 131072, Label: "Llama 3.1 Nemotron 70B (NIM, free dev tier)"},
 	"meta/llama-3.1-8b-instruct":             {ID: "meta/llama-3.1-8b-instruct", Provider: "nvidia", ContextWindow: 131072, Label: "Llama 3.1 8B (NIM, free dev tier)"},
 
-	// DashScope (Alibaba) — OpenAI-compatible API (2026-04-03)
+	// DashScope (Alibaba) — OpenAI-compatible API (2026-04-03). qwen3.7-max/qwen3.7-plus confirmed
+	// as real model IDs (superseding qwen3.6-plus as flagship) via alibabacloud.com/help/en/model-studio/models
+	// on 2026-07-08, but that pricing page is JS-rendered and no price could be confirmed — left
+	// at 0 rather than guessed; qwen3.6-plus remains the default until 3.7 pricing is confirmed.
+	"qwen3.7-max":        {ID: "qwen3.7-max", Provider: "dashscope", ContextWindow: 1000000, Thinking: true, Label: "Qwen 3.7 Max (price unconfirmed)"},
+	"qwen3.7-plus":       {ID: "qwen3.7-plus", Provider: "dashscope", ContextWindow: 1000000, Thinking: true, Label: "Qwen 3.7 Plus (price unconfirmed)"},
 	"qwen3.6-plus":       {ID: "qwen3.6-plus", Provider: "dashscope", MaxTokens: 65536, ContextWindow: 1000000, InputPricePer1M: 0.29, OutputPricePer1M: 1.74, Thinking: true, Label: "Qwen 3.6 Plus"},
 	"qwen3.5-omni-plus":  {ID: "qwen3.5-omni-plus", Provider: "dashscope", MaxTokens: 16384, ContextWindow: 256000, Thinking: true, Label: "Qwen 3.5 Omni Plus"},
 	"qwen3.5-omni-flash": {ID: "qwen3.5-omni-flash", Provider: "dashscope", MaxTokens: 16384, ContextWindow: 256000, Thinking: true, Label: "Qwen 3.5 Omni Flash"},
@@ -200,6 +212,8 @@ var modelRegistry = map[string]ModelInfo{
 	"qwen3:4b":             {ID: "qwen3:4b", Provider: "ollama", Thinking: true, Label: "Qwen3 4B"},
 	"gemma4:31b":           {ID: "gemma4:31b", Provider: "ollama", Thinking: true, Label: "Gemma4 31B"},
 	"gemma4:26b":           {ID: "gemma4:26b", Provider: "ollama", Thinking: true, Label: "Gemma4 26B MoE"},
+	"gemma4:12b":           {ID: "gemma4:12b", Provider: "ollama", Thinking: true, Label: "Gemma4 12B"},
+	"gemma4:e2b":           {ID: "gemma4:e2b", Provider: "ollama", Thinking: true, Label: "Gemma4 E2B"},
 	"gemma4:e4b":           {ID: "gemma4:e4b", Provider: "ollama", Thinking: true, Label: "Gemma4 E4B"},
 	"gemma3:12b":           {ID: "gemma3:12b", Provider: "ollama", NoToolSupport: true, Label: "Gemma3 12B"},
 	"gemma3:4b":            {ID: "gemma3:4b", Provider: "ollama", NoToolSupport: true, Label: "Gemma3 4B"},
@@ -215,9 +229,9 @@ var defaultModels = map[string]string{
 	"google":    "gemini-3.1-flash-lite-preview",
 	"openai":    "gpt-5.4",
 	"gpt":       "gpt-5.4",
-	"groq":      "llama-3.3-70b-versatile",
+	"groq":      "openai/gpt-oss-120b",
 	"mistral":   "mistral-small-2603",
-	"deepseek":  "deepseek-chat",
+	"deepseek":  "deepseek-v4-flash",
 	"cohere":    "command-a-03-2025",
 	"zai":       "glm-5.2",
 	"z-ai":      "glm-5.2",
@@ -256,6 +270,7 @@ var availableModels = map[string][]string{
 		"grok-4-fast-non-reasoning",
 		"grok-4-0709",
 		"grok-code-fast-1",
+		"grok-build-0.1",
 		"grok-3",
 		"grok-3-mini",
 	},
@@ -299,11 +314,9 @@ var availableModels = map[string][]string{
 		"o4-mini",
 	},
 	"groq": {
-		"llama-3.3-70b-versatile",
-		"llama-3.1-8b-instant",
-		"meta-llama/llama-4-scout-17b-16e-instruct",
 		"openai/gpt-oss-120b",
 		"openai/gpt-oss-20b",
+		"qwen/qwen3.6-27b",
 		"deepseek-r1-distill-llama-70b",
 		"deepseek-r1-distill-qwen-32b",
 	},
@@ -321,9 +334,11 @@ var availableModels = map[string][]string{
 		"ministral-14b-2512",
 	},
 	"deepseek": {
-		"deepseek-chat",
+		"deepseek-v4-flash",
+		"deepseek-v4-pro",
 	},
 	"cohere": {
+		"command-a-plus-05-2026",
 		"command-a-03-2025",
 	},
 	"zai": {
@@ -336,6 +351,8 @@ var availableModels = map[string][]string{
 		"kimi-k2.7-code",
 	},
 	"dashscope": {
+		"qwen3.7-max",
+		"qwen3.7-plus",
 		"qwen3.6-plus",
 		"qwen3.5-omni-plus",
 		"qwen3.5-omni-flash",
@@ -351,6 +368,8 @@ var availableModels = map[string][]string{
 		"qwen3:4b",
 		"gemma4:31b",
 		"gemma4:26b",
+		"gemma4:12b",
+		"gemma4:e2b",
 		"gemma4:e4b",
 		"gemma3:12b",
 		"gemma3:4b",
@@ -381,15 +400,13 @@ var modelAliases = map[string]string{
 	"grok-code":          "grok-code-fast-1",
 	"grok-mini":          "grok-3-mini",
 
-	// Groq aliases
-	"groq":          "llama-3.3-70b-versatile",
-	"llama":         "llama-3.3-70b-versatile",
-	"llama-70b":     "llama-3.3-70b-versatile",
-	"llama-8b":      "llama-3.1-8b-instant",
-	"llama4":        "meta-llama/llama-4-scout-17b-16e-instruct",
-	"llama-4-scout": "meta-llama/llama-4-scout-17b-16e-instruct",
-	"gpt-oss":       "openai/gpt-oss-120b",
-	"gpt-oss-20b":   "openai/gpt-oss-20b",
+	// Groq aliases. llama/llama-70b/llama-8b/llama4/llama-4-scout are REMOVED: Groq deprecated
+	// every Llama model it hosted (console.groq.com/docs/deprecations) with no Llama
+	// replacement — gpt-oss/qwen3.6-27b are Groq's own recommended replacements.
+	"groq":        "openai/gpt-oss-120b",
+	"gpt-oss":     "openai/gpt-oss-120b",
+	"gpt-oss-20b": "openai/gpt-oss-20b",
+	"qwen3.6-27b": "qwen/qwen3.6-27b",
 
 	// Mistral aliases
 	"mistral-large":  "mistral-large-2512",
@@ -402,12 +419,14 @@ var modelAliases = map[string]string{
 	"ministral":      "ministral-8b-2512",
 
 	// DeepSeek aliases
-	"deepseek-cloud": "deepseek-chat",
-	"deepseek-v4":    "deepseek-chat",
+	"deepseek-cloud": "deepseek-v4-flash",
+	"deepseek-v4":    "deepseek-v4-flash",
+	"deepseek-flash": "deepseek-v4-flash",
 
 	// Cohere aliases
-	"cohere":    "command-a-03-2025",
-	"command-a": "command-a-03-2025",
+	"cohere":         "command-a-03-2025",
+	"command-a":      "command-a-03-2025",
+	"command-a-plus": "command-a-plus-05-2026",
 
 	// Z.ai / GLM aliases
 	"glm":     "glm-5.2",

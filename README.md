@@ -712,12 +712,9 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `groq` | `llama-3.3-70b-versatile` |
-| `llama`, `llama-70b` | `llama-3.3-70b-versatile` |
-| `llama-8b` | `llama-3.1-8b-instant` |
-| `llama4`, `llama-4-scout` | `meta-llama/llama-4-scout-17b-16e-instruct` |
-| `gpt-oss` | `openai/gpt-oss-120b` |
+| `groq`, `gpt-oss` | `openai/gpt-oss-120b` |
 | `gpt-oss-20b` | `openai/gpt-oss-20b` |
+| `qwen3.6-27b` | `qwen/qwen3.6-27b` |
 
 ### Mistral aliases
 
@@ -736,13 +733,15 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `deepseek-cloud`, `deepseek-v4` | `deepseek-chat` |
+| `deepseek-cloud`, `deepseek-v4`, `deepseek-flash` | `deepseek-v4-flash` |
+| `deepseek-v4-pro` | `deepseek-v4-pro` |
 
 ### Cohere aliases
 
 | Alias | Resolves to |
 |-------|-------------|
 | `cohere`, `command-a` | `command-a-03-2025` |
+| `command-a-plus` | `command-a-plus-05-2026` |
 
 ### DashScope/Qwen aliases
 
@@ -857,4 +856,4 @@ Consumers that only use types (`llm.Client`, `llm.Config`, `llm.Message`, etc.) 
 
 ## Acknowledgements
 
-The name **rho** is a tribute to [pi](https://github.com/badlogic/pi-mono/tree/main/packages/ai) — rho is the next letter in the Greek alphabet. pi's `ai` package is a great multi-provider LLM library; rho brings the same idea to Go.
+The name **rho** is a tribute to [pi](https://github.com/earendil-works/pi/tree/main/packages/ai) (formerly `badlogic/pi-mono`) — rho is the next letter in the Greek alphabet. pi's `ai` package is a great multi-provider LLM library; rho brings the same idea to Go.
