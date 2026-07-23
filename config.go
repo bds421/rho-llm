@@ -53,6 +53,7 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
+			Proxy:           http.ProxyFromEnvironment,
 			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

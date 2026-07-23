@@ -1,9 +1,25 @@
 package llm
 
 import (
+	"net/http"
 	"net/url"
+	"reflect"
 	"testing"
+	"time"
 )
+
+func TestSafeHTTPClientPreservesStandardProxyDiscovery(t *testing.T) {
+	transport, ok := SafeHTTPClient(time.Second).Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("SafeHTTPClient transport is not *http.Transport")
+	}
+	if transport.Proxy == nil {
+		t.Fatal("SafeHTTPClient disables HTTP_PROXY and HTTPS_PROXY discovery")
+	}
+	if reflect.ValueOf(transport.Proxy).Pointer() != reflect.ValueOf(http.ProxyFromEnvironment).Pointer() {
+		t.Fatal("SafeHTTPClient does not use the standard environment proxy policy")
+	}
+}
 
 // TestSameOriginStripsOnSchemeDowngrade verifies F4: an https→http same-host
 // redirect is NOT same-origin (so auth headers are stripped — the old host-only
