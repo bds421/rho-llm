@@ -56,8 +56,14 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 			}
 		}
 
-		// 5. Gemini 2.5 models think intrinsically (Thinking=true, not SupportsThinking)
-		if strings.HasPrefix(id, "gemini-2.5") {
+		// Skip non-chat Gemini modality SKUs (embeddings / image gen) — they do not
+		// participate in chat thinking controls.
+		isGeminiModalityOnly := info.Capabilities != 0 &&
+			!info.Capabilities.Supports(CapabilityChat) &&
+			(info.Capabilities.Supports(CapabilityEmbeddings) || info.Capabilities.Supports(CapabilityImageGeneration))
+
+		// 5. Gemini 2.5 chat models think intrinsically (Thinking=true, not SupportsThinking)
+		if strings.HasPrefix(id, "gemini-2.5") && !isGeminiModalityOnly {
 			if !info.Thinking {
 				t.Errorf("Model %s (Gemini 2.5) should have Thinking=true", id)
 			}
@@ -66,9 +72,8 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 			}
 		}
 
-		// 6. Gemini 3+ models expose API-controlled thinkingLevel. They are
-		// neither intrinsic-only nor valid explicit negatives.
-		if strings.HasPrefix(id, "gemini-3") {
+		// 6. Gemini 3+ chat models expose API-controlled thinkingLevel.
+		if strings.HasPrefix(id, "gemini-3") && !isGeminiModalityOnly {
 			if !info.SupportsThinking {
 				t.Errorf("Model %s (Gemini 3+) should have SupportsThinking=true", id)
 			}
@@ -94,12 +99,15 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 // Gemini 3.x models require thought_signature in function call responses; older models do not.
 func TestThoughtSignatureFlags(t *testing.T) {
 	for id, info := range modelRegistry {
-		isGemini3 := strings.HasPrefix(id, "gemini-3")
-		if isGemini3 && !info.ThoughtSignature {
-			t.Errorf("Model %s (Gemini 3.x) should have ThoughtSignature=true", id)
+		isGeminiModalityOnly := info.Capabilities != 0 &&
+			!info.Capabilities.Supports(CapabilityChat) &&
+			(info.Capabilities.Supports(CapabilityEmbeddings) || info.Capabilities.Supports(CapabilityImageGeneration))
+		isGemini3Chat := strings.HasPrefix(id, "gemini-3") && !isGeminiModalityOnly
+		if isGemini3Chat && !info.ThoughtSignature {
+			t.Errorf("Model %s (Gemini 3.x chat) should have ThoughtSignature=true", id)
 		}
-		if info.Provider == "gemini" && !isGemini3 && info.ThoughtSignature {
-			t.Errorf("Model %s (Gemini non-3.x) should have ThoughtSignature=false", id)
+		if info.Provider == "gemini" && !isGemini3Chat && info.ThoughtSignature {
+			t.Errorf("Model %s (Gemini non-chat-3.x) should have ThoughtSignature=false", id)
 		}
 		// Non-Gemini models should never have ThoughtSignature
 		if info.Provider != "gemini" && info.ThoughtSignature {

@@ -1,12 +1,12 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of August 2026.
+> **Status:** Reflects the current implementation as of August 2026 (v0.7.0).
 
 ---
 
 ## 1. Overview
 
-`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-three providers across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
+`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-four providers across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
 
 **Key capabilities:**
 - Single `Client` interface for all providers and protocols
@@ -18,7 +18,9 @@
 - Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForProvider`); pluggable persistence (`Store`: `MemoryStore`/`FileStore`)
 - Structured output (JSON mode / JSON schema) on OpenAI-compatible + Gemini; tool-call validation; fine-grained streaming boundaries (`StreamWithBoundaries`)
 - Registered `ModalityClient` adapters for embeddings, image generation, speech,
-  and transcription; OpenAI-compatible is the first modality driver
+  and transcription; OpenAI-compatible and Gemini modality drivers
+- Multi-vendor `BatchClient` (OpenAI Files+Batches, Anthropic Message Batches, Gemini Batch)
+- OpenAI Realtime session surface (`OpenRealtimeSession`) with injectable dialer
 - A `MockClient` test double and model/provider discovery (`Models`/`Providers`)
 - Auth pool rotation with exponential backoff and per-profile cooldown
 - Structured error types enabling reliable retry classification
@@ -64,7 +66,9 @@ github.com/bds421/rho-llm/
 └── provider/                        # Provider adapters (database/sql driver pattern)
     ├── all.go                       # Blank-imports all sub-packages
     ├── anthropic/anthropic.go       # Native Anthropic API adapter
-    ├── gemini/gemini.go             # Native Google Gemini API adapter
+    ├── anthropicbatch/              # Anthropic Message Batches driver
+    ├── gemini/gemini.go             # Native Google Gemini API adapter (+ modality)
+    ├── geminibatch/                 # Gemini Batch driver (completion + embeddings)
     ├── openaicompat/                # OpenAI-compatible chat + modality adapter
     ├── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning)
     └── openaibatch/openaibatch.go   # OpenAI Batch API driver (async; Files + Batches REST)

@@ -278,9 +278,13 @@ func appendCapability(values []Capability, value Capability) []Capability {
 func protocolCapabilityEnvelope(protocol string) CapabilitySet {
 	switch protocol {
 	case "anthropic":
-		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityVision, CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature)
+		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityVision, CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature, CapabilityBatch)
 	case "gemini":
-		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature)
+		return Capabilities(
+			CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput,
+			CapabilityVision, CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature,
+			CapabilityEmbeddings, CapabilityImageGeneration, CapabilityBatch,
+		)
 	case "openai_responses":
 		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput, CapabilityVision, CapabilityBatch, CapabilityReasoning)
 	case "openai_compat":
@@ -303,11 +307,11 @@ func canonicalProvider(provider string) string {
 		return "gemini"
 	case "grok":
 		return "xai"
-	case "qwen":
+	case "qwen", "dashscope-cn", "qwen-cn":
 		return "dashscope"
 	case "z-ai", "glm":
 		return "zai"
-	case "kimi":
+	case "kimi", "moonshot-cn", "kimi-cn":
 		return "moonshot"
 	case "openai_responses":
 		return "openai"
@@ -333,11 +337,26 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 	}
 	switch canonicalProvider(info.Provider) {
 	case "anthropic":
-		set |= Capabilities(CapabilityVision, CapabilityDocumentInput)
+		// Native PDF + vision; Message Batches for chat. Structured JSON is tool-shaped.
+		set |= Capabilities(CapabilityVision, CapabilityDocumentInput, CapabilityBatch)
 	case "gemini":
-		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput)
+		// Multimodal chat + batch; dedicated embedding/image models set their own bits.
+		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch)
 	case "openai":
-		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityBatch)
+		// Chat Completions / Responses encode vision + structured output; PDF rides as
+		// an image_url data URI on openai_compat (document capability is model-side).
+		// Batch is first-party OpenAI only.
+		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch)
+	case "xai", "meta":
+		// Multimodal cloud APIs on the openai_compat surface (PDF as data URI).
+		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput)
+	case "groq", "mistral", "openrouter", "together", "fireworks", "deepinfra", "nvidia",
+		"cerebras", "deepseek", "cohere", "dashscope", "zai", "minimax", "moonshot", "perplexity":
+		// Cloud openai_compat hosts: the adapter can encode vision/PDF/structured
+		// output; hosts that reject a given model still fail at the wire.
+		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput)
+		// Local ollama/vllm/lmstudio stay chat/stream/tools-only — deployments that
+		// actually run vision or JSON-schema models declare Capabilities explicitly.
 	}
 	return set
 }

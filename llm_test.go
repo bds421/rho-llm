@@ -145,10 +145,12 @@ func TestFactoryDefaultModels(t *testing.T) {
 		provider string
 		expected string
 	}{
-		{"anthropic", "claude-sonnet-4-6"},
-		{"claude", "claude-sonnet-4-6"},
-		{"xai", "grok-4.20-beta"},
-		{"grok", "grok-4.20-beta"},
+		{"anthropic", "claude-sonnet-5"},
+		{"claude", "claude-sonnet-5"},
+		{"xai", "grok-4.5"},
+		{"grok", "grok-4.5"},
+		{"openai", "gpt-5.6-sol"},
+		{"meta", "muse-spark-1.2"},
 		{"gemini", "gemini-3.5-flash-lite"},
 		{"google", "gemini-3.5-flash-lite"},
 	}
@@ -309,12 +311,16 @@ func TestResolveModelAlias(t *testing.T) {
 		alias    string
 		expected string
 	}{
-		{"opus", "claude-opus-4-8"},
-		{"sonnet", "claude-sonnet-4-6"},
-		{"haiku", "claude-haiku-4-5-20251001"},
-		{"grok", "grok-4.20-beta"},
+		{"opus", "claude-opus-5"},
+		{"sonnet", "claude-sonnet-5"},
+		{"fable", "claude-fable-5"},
+		{"haiku", "claude-haiku-4-5"},
+		{"grok", "grok-4.5"},
+		{"grok4.5", "grok-4.5"},
 		{"grok4.3", "grok-4.3"},
+		{"gpt5.6", "gpt-5.6-sol"},
 		{"gpt5.5", "gpt-5.5"},
+		{"muse", "muse-spark-1.2"},
 		{"gemini3.5", "gemini-3.5-flash"},
 		{"gemini3.6", "gemini-3.6-flash"},
 		{"gemini3.5-lite", "gemini-3.5-flash-lite"},
@@ -737,9 +743,12 @@ func TestLoggingClientError(t *testing.T) {
 // TestModelInfoContextWindow verifies all Anthropic/Gemini models have ContextWindow set.
 func TestModelInfoContextWindow(t *testing.T) {
 	modelsToCheck := []string{
+		"claude-fable-5", "claude-opus-5", "claude-sonnet-5",
 		"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
+		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+		"muse-spark-1.2", "muse-spark-1.1",
 		"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-		"grok-4-fast-non-reasoning", "grok-3",
+		"grok-4.5", "grok-4-fast-non-reasoning", "grok-3",
 	}
 
 	for _, model := range modelsToCheck {
@@ -758,6 +767,7 @@ func TestModelInfoContextWindow(t *testing.T) {
 func TestModelInfoThinkingFlags(t *testing.T) {
 	// 1. API-controlled (SupportsThinking)
 	apiControlled := []string{
+		"claude-opus-5", "claude-sonnet-5", "claude-fable-5",
 		"claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5",
 	}
 	for _, model := range apiControlled {
@@ -1956,10 +1966,10 @@ func TestAuthPoolWithBaseURL(t *testing.T) {
 
 // TestGetDefaultModelUnknown verifies fallback for unknown provider.
 func TestGetDefaultModelUnknown(t *testing.T) {
-	// Unknown providers fall back to claude-sonnet-4-6
+	// Unknown providers fall back to claude-sonnet-5
 	model := llm.GetDefaultModel("nonexistent-provider")
-	if model != "claude-sonnet-4-6" {
-		t.Errorf("GetDefaultModel(unknown) = %q, want claude-sonnet-4-6", model)
+	if model != "claude-sonnet-5" {
+		t.Errorf("GetDefaultModel(unknown) = %q, want claude-sonnet-5", model)
 	}
 }
 

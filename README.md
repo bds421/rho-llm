@@ -37,17 +37,18 @@ go get github.com/bds421/rho-llm
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
-> **Counting:** 23 built-in provider presets across 4 wire protocols — the OpenAI
+> **Counting:** 24 built-in provider presets across 4 wire protocols — the OpenAI
 > row spans two (`openai_compat` and the auto-selected `openai_responses` for GPT-5
 > reasoning models), and `claude`/`google`/`grok`/`qwen`/`z-ai`/`glm`/`kimi` are aliases
-> of providers already listed. 18 of them ship curated **model metadata** (pricing + capabilities)
-> for cost estimation and discovery; the rest work fully — any model ID can be passed
-> directly — and you can add metadata for any model at runtime (see
-> [Model Registry](#model-registry)). Unknown providers work too via `Config.BaseURL`.
+> of providers already listed. Curated **model metadata** (pricing + capabilities) backs
+> cost estimation, discovery, and fail-closed capability checks. Unlisted model IDs
+> need `RegisterModel` (or `Config.ModelCapabilities`) before dispatch — see
+> [Model Registry](#model-registry). Unknown providers work via `Config.BaseURL` once
+> capabilities are declared the same way.
 
 ## Quick Start
 
-This example demonstrates a complete request using Google Gemini, but the code is identical for all 23 providers.
+This example demonstrates a complete request using Google Gemini, but the code is identical for all 24 providers.
 
 ```go
 import _ "github.com/bds421/rho-llm/provider" // required: register adapters
@@ -601,11 +602,13 @@ sess := llm.NewSession(mock)                 // drive Sessions/handoff in tests,
 
 ### Embeddings, image generation, audio
 
-Non-chat operations use the same registered-adapter pattern as chat. Construct
-one `ModalityClient` for an exact deployment and reuse it for the worker
-lifetime; its safe HTTP transport, connection pool, retry policy, proxy policy,
-bounded reads, caller cancellation, and classified errors are shared across
-all four operations:
+Non-chat operations use the same registered-adapter pattern as chat.
+**OpenAI-compatible** drivers cover embeddings, image generation, speech, and
+transcription; **Gemini** covers embeddings and image generation (speech and
+transcription are unsupported). Construct one `ModalityClient` for an exact
+deployment and reuse it for the worker lifetime; its safe HTTP transport,
+connection pool, retry policy, proxy policy, bounded reads, caller cancellation,
+and classified errors are shared across operations:
 
 ```go
 cfg.Model = "text-embedding-3-small"
@@ -672,9 +675,10 @@ such as `de-AT` rather than silently truncating them to `de`.
 ### Batch API (async, ~50% cheaper)
 
 For bulk work whose results you don't need immediately, `NewBatchClient` submits many requests at
-once (OpenAI: chat, responses, and embeddings). It returns a serializable `BatchHandle` you can
-persist and poll later — even after a restart. The interface is provider-agnostic; OpenAI is the
-first driver.
+once. Drivers: **OpenAI** (chat, responses, embeddings), **Anthropic Message Batches** (chat), and
+**Gemini Batch** (chat + embeddings). It returns a serializable `BatchHandle` you can
+persist and poll later — even after a restart. The interface is provider-agnostic; each vendor
+registers a batch driver for its wire protocol.
 
 ```go
 cfg := llm.DefaultConfig(); cfg.Provider = "openai"; cfg.APIKey = os.Getenv("OPENAI_API_KEY")
@@ -688,6 +692,8 @@ handle, _ := bc.Submit(ctx, []llm.BatchItem{
 }, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 
 blob, _ := json.Marshal(handle)            // persist; resume after a restart with llm.LoadBatchHandle(blob)
+
+// Anthropic / Gemini use the same API (Provider: "anthropic" or "gemini", SupportsBatch).
 
 done, _ := llm.WaitForBatch(ctx, bc, *handle, 30*time.Second) // polls until terminal; honors ctx
 if done.Status == llm.BatchCompleted {
@@ -703,6 +709,43 @@ wire endpoint and remote file identifiers in bounded, versioned opaque handle st
 rejects mixed/duplicate/empty sets and an unrepresentable caller-authored `MaxTurnaround` before
 any upload. Batch cost is estimated at 50% via `CostInput{Batch: true}` /
 `Usage.AddBatchResponse`.
+
+### Mistral & Chinese hosts (beyond chat)
+
+These use the **openai_compat** wire. Chat works with the named presets. **Embeddings**
+work when the host exposes OpenAI-shaped `/embeddings` and the model is registered
+with `CapabilityEmbeddings` (e.g. Mistral `mistral-embed`, DashScope
+`text-embedding-v3`):
+
+```go
+cfg := llm.Config{Provider: "mistral", Model: "mistral-embed", APIKey: os.Getenv("MISTRAL_API_KEY")}
+mc, _ := llm.NewModalityClient(cfg)
+emb, _ := mc.GenerateEmbeddings(ctx, llm.EmbeddingRequest{Model: "mistral-embed", Input: []string{"query"}})
+
+// Mainland DashScope (compatible-mode):
+cfgCN := llm.Config{Provider: "dashscope-cn", Model: "text-embedding-v3", APIKey: os.Getenv("DASHSCOPE_API_KEY")}
+```
+
+**Not** first-class in rho today: MiniMax proprietary speech/video APIs, DashScope
+native multimodal-embed (non-OpenAI shape), DeepSeek embeddings (vendor has no
+public vector endpoint). Use chat + external embedders, or `RegisterModel` + custom
+`BaseURL` when a gateway exposes an OpenAI-shaped path.
+
+### Realtime (OpenAI reference)
+
+Long-lived bidirectional sessions are a **separate** surface from `Complete`/`Stream`.
+Inject a `RealtimeDialer` (typically a WebSocket) to open a session; offline unit
+tests drive framing through an in-memory conn:
+
+```go
+session, err := llm.OpenRealtimeSession(ctx, cfg, myWebSocketDialer)
+if err != nil { /* handle */ }
+defer session.Close()
+_ = session.SendAudio(ctx, base64PCM)
+_ = session.CommitAudio(ctx)
+_ = session.RequestResponse(ctx)
+ev, _ := session.Recv(ctx) // session.created, response.audio.delta, ...
+```
 
 ### OAuth (device flow)
 
@@ -723,7 +766,7 @@ tok, _ := llm.PollDeviceToken(ctx, cfg, da)  // honors authorization_pending / s
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | Provider | string | "anthropic" | Provider name |
-| Model | string | "claude-sonnet-4-6" | Model identifier |
+| Model | string | "claude-sonnet-5" | Model identifier |
 | ModelCapabilities | CapabilitySet | 0 | Exact deployment-scoped reviewed capabilities for Model; overrides global registry metadata |
 | APIKey | string | "" | API key (empty OK for local providers) |
 | MaxTokens | int | 8192 | Max output tokens |
@@ -890,23 +933,27 @@ fmt.Printf("Context: %d tokens\n", info.ContextWindow)
 provider := llm.ProviderForModel("gemini-2.5-flash") // -> "gemini"
 
 // Get the default model for a provider
-model := llm.GetDefaultModel("xai") // -> "grok-4.20-beta"
+model := llm.GetDefaultModel("xai") // -> "grok-4.5"
 ```
 
 **Extending the registry at runtime.** Unlisted models return a cost estimate of `0`
-and carry no capability flags. Register metadata for any model — or correct stale
-built-in pricing in place — without waiting for a release. Both calls are safe for
-concurrent use:
+and cannot dispatch until they have reviewed capability metadata. Register metadata
+for any model — or correct stale built-in pricing in place — without waiting for a
+release. Both calls are safe for concurrent use. A zero `Capabilities` field gets
+the same conservative chat defaults as built-ins; set explicit bits for vision,
+tools, embeddings, etc., or use `Config.ModelCapabilities` on the client.
 
 ```go
-// Add (or override) a model's metadata — it now feeds EstimateCost, the
-// capability flags adapters read, and the discovery API (Models/ModelsByProvider).
+// Add (or override) a model's metadata — it now feeds EstimateCost, capability
+// validation, and the discovery API (Models/ModelsByProvider).
 llm.RegisterModel(llm.ModelInfo{
     ID:               "my-self-hosted-llm",
     Provider:         "vllm",
     ContextWindow:    128000,
     InputPricePer1M:  0.20,
     OutputPricePer1M: 0.60,
+    // Optional: Capabilities defaults to chat+stream(+tools) for local hosts.
+    // Capabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityStream, llm.CapabilityTools),
 })
 
 // Point a short alias at it (the target model must already be registered).

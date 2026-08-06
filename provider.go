@@ -15,24 +15,31 @@ type ProviderPreset struct {
 // Immutable after init — no mutex needed.
 var presets = map[string]ProviderPreset{
 	// Native protocols
-	"anthropic": {BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic"},
-	"claude":    {BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic"},
-	"gemini":    {BaseURL: "https://generativelanguage.googleapis.com/v1beta/models", Protocol: "gemini"},
-	"google":    {BaseURL: "https://generativelanguage.googleapis.com/v1beta/models", Protocol: "gemini"},
+	"anthropic": {BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic", SupportsBatch: true},
+	"claude":    {BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic", SupportsBatch: true},
+	"gemini":    {BaseURL: "https://generativelanguage.googleapis.com/v1beta/models", Protocol: "gemini", SupportsBatch: true},
+	"google":    {BaseURL: "https://generativelanguage.googleapis.com/v1beta/models", Protocol: "gemini", SupportsBatch: true},
 
 	// OpenAI Responses API (explicit provider selection)
 	"openai_responses": {BaseURL: "https://api.openai.com/v1", AuthHeader: "Bearer", Protocol: "openai_responses", SupportsBatch: true},
 
 	// OpenAI-compatible: cloud providers
-	"openai":     {BaseURL: "https://api.openai.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat", SupportsBatch: true},
-	"xai":        {BaseURL: "https://api.x.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"grok":       {BaseURL: "https://api.x.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"openai": {BaseURL: "https://api.openai.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat", SupportsBatch: true},
+	"xai":    {BaseURL: "https://api.x.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"grok":   {BaseURL: "https://api.x.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	// Meta Model API (Muse Spark) — OpenAI-compatible surface at api.meta.ai.
+	"meta":       {BaseURL: "https://api.meta.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"groq":       {BaseURL: "https://api.groq.com/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"cerebras":   {BaseURL: "https://api.cerebras.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"mistral":    {BaseURL: "https://api.mistral.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"openrouter": {BaseURL: "https://openrouter.ai/api/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"dashscope":  {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"qwen":       {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	// DashScope / Qwen — intl default; dashscope-cn for mainland compatible-mode.
+	"dashscope":    {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"qwen":         {BaseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"dashscope-cn": {BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"qwen-cn":      {BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	// DeepSeek chat is OpenAI-compatible at the host root (paths are /chat/completions).
+	// No first-party embeddings API — use another host for vectors.
 	"deepseek":   {BaseURL: "https://api.deepseek.com", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"cohere":     {BaseURL: "https://api.cohere.ai/compatibility/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"together":   {BaseURL: "https://api.together.xyz/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
@@ -40,12 +47,18 @@ var presets = map[string]ProviderPreset{
 	"nvidia":     {BaseURL: "https://integrate.api.nvidia.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"perplexity": {BaseURL: "https://api.perplexity.ai", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"deepinfra":  {BaseURL: "https://api.deepinfra.com/v1/openai", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"zai":        {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"z-ai":       {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"glm":        {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"minimax":    {BaseURL: "https://api.minimax.io/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"moonshot":   {BaseURL: "https://api.moonshot.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"kimi":       {BaseURL: "https://api.moonshot.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	// Z.ai / GLM — OpenAI-compatible chat (+ tools/vision where the model admits it).
+	"zai":  {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"z-ai": {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"glm":  {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	// MiniMax global OpenAI-compatible chat. Proprietary speech/video APIs are not
+	// registered as rho modalities (non-OpenAI wire).
+	"minimax": {BaseURL: "https://api.minimax.io/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	// Moonshot / Kimi — global .ai and mainland .cn compatible bases.
+	"moonshot":    {BaseURL: "https://api.moonshot.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"kimi":        {BaseURL: "https://api.moonshot.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"moonshot-cn": {BaseURL: "https://api.moonshot.cn/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"kimi-cn":     {BaseURL: "https://api.moonshot.cn/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 
 	// Providers requiring auth that the preset model can't express are intentionally
 	// NOT listed: Amazon Bedrock (AWS SigV4) and Google Vertex AI (GCP service-account

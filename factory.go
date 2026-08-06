@@ -109,8 +109,8 @@ func (client *capabilityValidatedModalityClient) TranscribeAudio(
 // NewBatchClient creates an asynchronous batch client for bulk request processing.
 // Batch is a separate execution mode from Complete/Stream — submit → poll → fetch —
 // so it returns a BatchClient, not a Client. Only providers whose preset advertises
-// SupportsBatch (currently first-party OpenAI) are accepted; anything else returns a
-// clear error rather than falling through to a nil-factory panic.
+// SupportsBatch (OpenAI, Anthropic Message Batches, Gemini Batch) are accepted;
+// anything else returns a clear error rather than falling through to a nil-factory panic.
 //
 // cfg.Model is optional here: the model is taken per-item from each BatchItem's
 // Request/Embedding, so a single batch client can submit mixed models (subject to the

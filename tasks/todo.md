@@ -19,4 +19,9 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ## Open work
 
-_(none — the v0.4.0 architecture-review fixes shipped; see `CHANGELOG.md`.)_
+_(Phase A–D multi-vendor batch/modality/catalog/realtime shipped in v0.7.0; see `CHANGELOG.md`.)_
+
+### Follow-ups (optional)
+- WebSocket dialer helper for OpenAI Realtime production use (live smoke uses a test-only dialer)
+- Gemini Live / multi-vendor realtime beyond OpenAI reference
+- Expand live smokes to Meta/Mistral/CN hosts when keys are available

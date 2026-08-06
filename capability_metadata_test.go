@@ -12,6 +12,55 @@ func TestCapabilityValidationFailsClosedForUnknownModel(t *testing.T) {
 	}
 }
 
+// Cloud openai_compat catalogs must not lose vision/PDF/structured support when
+// callers use default built-in metadata (v0.5→0.6 regression guard).
+func TestDefaultCloudCatalogCapabilitiesMatchDocumentedMultimodalSupport(t *testing.T) {
+	cases := []struct {
+		provider string
+		model    string
+		want     []Capability
+	}{
+		{"xai", "grok-4.5", []Capability{CapabilityChat, CapabilityVision, CapabilityDocumentInput, CapabilityStructuredOutput}},
+		{"meta", "muse-spark-1.2", []Capability{CapabilityChat, CapabilityVision, CapabilityDocumentInput, CapabilityStructuredOutput}},
+		// GPT-5.x auto-selects openai_responses, which encodes vision/structured/batch
+		// but not PDF (document fails closed at the protocol envelope — by design).
+		{"openai", "gpt-5.6-sol", []Capability{CapabilityChat, CapabilityVision, CapabilityStructuredOutput, CapabilityBatch}},
+		{"openai", "gpt-4.1", []Capability{CapabilityChat, CapabilityVision, CapabilityDocumentInput, CapabilityStructuredOutput}},
+		{"anthropic", "claude-sonnet-5", []Capability{CapabilityChat, CapabilityVision, CapabilityDocumentInput, CapabilityBatch}},
+		{"gemini", "gemini-3.6-flash", []Capability{CapabilityChat, CapabilityVision, CapabilityDocumentInput, CapabilityBatch}},
+		{"gemini", "gemini-embedding-001", []Capability{CapabilityEmbeddings}},
+		{"groq", "llama-3.3-70b-versatile", []Capability{CapabilityChat, CapabilityStructuredOutput, CapabilityVision}},
+	}
+	for _, tc := range cases {
+		cfg := Config{Provider: tc.provider, Model: tc.model}
+		if err := RequireCapabilities(cfg, tc.want...); err != nil {
+			t.Fatalf("%s/%s: %v", tc.provider, tc.model, err)
+		}
+	}
+	// Local hosts stay chat-focused so undeclared vision fails closed.
+	if err := RequireCapabilities(Config{Provider: "ollama", Model: "qwen3:8b"}, CapabilityVision); err == nil {
+		t.Fatal("ollama default catalog should not claim vision without an explicit declaration")
+	}
+}
+
+func TestRegisterModelZeroCapabilitiesAppliesChatDefaults(t *testing.T) {
+	const model = "test/register-model-default-caps"
+	if err := RegisterModel(ModelInfo{ID: model, Provider: "vllm"}); err != nil {
+		t.Fatalf("RegisterModel: %v", err)
+	}
+	info, ok := GetModelInfo(model)
+	if !ok || !info.Capabilities.Supports(CapabilityChat, CapabilityStream) {
+		t.Fatalf("RegisterModel zero Capabilities did not apply chat defaults: %+v", info)
+	}
+	if err := RequireCapabilities(Config{Provider: "vllm", Model: model}, CapabilityChat); err != nil {
+		t.Fatalf("dispatch capability check after zero-cap RegisterModel: %v", err)
+	}
+	// Still fail closed for undeclared extras on local hosts.
+	if err := RequireCapabilities(Config{Provider: "vllm", Model: model}, CapabilityVision); err == nil {
+		t.Fatal("vllm default chat caps should not invent vision")
+	}
+}
+
 func TestCompatibleLocalModelCanDeclareReviewedCapabilities(t *testing.T) {
 	const model = "test/vllm-reviewed-capabilities"
 	if err := RegisterModel(ModelInfo{
@@ -183,7 +232,7 @@ func TestDedicatedModelCannotCrossModalities(t *testing.T) {
 
 func TestReasoningCapabilityMeansEffortIsEnforceable(t *testing.T) {
 	if err := ValidateRequestCapabilities(
-		Config{Provider: "openai", Model: "gpt-5.4"},
+		Config{Provider: "openai", Model: "gpt-5.6-sol"},
 		Request{ThinkingLevel: ThinkingLow}, false,
 	); err != nil {
 		t.Fatalf("Responses reasoning effort rejected: %v", err)

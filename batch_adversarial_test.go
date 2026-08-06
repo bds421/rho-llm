@@ -465,7 +465,8 @@ func TestLoadBatchHandleRejectsSchemaVersions(t *testing.T) {
 
 func TestNewBatchClientUnsupportedProvider(t *testing.T) {
 	cfg := llm.DefaultConfig()
-	cfg.Provider = "anthropic"
+	// Groq remains chat-only openai_compat without SupportsBatch.
+	cfg.Provider = "groq"
 	cfg.APIKey = "k"
 	if _, err := llm.NewBatchClient(cfg); err == nil || !strings.Contains(err.Error(), "does not support the batch API") {
 		t.Fatalf("expected unsupported-provider error, got: %v", err)

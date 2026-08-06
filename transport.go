@@ -70,7 +70,7 @@ func DoHTTP(ctx context.Context, cfg Config, client *http.Client, build HTTPRequ
 				return resp, nil
 			}
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		} else {
 			lastErr = err
 			if ctx.Err() != nil {

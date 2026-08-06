@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-06
+
+### Added
+
+- **Multi-vendor BatchClient drivers** on the same public `Submit`/`Get`/`Results`/
+  `Cancel` surface as OpenAI:
+  - Anthropic Message Batches (`provider/anthropicbatch`, protocol `anthropic`) —
+    completion items only; 24h max turnaround; results JSONL; `SupportsBatch` on
+    anthropic/claude presets.
+  - Gemini Batch (`provider/geminibatch`, protocol `gemini`) — completion and
+    embedding items via inline batch jobs; 24h max turnaround; `SupportsBatch` on
+    gemini/google presets. Live Gemini returns `BATCH_STATE_*` (also accepts
+    documented `JOB_STATE_*` aliases).
+- **Gemini modality driver** (`RegisterModalityDriver("gemini")`): embeddings
+  (`embedContent`) and image generation (`generateContent` + IMAGE modality).
+  Speech/transcription remain unsupported (fail closed). Registry entries for
+  `gemini-embedding-001`/`gemini-embedding-2` and Gemini image models.
+- **OpenAI Realtime public surface** (`realtime.go`): `OpenRealtimeSession` with a
+  injectable `RealtimeDialer`/`RealtimeConn`, neutral event types, OpenAI wire
+  encode/decode (`input_audio_buffer.*`, `response.*`, errors), and offline state
+  machine tests. Distinct from one-shot Complete/Stream.
+- Model registry refresh (2026-08-06) for current first-party catalogs:
+  - **Anthropic:** `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, plus the
+    `claude-haiku-4-5` alias ID; defaults/aliases (`sonnet`/`opus`/`claude`/`fable`)
+    point at the Claude 5 family.
+  - **OpenAI:** GPT-5.6 Sol/Terra/Luna (`gpt-5.6-sol`, `gpt-5.6-terra`,
+    `gpt-5.6-luna`) with Responses API + pricing; `gpt-image-2`; default `gpt` → Sol.
+  - **xAI:** `grok-4.5`, stable `grok-4.20-0309-*` / multi-agent / `grok-build-0.1`
+    slugs (beta IDs retained); default `xai`/`grok` → `grok-4.5`.
+  - **Meta Model API:** first-class `meta` provider (`https://api.meta.ai/v1`) with
+    `muse-spark-1.2`, `muse-spark-1.1`, and `muse-spark-1.2-contributor` (standard
+    vs contributor pricing). Documented provider count 23 → 24.
+  - **Mistral:** Pixtral vision models + `mistral-embed` / `mistral-large-latest` /
+    `codestral-latest`; embeddings proven via openai_compat `/embeddings`.
+  - **Chinese hosts:** expanded Z.ai/GLM, MiniMax, Moonshot/Kimi, DashScope/Qwen,
+    DeepSeek V4 flash/pro; DashScope `text-embedding-v2/v3`; regional presets
+    `dashscope-cn`/`qwen-cn` and `moonshot-cn`/`kimi-cn` for mainland bases.
+    DeepSeek embeddings remain fail-closed (no first-party vector API).
+- Optional live smokes (`live_smoke_new_test.go`, skipped under `-short` / missing
+  keys) for Anthropic/Gemini/OpenAI batch, Gemini embeddings + image gen,
+  Anthropic `WaitForBatch`, and OpenAI Realtime.
+
+### Fixed
+
+- gosec G104 in shared `DoHTTP` retry path: drain-and-discard now discards
+  `resp.Body.Close()` errors explicitly (`_ = resp.Body.Close()`), restoring a
+  green `make ci` security gate after the v0.6.0 transport addition.
+- Default chat capability metadata no longer under-declares features the adapters
+  and docs already advertise: OpenAI gains `CapabilityDocumentInput`; xAI/Meta and
+  other cloud OpenAI-compatible providers gain vision, document, and structured
+  output; Anthropic/Gemini advertise batch where drivers exist. Local
+  `ollama`/`vllm`/`lmstudio` stay chat-focused so deployments must declare extras.
+  `RegisterModel` with a zero capability set now applies the same defaults as
+  package init (instead of registering a model that always fails closed at dispatch).
+
 ## [0.6.0] - 2026-08-06
 
 ### Added
