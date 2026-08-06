@@ -395,6 +395,9 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 
 // maxRetries returns the effective retry cap, reading from config.
 func (pc *PooledClient) maxRetries() int {
+	if pc.cfg.DisableRetries {
+		return 1
+	}
 	cap := pc.cfg.MaxRetries
 	if cap <= 0 {
 		cap = DefaultMaxRetries
@@ -461,6 +464,10 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 		}
 
 		pc.emitRetryEvent(RetryEvent{Type: RetryAttemptFailed, Attempt: i, Err: err})
+		if pc.cfg.DisableRetries {
+			pc.breaker.ReleaseProbe(probeTok)
+			return nil, err
+		}
 
 		// Auth errors and retryable errors trigger rotation to try another key.
 		// Other errors (400 bad request, etc.) are not key-related — return immediately.
@@ -621,6 +628,11 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			}
 
 			pc.emitRetryEvent(RetryEvent{Type: RetryAttemptFailed, Attempt: attempt, Err: lastErr})
+			if pc.cfg.DisableRetries {
+				pc.breaker.ReleaseProbe(probeTok)
+				yield(StreamEvent{}, lastErr)
+				return
+			}
 
 			// Auth errors do NOT trip the circuit — bad key ≠ broken endpoint
 			if !IsAuthError(lastErr) {

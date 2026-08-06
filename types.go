@@ -5,7 +5,9 @@
 package llm
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -230,6 +232,15 @@ func ValidateImageSource(part ContentPart) error {
 	if part.Source.Type != "base64" {
 		return fmt.Errorf("unsupported image source type: %s", part.Source.Type)
 	}
+	decoded, err := decodeCanonicalBase64(part.Source.Data)
+	if err != nil {
+		return fmt.Errorf("invalid image base64 data: %w", err)
+	}
+	if actual := imageMediaTypeFromSignature(decoded); actual == "" {
+		return fmt.Errorf("image data has no supported signature")
+	} else if actual != part.Source.MediaType {
+		return fmt.Errorf("image data media type %s does not match declared %s", actual, part.Source.MediaType)
+	}
 	return nil
 }
 
@@ -280,7 +291,40 @@ func ValidateDocumentSource(part ContentPart) error {
 	if part.Document.Type != "base64" {
 		return fmt.Errorf("unsupported document source type: %s", part.Document.Type)
 	}
+	decoded, err := decodeCanonicalBase64(part.Document.Data)
+	if err != nil {
+		return fmt.Errorf("invalid document base64 data: %w", err)
+	}
+	if !bytes.HasPrefix(decoded, []byte("%PDF-")) {
+		return fmt.Errorf("document data does not have a PDF signature")
+	}
 	return nil
+}
+
+func decodeCanonicalBase64(encoded string) ([]byte, error) {
+	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	if base64.StdEncoding.EncodeToString(decoded) != encoded {
+		return nil, fmt.Errorf("encoding is not canonical RFC 4648 base64")
+	}
+	return decoded, nil
+}
+
+func imageMediaTypeFromSignature(data []byte) string {
+	switch {
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")):
+		return "image/png"
+	case len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff:
+		return "image/jpeg"
+	case len(data) >= 6 && (bytes.Equal(data[:6], []byte("GIF87a")) || bytes.Equal(data[:6], []byte("GIF89a"))):
+		return "image/gif"
+	case len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")):
+		return "image/webp"
+	default:
+		return ""
+	}
 }
 
 // NewDocumentMessage creates a single-document message (parallel to NewImageMessage).
@@ -456,9 +500,9 @@ type Request struct {
 	CachedContent      string `json:"cached_content,omitempty"`       // Gemini: pre-created cache name
 
 	// ResponseFormat requests structured output (JSON mode / JSON schema). Wired
-	// for OpenAI-compatible providers (response_format) and Gemini
-	// (responseMimeType/responseSchema). Anthropic has no native JSON mode (use a
-	// tool or prompt); the Responses adapter does not wire it. Nil = free text.
+	// for OpenAI-compatible providers (response_format), OpenAI Responses
+	// (text.format), and Gemini (responseMimeType/responseSchema). Anthropic has
+	// no native JSON mode (use a tool or prompt). Nil = free text.
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 }
 

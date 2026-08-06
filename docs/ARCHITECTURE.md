@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of June 2026 (v0.5.0).
+> **Status:** Reflects the current implementation as of August 2026.
 
 ---
 
@@ -17,7 +17,8 @@
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
 - Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForProvider`); pluggable persistence (`Store`: `MemoryStore`/`FileStore`)
 - Structured output (JSON mode / JSON schema) on OpenAI-compatible + Gemini; tool-call validation; fine-grained streaming boundaries (`StreamWithBoundaries`)
-- Non-chat capabilities for OpenAI-compatible providers: embeddings, image generation, audio speech/transcription; OAuth 2.0 device-flow token acquisition
+- Registered `ModalityClient` adapters for embeddings, image generation, speech,
+  and transcription; OpenAI-compatible is the first modality driver
 - A `MockClient` test double and model/provider discovery (`Models`/`Providers`)
 - Auth pool rotation with exponential backoff and per-profile cooldown
 - Structured error types enabling reliable retry classification
@@ -35,9 +36,10 @@ github.com/bds421/rho-llm/
 ├── provider.go       # Provider presets, protocol resolution, URL/auth resolution
 ├── registry.go       # ModelRegistry, ModelAliases, cost estimation, ResolveModelAlias()
 ├── register.go       # RegisterProvider() + provider factory registry
+├── modalityregister.go # RegisterModalityDriver() + modality registry
 ├── batch.go          # BatchClient interface + BatchItem/BatchResult/BatchHandle (async, serializable)
 ├── batchregister.go  # RegisterBatchProvider() + batch driver registry (parallels register.go)
-├── factory.go        # NewClient() / NewClientWithKeys() / NewBatchClient() — registry lookup entry points
+├── factory.go        # NewClient() / NewModalityClient() / NewBatchClient()
 ├── conversation.go      # Conversation (serializable transcript) + Usage + versioned JSON
 ├── session.go           # Session (concurrency-safe driver) + provider handoff (SwitchProvider)
 ├── normalize.go         # NormalizeForProvider() — cross-provider transcript translation
@@ -47,7 +49,7 @@ github.com/bds421/rho-llm/
 ├── discovery.go         # Models() / ModelsByProvider() / Providers()
 ├── simple.go            # CompleteSimple / StreamSimple
 ├── validate.go          # ValidateToolCall() against a tool's InputSchema
-├── capabilities.go      # Embeddings, image generation, audio (OpenAI-compatible)
+├── capabilities.go      # Provider-neutral modality types/interfaces/validation
 ├── oauth.go             # OAuth 2.0 device-flow helpers (RFC 8628)
 ├── transport.go         # Shared HTTP plumbing: bounded reads + APIError construction
 ├── pool.go              # AuthPool + PooledClient (rotation + retry for Complete and Stream pre-data failures)
@@ -63,12 +65,16 @@ github.com/bds421/rho-llm/
     ├── all.go                       # Blank-imports all sub-packages
     ├── anthropic/anthropic.go       # Native Anthropic API adapter
     ├── gemini/gemini.go             # Native Google Gemini API adapter
-    ├── openaicompat/openaicompat.go # OpenAI-compatible adapter (18+ providers)
+    ├── openaicompat/                # OpenAI-compatible chat + modality adapter
     ├── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning)
     └── openaibatch/openaibatch.go   # OpenAI Batch API driver (async; Files + Batches REST)
 ```
 
-Provider implementations register themselves via `init()` using `llm.RegisterProvider()`. Consumers that call `llm.NewClient()` must add a blank import: `_ "github.com/bds421/rho-llm/provider"`.
+Provider implementations register themselves via `init()` using
+`llm.RegisterProvider()`, `llm.RegisterModalityDriver()`, and/or
+`llm.RegisterBatchProvider()`. Consumers that construct clients or invoke pure
+adapter encodability validation must add a blank import:
+`_ "github.com/bds421/rho-llm/provider"`.
 
 ---
 
@@ -248,7 +254,44 @@ NewClient(cfg)
                           └── cfg.LogRequests? → WithLogging(client)
 ```
 
-All clients — including keyless local providers (Ollama, vLLM, LM Studio) — go through `PooledClient` to get exponential backoff on transient errors (429, 503, 502). `NewClient` always delegates to `NewClientWithKeys`, and `NewClientWithKeys` with a nil/empty key slice falls back to `cfg.APIKey` (rather than bypassing the pool, v0.4.0) — ensuring uniform retry/backoff protection for every construction path.
+All chat clients — including keyless local providers (Ollama, vLLM, LM Studio)
+— go through `PooledClient` to get exponential backoff on transient errors (429,
+503, 502). `NewClient` always delegates to `NewClientWithKeys`, and
+`NewClientWithKeys` with a nil/empty key slice falls back to `cfg.APIKey` rather
+than bypassing the pool.
+
+### Modality factory
+
+```
+NewModalityClient(cfg)
+    ├── resolve exact model + protocol
+    ├── CheckBaseURL(cfg)
+    ├── getModalityDriver(protocol)
+    ├── driver.New(cfg) → durable protocol client
+    └── capabilityValidatedModalityClient
+```
+
+`ModalityClient` exposes embeddings, image generation, speech synthesis, and
+transcription without placing any OpenAI endpoint or format vocabulary in the
+root package. The OpenAI-compatible driver is registered next to its chat
+driver and implements those operations on the same concrete `openaicompat.Client`.
+Each constructed modality client retains one `SafeHTTPClient` until `Close`, so
+workers reuse connections instead of constructing a transport per dispatch.
+
+Before every network effect, the factory wrapper performs generic structure and
+reviewed-capability validation, then delegates pure encodability validation to
+the registered driver. Provider-specific URL paths, JSON/multipart bodies,
+output format tokens, and response parsing remain in that driver. Network calls
+use `DoHTTP`, giving remote and local deployments the same explicit proxy,
+retry-hook, backoff, caller-cancellation, bounded-read, and classified-error
+behavior. Credential rotation/circuit breaking remain chat-pool concerns; a
+modality client represents one exact deployment credential owned by its worker.
+
+Image geometry/count/format, voice, and language are request values authored by
+the application. Rho does not choose preferred values or impose product-level
+image limits; it only rejects structurally invalid or unencodable combinations.
+Canonical base64 plus signature/MIME agreement is required for inline image/PDF
+inputs, and supported transcription audio signatures are checked before upload.
 
 ---
 
@@ -361,7 +404,9 @@ attempt 3: base × 2³ = ~8s  (6.00–10.0s)
 ...capped at maxDelay (default 30s)
 ```
 
-All parameters are configurable via `Config.RetryPolicy`: `BaseDelay`, `MaxDelay`, `Factor`, `Jitter`. The backward-compatible `Backoff()` function still works.
+All parameters are configurable through `Config.RetryPolicy`: `BaseDelay`,
+`MaxDelay`, `Factor`, and `Jitter`. `RetryPolicy.Delay` is the single public
+backoff calculation; no compatibility wrapper is retained.
 
 ### Circuit Breaker (`circuitbreaker.go`)
 
@@ -468,7 +513,7 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 |---|---|
 | Anthropic | claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 |
 | xAI | grok-4.3, grok-4.20-beta, grok-4-1-fast-{reasoning,non-reasoning}, grok-4-fast-{reasoning,non-reasoning}, grok-code-fast-1, grok-3, grok-3-mini |
-| Gemini | gemini-3.5-flash, gemini-3.1-{pro,flash-lite}-preview, gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
+| Gemini | gemini-3.6-flash, gemini-3.5-{flash,flash-lite}, gemini-3.1-flash-lite, gemini-3.1-pro-preview, gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
 
 `EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0.
 
@@ -687,12 +732,15 @@ status under caller-controlled `context`.
 
 ### Neutral types
 
-- `BatchItem` — a `custom_id` plus exactly one of a chat `Request` **xor** an `EmbeddingRequest`.
-- `BatchResult` — correlated by `custom_id`; carries a `*Response`, an `*EmbeddingResponse`, or an
+- `BatchItem` — a neutral `ItemID` plus exactly one of a chat `Request` **xor** an `EmbeddingRequest`.
+- `BatchResult` — correlated by `ItemID`; carries a `*Response`, an `*EmbeddingResponse`, or an
   `*APIError`.
-- `BatchHandle` — serializable and **versioned** (`schema_version` / `LoadBatchHandle`, mirroring
-  `Conversation`). Its `Endpoint` is load-bearing on resume: `Results` selects the response parser
-  from it, because the original items (which implied the kind) are gone after a restart.
+- `BatchHandle` — serializable exact schema v2. It exposes only a neutral external `ID`, closed
+  operation and lifecycle, request counts, recovery identity, and bounded opaque adapter state.
+  Missing, older, and newer schemas fail closed. `Get`, `Results`, and `Cancel` consume the complete
+  handle, so endpoint and remote-file vocabulary never leak into the root API.
+- `BatchOptions.MaxTurnaround` — a required caller-authored duration. Root bounds it but never
+  selects or defaults it; each adapter proves exact wire representability before I/O.
 
 ### OpenAI driver (`provider/openaibatch/`)
 
@@ -702,7 +750,11 @@ body}` line per item), upload it (`purpose=batch`), create a batch referencing i
 items are homogeneous (all `/v1/chat/completions`, all `/v1/responses`, or all `/v1/embeddings`)
 and rejects mixed/duplicate/empty sets **before any network effect**. The per-item chat-vs-responses
 split reuses the live `ResolveProtocol` rule, so a GPT-5 item batches to `/v1/responses` exactly as
-`Complete` would send it.
+`Complete` would send it. The adapter maps exact `24h` turnaround to the OpenAI wire and owns the
+endpoint plus input/output/error file IDs in strict adapter-state v1. It normalizes `validating` to
+`queued`, `in_progress`/`finalizing` to `running`, and rejects unknown provider states. OpenAI's
+50,000-request, 50,000-total-embedding-input, and 200 MB encoded-JSONL limits are
+adapter-owned and enforced before the Files API.
 
 ### Single source of wire-format truth
 
@@ -769,4 +821,3 @@ Anthropic and Gemini offer context caching with fundamentally different models:
 - `Response.CacheReadTokens` is populated from `usageMetadata.cachedContentTokenCount`
 
 **OpenAI-compatible:** All cache fields are silently ignored (no API support).
-

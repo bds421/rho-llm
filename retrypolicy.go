@@ -102,28 +102,3 @@ func (p RetryPolicy) Delay(attempt int) time.Duration {
 
 	return delay
 }
-
-// Backoff calculates exponential backoff with jitter.
-//
-// attempt is 0-indexed. The delay doubles each attempt starting from baseDelay,
-// capped at maxDelay. Jitter of +/-25% is applied to prevent thundering herd.
-//
-// This is a backward-compatible wrapper around RetryPolicy.Delay.
-//
-// Examples (baseDelay=1s, maxDelay=30s):
-//
-//	attempt 0: ~1s   (0.75s - 1.25s)
-//	attempt 1: ~2s   (1.50s - 2.50s)
-//	attempt 2: ~4s   (3.00s - 5.00s)
-//	attempt 3: ~8s   (6.00s - 10.0s)
-//	attempt 4: ~16s  (12.0s - 20.0s)
-//	attempt 5: ~30s  (22.5s - 30.0s) (capped)
-func Backoff(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
-	p := RetryPolicy{
-		BaseDelay: baseDelay,
-		MaxDelay:  maxDelay,
-		Factor:    2.0,
-		Jitter:    0.25,
-	}
-	return p.Delay(attempt)
-}

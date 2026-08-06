@@ -16,7 +16,7 @@ func TestBuildRequestToolResultImage(t *testing.T) {
 			{Role: llm.RoleAssistant, Content: []llm.ContentPart{{Type: llm.ContentToolUse, ToolUseID: "c1", ToolName: "snap"}}},
 			llm.NewToolResultParts("c1", false,
 				llm.ContentPart{Type: llm.ContentText, Text: "here you go"},
-				llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "AAAA"}},
+				llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "iVBORw0KGgo="}},
 			),
 		},
 	}

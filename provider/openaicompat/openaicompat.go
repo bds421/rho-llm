@@ -22,6 +22,7 @@ func init() {
 	llm.RegisterProvider("openai_compat", func(cfg llm.Config) (llm.Client, error) {
 		return New(cfg)
 	})
+	llm.RegisterModalityDriver("openai_compat", modalityDriver{})
 }
 
 // Client implements the OpenAI-compatible chat completions API.
@@ -56,10 +57,14 @@ func New(cfg llm.Config) (*Client, error) {
 	if providerName == "" {
 		providerName = cfg.Provider
 	}
+	httpClient, err := llm.NewSafeHTTPClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Client{
 		config:       cfg,
-		httpClient:   llm.SafeHTTPClient(cfg.Timeout),
+		httpClient:   httpClient,
 		baseURL:      baseURL,
 		authHeader:   authHeader,
 		providerName: providerName,
@@ -468,29 +473,30 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		}
 	}
 
-	// Convert tools (skip if model doesn't support tool calling)
+	// Convert tools. Never silently drop a reviewed tool contract.
 	if len(req.Tools) > 0 {
 		model := apiReq.Model
-		info, _ := llm.GetModelInfo(model)
-		if !info.NoToolSupport {
-			for _, tool := range req.Tools {
-				params := tool.InputSchema
-				if params == nil {
-					params = map[string]any{"type": "object"} // valid object, not null
-				}
-				apiReq.Tools = append(apiReq.Tools, openaiTool{
-					Type: "function",
-					Function: struct {
-						Name        string         `json:"name"`
-						Description string         `json:"description"`
-						Parameters  map[string]any `json:"parameters"`
-					}{
-						Name:        tool.Name,
-						Description: tool.Description,
-						Parameters:  params,
-					},
-				})
+		info, hasInfo := llm.GetModelInfo(model)
+		if hasInfo && info.NoToolSupport {
+			return openaiRequest{}, fmt.Errorf("%s model %q does not support tools", c.providerName, model)
+		}
+		for _, tool := range req.Tools {
+			params := tool.InputSchema
+			if params == nil {
+				params = map[string]any{"type": "object"} // valid object, not null
 			}
+			apiReq.Tools = append(apiReq.Tools, openaiTool{
+				Type: "function",
+				Function: struct {
+					Name        string         `json:"name"`
+					Description string         `json:"description"`
+					Parameters  map[string]any `json:"parameters"`
+				}{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  params,
+				},
+			})
 		}
 	}
 

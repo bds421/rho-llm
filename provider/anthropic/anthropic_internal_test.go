@@ -77,3 +77,41 @@ func TestBuildRequestThinkingBudgetNotClampedWhenWithinLimit(t *testing.T) {
 			apiReq.Thinking.BudgetTokens, want)
 	}
 }
+
+func TestBuildRequestThinkingDoesNotChooseOrRewriteTemperature(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "claude-opus-4-6"},
+		providerName: "anthropic",
+	}
+
+	for _, tc := range []struct {
+		name        string
+		temperature *float64
+	}{
+		{name: "provider default"},
+		{name: "application choice", temperature: temperaturePointer(1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			apiReq, err := c.buildRequest(llm.Request{
+				MaxTokens:     8192,
+				ThinkingLevel: llm.ThinkingLow,
+				Temperature:   tc.temperature,
+				Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "think")},
+			}, false)
+			if err != nil {
+				t.Fatalf("buildRequest: %v", err)
+			}
+			if tc.temperature == nil {
+				if apiReq.Temperature != nil {
+					t.Fatalf("temperature = %v, want omitted provider default", *apiReq.Temperature)
+				}
+				return
+			}
+			if apiReq.Temperature == nil || *apiReq.Temperature != *tc.temperature {
+				t.Fatalf("temperature = %v, want exact application choice %v", apiReq.Temperature, *tc.temperature)
+			}
+		})
+	}
+}
+
+func temperaturePointer(value float64) *float64 { return &value }

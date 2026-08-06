@@ -48,11 +48,15 @@ func New(cfg llm.Config) (*Client, error) {
 	if providerName == "" {
 		providerName = "anthropic"
 	}
+	httpClient, err := llm.NewSafeHTTPClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Client{
 		config:       cfg,
 		endpoint:     base + "/messages",
-		httpClient:   llm.SafeHTTPClient(cfg.Timeout),
+		httpClient:   httpClient,
 		providerName: providerName,
 	}, nil
 }
@@ -474,13 +478,6 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			Type:         "enabled",
 			BudgetTokens: budget,
 		}
-		// Anthropic requires temperature = 1.0 when extended thinking is enabled
-		one := 1.0
-		if req.Temperature != nil && *req.Temperature != 1.0 {
-			slog.Warn("overriding temperature to 1.0 (required by Anthropic extended thinking)",
-				"requested_temperature", *req.Temperature)
-		}
-		apiReq.Temperature = &one
 	}
 
 	return apiReq, nil

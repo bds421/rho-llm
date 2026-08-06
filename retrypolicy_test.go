@@ -202,35 +202,3 @@ func TestDefaultRetryPolicyValues(t *testing.T) {
 		t.Errorf("Jitter = %v, want 0.25", p.Jitter)
 	}
 }
-
-func TestBackoffMatchesRetryPolicy(t *testing.T) {
-	// Backoff wrapper should produce values in the same range as a
-	// RetryPolicy with factor=2.0, jitter=0.25.
-	base := 1 * time.Second
-	max := 30 * time.Second
-
-	for attempt := 0; attempt < 5; attempt++ {
-		var backoffTotal, policyTotal time.Duration
-		const samples = 500
-		for i := 0; i < samples; i++ {
-			backoffTotal += llm.Backoff(attempt, base, max)
-		}
-		p := llm.RetryPolicy{BaseDelay: base, MaxDelay: max, Factor: 2.0, Jitter: 0.25}
-		for i := 0; i < samples; i++ {
-			policyTotal += p.Delay(attempt)
-		}
-
-		backoffAvg := backoffTotal / time.Duration(samples)
-		policyAvg := policyTotal / time.Duration(samples)
-
-		// Averages should be within 20% of each other
-		diff := backoffAvg - policyAvg
-		if diff < 0 {
-			diff = -diff
-		}
-		tolerance := time.Duration(float64(policyAvg) * 0.20)
-		if diff > tolerance {
-			t.Errorf("attempt %d: Backoff avg=%v, Policy avg=%v, diff=%v exceeds 20%%", attempt, backoffAvg, policyAvg, diff)
-		}
-	}
-}

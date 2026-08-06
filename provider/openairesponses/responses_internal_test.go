@@ -225,8 +225,46 @@ func TestBuildRequestTools(t *testing.T) {
 	if apiReq.Tools[0].Type != "function" {
 		t.Errorf("Tools[0].Type = %q, want %q", apiReq.Tools[0].Type, "function")
 	}
-	if apiReq.Tools[0].Function.Name != "get_weather" {
-		t.Errorf("Tools[0].Function.Name = %q, want %q", apiReq.Tools[0].Function.Name, "get_weather")
+	if apiReq.Tools[0].Name != "get_weather" {
+		t.Errorf("Tools[0].Name = %q, want %q", apiReq.Tools[0].Name, "get_weather")
+	}
+	raw, err := json.Marshal(apiReq)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	tools := body["tools"].([]any)
+	wired := tools[0].(map[string]any)
+	if _, nested := wired["function"]; nested {
+		t.Fatalf("Responses tool used Chat Completions nesting: %s", raw)
+	}
+	if wired["name"] != "get_weather" || wired["type"] != "function" {
+		t.Fatalf("Responses tool shape = %#v", wired)
+	}
+}
+
+func TestBuildRequestStructuredOutputUsesTextFormat(t *testing.T) {
+	c := &Client{config: llm.Config{Model: "gpt-5"}, providerName: "openai_responses"}
+	apiReq, err := c.buildRequest(llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "emit JSON")},
+		ResponseFormat: &llm.ResponseFormat{
+			Type: llm.ResponseFormatJSONSchema, Name: "result",
+			Schema: map[string]any{"type": "object"},
+		},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if apiReq.Text == nil || apiReq.Text.Format["type"] != llm.ResponseFormatJSONSchema ||
+		apiReq.Text.Format["name"] != "result" || apiReq.Text.Format["strict"] != true {
+		t.Fatalf("text format = %#v", apiReq.Text)
+	}
+	raw, _ := json.Marshal(apiReq)
+	if strings.Contains(string(raw), "response_format") {
+		t.Fatalf("Responses request used Chat Completions response_format: %s", raw)
 	}
 }
 

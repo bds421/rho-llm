@@ -25,34 +25,54 @@ func (c *Client) setAuth(req *http.Request) {
 // into out (out may be nil). Non-2xx becomes a classified llm.APIError via the shared
 // transport helper (TLS, redirect auth-stripping, key redaction all inherited).
 func (c *Client) doJSON(ctx context.Context, method, endpoint string, body, out any) error {
-	var rdr io.Reader
+	return c.doJSONWithConfig(ctx, c.cfg, method, endpoint, body, out)
+}
+
+func (c *Client) doJSONSingle(ctx context.Context, method, endpoint string, body, out any) error {
+	cfg := c.cfg
+	cfg.DisableRetries = true
+	return c.doJSONWithConfig(ctx, cfg, method, endpoint, body, out)
+}
+
+func (c *Client) doJSONWithConfig(
+	ctx context.Context,
+	cfg llm.Config,
+	method, endpoint string,
+	body, out any,
+) error {
+	var data []byte
 	if body != nil {
-		data, err := json.Marshal(body)
+		var err error
+		data, err = json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		rdr = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, rdr)
-	if err != nil {
-		return fmt.Errorf("openaibatch: build request: %w", err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := llm.DoHTTP(ctx, cfg, c.httpClient, func(ctx context.Context) (*http.Request, error) {
+		var rdr io.Reader
+		if body != nil {
+			rdr = bytes.NewReader(data)
+		}
+		req, buildErr := http.NewRequestWithContext(ctx, method, endpoint, rdr)
+		if buildErr != nil {
+			return nil, fmt.Errorf("openaibatch: build request: %w", buildErr)
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		c.setAuth(req)
+		return req, nil
+	})
 	if err != nil {
 		return fmt.Errorf("openaibatch: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
-		return llm.ErrorFromResponse(c.providerName, resp, c.cfg)
+		return llm.ErrorFromResponse(c.providerName, resp, cfg)
 	}
 	if out != nil {
-		if err := llm.DecodeJSONResponse(resp, c.cfg, out); err != nil {
+		if err := llm.DecodeJSONResponse(resp, cfg, out); err != nil {
 			return fmt.Errorf("openaibatch: decode response: %w", err)
 		}
 	}
@@ -60,8 +80,8 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, body, out 
 }
 
 // uploadInputFile uploads the assembled JSONL as a multipart file with purpose=batch
-// and returns the new file id. Mirrors the multipart pattern in capabilities.go's
-// TranscribeAudio.
+// and returns the new file id. Mirrors the multipart pattern in the
+// OpenAI-compatible modality adapter's TranscribeAudio.
 func (c *Client) uploadInputFile(ctx context.Context, jsonl []byte) (string, error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -79,26 +99,31 @@ func (c *Client) uploadInputFile(ctx context.Context, jsonl []byte) (string, err
 		return "", err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/files", &buf)
-	if err != nil {
-		return "", fmt.Errorf("openaibatch: build file upload: %w", err)
-	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
+	payload := append([]byte(nil), buf.Bytes()...)
+	contentType := mw.FormDataContentType()
+	cfg := c.cfg
+	cfg.DisableRetries = true
+	resp, err := llm.DoHTTP(ctx, cfg, c.httpClient, func(ctx context.Context) (*http.Request, error) {
+		req, buildErr := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/files", bytes.NewReader(payload))
+		if buildErr != nil {
+			return nil, fmt.Errorf("openaibatch: build file upload: %w", buildErr)
+		}
+		req.Header.Set("Content-Type", contentType)
+		c.setAuth(req)
+		return req, nil
+	})
 	if err != nil {
 		return "", fmt.Errorf("openaibatch: file upload failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
-		return "", llm.ErrorFromResponse(c.providerName, resp, c.cfg)
+		return "", llm.ErrorFromResponse(c.providerName, resp, cfg)
 	}
 	var out struct {
 		ID string `json:"id"`
 	}
-	if err := llm.DecodeJSONResponse(resp, c.cfg, &out); err != nil {
+	if err := llm.DecodeJSONResponse(resp, cfg, &out); err != nil {
 		return "", fmt.Errorf("openaibatch: decode file upload response: %w", err)
 	}
 	if out.ID == "" {
@@ -113,13 +138,14 @@ func (c *Client) uploadInputFile(ctx context.Context, jsonl []byte) (string, err
 // returned as a partial body.
 func (c *Client) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
 	endpoint := c.baseURL + "/files/" + url.PathEscape(fileID) + "/content"
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("openaibatch: build download: %w", err)
-	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := llm.DoHTTP(ctx, c.cfg, c.httpClient, func(ctx context.Context) (*http.Request, error) {
+		req, buildErr := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+		if buildErr != nil {
+			return nil, fmt.Errorf("openaibatch: build download: %w", buildErr)
+		}
+		c.setAuth(req)
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("openaibatch: download failed: %w", err)
 	}

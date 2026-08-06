@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-06
+
+### Added
+
+- Deployment-scoped transport and capability authority through
+  `Config.ProxyURL`, `Config.DisableProxy`, and `Config.ModelCapabilities`.
+  Public deployments can use one reviewed proxy without consulting ambient
+  proxy variables; private/local deployments can explicitly bypass them. Exact
+  per-config capability metadata takes precedence over the global model registry
+  and cannot authorize another request model.
+- Provider-neutral `CapabilityTemperature` validation. An explicit
+  `Request.Temperature` now requires both protocol encoding support and reviewed
+  model/deployment support before transport; nil retains the provider default.
+  The Gemini catalog now uses stable `gemini-3.1-flash-lite`, adds GA
+  `gemini-3.6-flash` and `gemini-3.5-flash-lite`, and removes the shut-down
+  Gemini 3.1 Flash-Lite preview from defaults, aliases, and discovery. The two
+  July GA models reject explicit temperature through capability validation
+  because Google deprecates and ignores their sampling parameters.
+- Evidence-based media output integrity. `GenerateImages` verifies decoded PNG,
+  JPEG, or WebP signatures before assigning a media type; URL-only responses fail
+  because exact base64 bytes were requested. `SynthesizeSpeech` now returns `*SpeechResponse` with bytes and a
+  verified media type, validating provider Content-Type plus bounded MP3, Ogg
+  Opus, AAC, FLAC, or WAV signatures (raw L16 requires an exact header). New pure
+  `ValidateEmbeddingRequest`, `ValidateImageRequest`, `ValidateSpeechRequest`, and
+  `ValidateTranscriptionRequest` APIs allow startup-time adapter/profile review
+  without network I/O. Transcription rejects BCP47 language tags that cannot be
+  represented as exact lowercase ISO-639-1 on the OpenAI-compatible wire.
+- Registered non-chat modality adapters. The provider-neutral root now exposes
+  `ModalityClient`, `NewModalityClient`, request/response contracts, and pure
+  validation only. OpenAI-compatible endpoint construction, JSON/multipart
+  shapes, format mapping, response decoding, and media signature verification
+  live in `provider/openaicompat`; the deleted root standalone network functions
+  are not retained as compatibility wrappers. A modality client keeps one safe
+  HTTP transport for its worker lifetime and uses shared retry, proxy,
+  cancellation, bounded-body, and classified-error policy.
+- Strict input representation integrity. Image/PDF content requires canonical
+  RFC 4648 base64 and a signature matching its declared MIME type; transcription
+  validates FLAC, MP4/M4A, MP3, Ogg, WAV, or WebM signatures before dispatch.
+  Exact output geometry/count/format, voice, and language remain
+  application-owned request values rather than rho defaults.
+- Speech output requests accept canonical MIME values only. Provider response
+  aliases such as `audio/opus` and `audio/x-wav` are normalized during payload
+  verification, but cannot create an admitted-request/returned-schema mismatch.
+- Typed, fail-closed model capability metadata covering chat, streaming, tools,
+  structured output, vision, document input, embeddings, batch, image generation,
+  speech synthesis, transcription, sampling temperature, and enforceable reasoning effort.
+  `CapabilityReasoning` deliberately excludes intrinsic reasoning that cannot honor
+  a requested `ThinkingLevel`. `RequireCapabilities` and
+  `ValidateRequestCapabilities` reject unknown or undeclared model combinations
+  before dispatch; `RegisterModel` is the single extension point for reviewed local
+  Ollama, vLLM, and custom OpenAI-compatible deployments.
+
+### Changed
+
+- Batch persistence is now provider-neutral and fail-closed. Exact schema-v2
+  `BatchHandle` values retain a neutral external ID, operation, lifecycle, and
+  bounded versioned opaque adapter state; OpenAI endpoint and Files API IDs are
+  adapter-owned. `Get`, `Results`, `Cancel`, and `WaitForBatch` consume the full
+  handle. `BatchItem.ItemID` replaces provider-named `CustomID`, lifecycle states
+  are closed and normalized, and unknown provider states fail. Callers must set
+  `BatchOptions.MaxTurnaround`; root selects no default, while OpenAI admits and
+  maps exactly 24 hours and enforces its 50,000-request,
+  50,000-total-embedding-input, and 200 MB JSONL limits
+  before upload. There is no decoder or alias for the previous handle or item grammar.
+- Modality and OpenAI Batch HTTP operations now share the library retry policy,
+  retry hooks, caller cancellation, and proxy-aware safe HTTP transport. Credential
+  rotation and circuit breaking remain available only through the chat `Client`
+  auth pool; each `ModalityClient` represents one exact deployment credential.
+- Gemini tool-result routing accepts only the current invertible
+  `call_<index>_<name>` synthetic-ID grammar. Older ambiguous `call_<name>` IDs
+  are no longer reinterpreted as function names.
+
+### Removed
+
+- The compatibility-only `Backoff` wrapper. Callers configure and invoke
+  `RetryPolicy.Delay` directly so retry semantics have one public authority.
+
+### Fixed
+
+- Anthropic extended-thinking requests no longer silently rewrite an explicit
+  sampling temperature. Pure capability validation rejects values other than
+  the protocol-required `1` before transport; an omitted temperature remains
+  omitted, and the adapter only translates the application-owned request.
+- OpenAI Responses function tools now use the required top-level
+  `{type,name,description,parameters}` shape instead of the Chat Completions
+  `{type,function:{...}}` shape. Responses structured output is emitted through
+  `text.format`.
+- `SafeHTTPClient` preserves standard `HTTP_PROXY`/`HTTPS_PROXY` discovery while
+  retaining TLS and cross-origin credential stripping; all chat, non-chat, and
+  batch transports honor the explicit per-config proxy policy.
+
 ## [0.5.0] - 2026-06-24
 
 ### Added
@@ -32,8 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`. Each batch line is built and
   parsed by the **same wire-translation code** as the synchronous adapters (new
   `BuildChatBatchLineBody`/`ParseChatBatchResultBody` on `openaicompat`, the responses
-  equivalents on `openairesponses`, and `BuildEmbeddingsBatchLineBody`/
-  `ParseEmbeddingsBatchResultBody` in the root package) — a parity test asserts the batch line
+  equivalents on `openairesponses`, and the embeddings codecs on
+  `openaicompat`) — a parity test asserts the batch line
   body is byte-identical to what `Complete` POSTs. The interface is provider-agnostic so
   Anthropic Message Batches and others can register later; transport differences (OpenAI's
   Files-API upload/download vs. Anthropic's inline submit) live inside each driver.
@@ -811,7 +902,7 @@ Documented (not a defect): integers inside `ToolInput` (typed `any`) deserialize
 - **OpenAI `gpt-5.4-pro` pricing** — Corrected from $5/$20 to $30/$180.
 - **OpenAI `gpt-5.3-codex` pricing** — Corrected from $1.50/$12 to $1.75/$14.
 - **OpenAI `gpt-5.3-instant` renamed** — Model ID did not exist in OpenAI's API. Renamed to `gpt-5.3-chat-latest` with corrected pricing ($1.75/$14).
-- **Gemini `gemini-3.1-flash-lite-preview`** — Pricing corrected from $0/$0 to $0.25/$1.50. Added `ThoughtSignature: true` (required for all Gemini 3.x models).
+- **Gemini 3.1 Flash-Lite preview** — Pricing corrected from $0/$0 to $0.25/$1.50. Added `ThoughtSignature: true` (required for all Gemini 3.x models).
 - **Mistral `mistral-large-2512` pricing** — Corrected from $2/$6 to $0.50/$1.50. Context window corrected to 256K.
 - **Mistral `magistral-medium-2509` pricing** — Corrected from $0.40/$2 to $2/$5. Context corrected from 40K to 128K.
 - **Mistral `magistral-small-2509` pricing** — Corrected from $0.10/$0.30 to $0.50/$1.50. Context corrected from 32K to 128K.

@@ -1,6 +1,6 @@
 // Package provider registers all built-in LLM provider adapters.
 // Import this package (typically as a blank import) to make all providers
-// available to llm.NewClient:
+// available to llm.NewClient, llm.NewModalityClient, and llm.NewBatchClient:
 //
 //	import _ "github.com/bds421/rho-llm/provider"
 package provider

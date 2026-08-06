@@ -49,7 +49,7 @@ func TestParseOutputLineNeitherResponseNorError(t *testing.T) {
 		[]byte(`{"custom_id":"x","error":null,"response":null}`),
 	} {
 		res, ok := c.parseOutputLine(endpointChat, raw, nil, nil)
-		if !ok || res.CustomID != "x" || res.Error == nil {
+		if !ok || res.ItemID != "x" || res.Error == nil {
 			t.Fatalf("expected a correlated error result for %q, got ok=%v res=%+v", raw, ok, res)
 		}
 		if !strings.Contains(res.Error.Message, "neither response nor error") {
@@ -96,7 +96,7 @@ func TestNewRequiresAPIKey(t *testing.T) {
 func TestGetObjectEmptyIDRejected(t *testing.T) {
 	c := newTestClient(t)
 	// Empty id must fail before any network effect (no server is running here).
-	if _, err := c.getObject(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "empty batch id") {
+	if _, err := c.getObject(context.Background(), llm.BatchHandle{}); err == nil {
 		t.Fatalf("expected empty-batch-id error, got: %v", err)
 	}
 }
@@ -108,7 +108,7 @@ func TestEndpointForUnknownKind(t *testing.T) {
 }
 
 func TestBuildLineBodyUnknownKind(t *testing.T) {
-	if _, err := buildLineBody(kindUnknown, llm.BatchItem{CustomID: "x"}, nil, nil); err == nil {
+	if _, err := buildLineBody(kindUnknown, llm.BatchItem{ItemID: "x"}, nil, nil); err == nil {
 		t.Fatal("expected an error for an unknown batch kind")
 	}
 }
@@ -125,7 +125,7 @@ func TestParseOutputLineChatBodyDecodeError(t *testing.T) {
 	}
 	raw := []byte(`{"custom_id":"x","response":{"status_code":200,"body":"not-a-chat-object"}}`)
 	res, ok := c.parseOutputLine(endpointChat, raw, tr, nil)
-	if !ok || res.CustomID != "x" || res.Error == nil || !strings.Contains(res.Error.Message, "decode chat result body") {
+	if !ok || res.ItemID != "x" || res.Error == nil || !strings.Contains(res.Error.Message, "decode chat result body") {
 		t.Fatalf("expected a correlated 'decode chat result body' error, got ok=%v res=%+v", ok, res)
 	}
 }
@@ -138,7 +138,7 @@ func TestParseOutputLineResponsesBodyDecodeError(t *testing.T) {
 	}
 	raw := []byte(`{"custom_id":"y","response":{"status_code":200,"body":42}}`)
 	res, ok := c.parseOutputLine(endpointResponses, raw, nil, tr)
-	if !ok || res.CustomID != "y" || res.Error == nil || !strings.Contains(res.Error.Message, "decode responses result body") {
+	if !ok || res.ItemID != "y" || res.Error == nil || !strings.Contains(res.Error.Message, "decode responses result body") {
 		t.Fatalf("expected a correlated 'decode responses result body' error, got ok=%v res=%+v", ok, res)
 	}
 }

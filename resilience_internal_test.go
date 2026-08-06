@@ -251,6 +251,29 @@ type probeTestClient struct {
 	fn atomic.Pointer[func(context.Context) (*Response, error)]
 }
 
+func TestPooledClientDisableRetriesMakesOneProviderAttempt(t *testing.T) {
+	var calls atomic.Int32
+	client := newProbeTestClient(func(context.Context) (*Response, error) {
+		calls.Add(1)
+		return nil, NewOverloadedError("test", "503")
+	})
+	cfg := DefaultConfig()
+	cfg.DisableRetries = true
+	pc, err := NewPooledClient(cfg, []string{"key-a"}, func(AuthProfile) (Client, error) {
+		return client, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	if _, err = pc.Complete(context.Background(), Request{}); err == nil {
+		t.Fatal("Complete unexpectedly succeeded")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("provider calls=%d, want exactly one", calls.Load())
+	}
+}
+
 func newProbeTestClient(f func(context.Context) (*Response, error)) *probeTestClient {
 	c := &probeTestClient{}
 	c.fn.Store(&f)

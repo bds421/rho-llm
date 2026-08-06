@@ -95,7 +95,7 @@ func ResolveProtocol(cfg Config) string {
 
 	// Auto-detect: openai provider + ResponsesAPI model → always use Responses API
 	if cfg.Provider == "openai" {
-		model := ResolveModelAlias(cfg.Model)
+		model := configuredModel(cfg)
 		if info, ok := GetModelInfo(model); ok && info.ResponsesAPI {
 			return "openai_responses"
 		}

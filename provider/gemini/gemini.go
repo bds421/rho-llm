@@ -50,11 +50,15 @@ func New(cfg llm.Config) (*Client, error) {
 	if providerName == "" {
 		providerName = "gemini"
 	}
+	httpClient, err := llm.NewSafeHTTPClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Client{
 		config:       cfg,
 		baseURL:      base,
-		httpClient:   llm.SafeHTTPClient(cfg.Timeout),
+		httpClient:   httpClient,
 		providerName: providerName,
 	}, nil
 }
@@ -636,7 +640,9 @@ func makeToolCallID(index int, name string) string {
 }
 
 // resolveToolName recovers the function name from a synthetic tool_use_id.
-// Inverse of makeToolCallID. Also handles legacy "call_<name>" format.
+// It is the strict inverse of makeToolCallID. Values outside the current
+// synthetic-ID grammar pass through unchanged; callers must not reinterpret
+// an older or provider-owned ID as a Gemini function name.
 func resolveToolName(toolUseID string) string {
 	if !strings.HasPrefix(toolUseID, "call_") {
 		return toolUseID
@@ -657,6 +663,5 @@ func resolveToolName(toolUseID string) string {
 		}
 	}
 
-	// Legacy format: "call_<name>"
-	return rest
+	return toolUseID
 }

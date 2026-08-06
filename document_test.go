@@ -52,6 +52,22 @@ func TestValidateDocumentSource(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "non-canonical base64",
+			part: llm.ContentPart{
+				Type:     llm.ContentDocument,
+				Document: &llm.DocumentSource{Type: "base64", MediaType: "application/pdf", Data: "JVBERi0"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "mislabeled bytes",
+			part: llm.ContentPart{
+				Type:     llm.ContentDocument,
+				Document: &llm.DocumentSource{Type: "base64", MediaType: "application/pdf", Data: "iVBORw0KGgo="},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tc := range tests {

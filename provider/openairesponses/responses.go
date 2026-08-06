@@ -55,10 +55,14 @@ func New(cfg llm.Config) (*Client, error) {
 	if providerName == "" {
 		providerName = "openai_responses"
 	}
+	httpClient, err := llm.NewSafeHTTPClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Client{
 		config:       cfg,
-		httpClient:   llm.SafeHTTPClient(cfg.Timeout),
+		httpClient:   httpClient,
 		baseURL:      baseURL,
 		authHeader:   authHeader,
 		providerName: providerName,
@@ -374,6 +378,7 @@ type responsesRequest struct {
 	MaxOutputTokens int                 `json:"max_output_tokens,omitempty"`
 	Temperature     *float64            `json:"temperature,omitempty"`
 	Tools           []responsesTool     `json:"tools,omitempty"`
+	Text            *responsesText      `json:"text,omitempty"`
 	Store           bool                `json:"store"`
 	Stream          bool                `json:"stream,omitempty"`
 }
@@ -405,12 +410,14 @@ type responsesFunctionCallOutput struct {
 }
 
 type responsesTool struct {
-	Type     string `json:"type"`
-	Function struct {
-		Name        string         `json:"name"`
-		Description string         `json:"description"`
-		Parameters  map[string]any `json:"parameters"`
-	} `json:"function"`
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+type responsesText struct {
+	Format map[string]any `json:"format"`
 }
 
 type responsesResponse struct {
@@ -538,27 +545,47 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 		}
 	}
 
-	// Convert tools
-	info, _ := llm.GetModelInfo(model)
-	if len(req.Tools) > 0 && !info.NoToolSupport {
+	// Convert tools. Responses function definitions are flat objects; the
+	// nested {function:{...}} form belongs to Chat Completions and is rejected by
+	// /v1/responses.
+	info, hasInfo := llm.GetModelInfo(model)
+	if len(req.Tools) > 0 && hasInfo && info.NoToolSupport {
+		return responsesRequest{}, fmt.Errorf("%s model %q does not support tools", c.providerName, model)
+	}
+	if len(req.Tools) > 0 {
 		for _, tool := range req.Tools {
 			params := tool.InputSchema
 			if params == nil {
 				params = map[string]any{"type": "object"} // valid object, not null
 			}
 			apiReq.Tools = append(apiReq.Tools, responsesTool{
-				Type: "function",
-				Function: struct {
-					Name        string         `json:"name"`
-					Description string         `json:"description"`
-					Parameters  map[string]any `json:"parameters"`
-				}{
-					Name:        tool.Name,
-					Description: tool.Description,
-					Parameters:  params,
-				},
+				Type: "function", Name: tool.Name,
+				Description: tool.Description, Parameters: params,
 			})
 		}
+	}
+
+	// Responses structured output lives at text.format, not at the Chat
+	// Completions response_format field.
+	if rf := req.ResponseFormat; rf != nil {
+		format := map[string]any{"type": rf.Type}
+		switch rf.Type {
+		case llm.ResponseFormatJSONObject:
+		case llm.ResponseFormatJSONSchema:
+			if len(rf.Schema) == 0 {
+				return responsesRequest{}, fmt.Errorf("%s json_schema response format requires a schema", c.providerName)
+			}
+			name := rf.Name
+			if name == "" {
+				name = "response"
+			}
+			format["name"] = name
+			format["schema"] = rf.Schema
+			format["strict"] = true
+		default:
+			return responsesRequest{}, fmt.Errorf("%s unsupported response format %q", c.providerName, rf.Type)
+		}
+		apiReq.Text = &responsesText{Format: format}
 	}
 
 	return apiReq, nil

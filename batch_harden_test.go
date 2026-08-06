@@ -18,6 +18,7 @@ import (
 	"time"
 
 	llm "github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/provider/openaicompat"
 )
 
 // ---- BatchStatus.Terminal ---------------------------------------------------
@@ -27,7 +28,7 @@ func TestBatchStatusTerminal(t *testing.T) {
 	// misread as non-terminal) or end it prematurely (vice-versa).
 	terminal := []llm.BatchStatus{llm.BatchCompleted, llm.BatchFailed, llm.BatchExpired, llm.BatchCancelled}
 	nonTerminal := []llm.BatchStatus{
-		llm.BatchValidating, llm.BatchInProgress, llm.BatchFinalizing, llm.BatchCancelling,
+		llm.BatchQueued, llm.BatchRunning, llm.BatchCancelling,
 		llm.BatchStatus("some_future_status_we_dont_know"), llm.BatchStatus(""),
 	}
 	for _, s := range terminal {
@@ -37,7 +38,7 @@ func TestBatchStatusTerminal(t *testing.T) {
 	}
 	for _, s := range nonTerminal {
 		if s.Terminal() {
-			t.Errorf("status %q must NOT be terminal (unknown statuses keep polling under the ctx deadline)", s)
+			t.Errorf("status %q must NOT be terminal", s)
 		}
 	}
 }
@@ -55,7 +56,7 @@ func transitionServer(t *testing.T, statuses ...string) (*httptest.Server, *int3
 			if i >= len(statuses) {
 				i = len(statuses) - 1
 			}
-			writeJSON(w, map[string]any{"id": "batch-1", "status": statuses[i], "endpoint": "/v1/chat/completions"})
+			writeJSON(w, map[string]any{"id": "batch-1", "status": statuses[i], "endpoint": "/v1/chat/completions", "input_file_id": "file-in"})
 			return
 		}
 		http.Error(w, "unexpected "+r.URL.Path, http.StatusInternalServerError)
@@ -68,7 +69,7 @@ func TestWaitForBatchPollsToTerminal(t *testing.T) {
 	srv, n := transitionServer(t, "validating", "in_progress", "completed")
 	bc := newBatchClient(t, srv.URL)
 
-	h, err := llm.WaitForBatch(context.Background(), bc, "batch-1", time.Millisecond)
+	h, err := llm.WaitForBatch(context.Background(), bc, validBatchHandle(), time.Millisecond)
 	if err != nil {
 		t.Fatalf("WaitForBatch: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestWaitForBatchTerminalFirstPollNoSleep(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		h, err := llm.WaitForBatch(context.Background(), bc, "batch-1", 0) // 0 -> default 30s, but terminal first
+		h, err := llm.WaitForBatch(context.Background(), bc, validBatchHandle(), 0) // 0 -> default 30s, but terminal first
 		if err != nil || h == nil || h.Status != llm.BatchCompleted {
 			t.Errorf("expected immediate completed, got %+v err=%v", h, err)
 		}
@@ -114,7 +115,7 @@ func TestWaitForBatchHonorsContextCancel(t *testing.T) {
 	var werr error
 	done := make(chan struct{})
 	go func() {
-		last, werr = llm.WaitForBatch(ctx, bc, "batch-1", 30*time.Millisecond)
+		last, werr = llm.WaitForBatch(ctx, bc, validBatchHandle(), 30*time.Millisecond)
 		close(done)
 	}()
 	time.Sleep(15 * time.Millisecond) // let the first Get succeed and the loop enter its sleep
@@ -128,7 +129,7 @@ func TestWaitForBatchHonorsContextCancel(t *testing.T) {
 	if werr == nil {
 		t.Fatal("expected a context error after cancel")
 	}
-	if last == nil || last.Status != llm.BatchInProgress {
+	if last == nil || last.Status != llm.BatchRunning {
 		t.Fatalf("expected the last observed (in_progress) handle on cancel, got %+v", last)
 	}
 }
@@ -142,12 +143,21 @@ func TestWaitForBatchGetErrorSurfaced(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	last, err := llm.WaitForBatch(context.Background(), bc, "batch-1", time.Millisecond)
+	last, err := llm.WaitForBatch(context.Background(), bc, validBatchHandle(), time.Millisecond)
 	if err == nil {
 		t.Fatal("expected WaitForBatch to surface the Get error")
 	}
 	if last != nil {
 		t.Fatalf("expected nil last handle when the first Get fails, got %+v", last)
+	}
+}
+
+func TestBatchUnknownProviderStatusFailsClosed(t *testing.T) {
+	srv, _ := transitionServer(t, "future_provider_state")
+	bc := newBatchClient(t, srv.URL)
+	if _, err := bc.Get(context.Background(), validBatchHandle()); err == nil ||
+		!strings.Contains(err.Error(), "unknown provider batch status") {
+		t.Fatalf("expected unknown status rejection, got %v", err)
 	}
 }
 
@@ -165,7 +175,7 @@ func responsesBody(text string, in, out int) map[string]any {
 }
 
 func responsesItem(id string) llm.BatchItem {
-	return llm.BatchItem{CustomID: id, Request: &llm.Request{
+	return llm.BatchItem{ItemID: id, Request: &llm.Request{
 		Model:     "gpt-5.5", // a ResponsesAPI model → routes to /v1/responses
 		Messages:  []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "q " + id}}}},
 		MaxTokens: 64,
@@ -182,12 +192,12 @@ func TestBatchSubmitAndResultsResponsesRoundTrip(t *testing.T) {
 	bc := newBatchClient(t, srv.URL)
 
 	// Submit must build /v1/responses lines (covers openairesponses.BuildResponsesBatchLineBody).
-	h, err := bc.Submit(context.Background(), []llm.BatchItem{responsesItem("q1")}, llm.BatchOptions{})
+	h, err := bc.Submit(context.Background(), []llm.BatchItem{responsesItem("q1")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 	if err != nil {
 		t.Fatalf("Submit responses: %v", err)
 	}
-	if h.Endpoint != "/v1/responses" {
-		t.Fatalf("expected responses endpoint, got %q", h.Endpoint)
+	if h.Operation != llm.BatchOperationCompletion {
+		t.Fatalf("expected completion operation, got %q", h.Operation)
 	}
 	env.mu.Lock()
 	body := string(env.uploaded[len(env.uploaded)-1])
@@ -197,15 +207,15 @@ func TestBatchSubmitAndResultsResponsesRoundTrip(t *testing.T) {
 	}
 
 	// Results must parse a /v1/responses body (covers ParseResponsesBatchResultBody).
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), *h)
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
 	if len(results) != 1 || results[0].Response == nil || results[0].Response.Content != "ALPHA" {
 		t.Fatalf("expected parsed responses content ALPHA, got %+v", results)
 	}
-	if results[0].CustomID != "q1" {
-		t.Fatalf("expected custom_id correlation q1, got %q", results[0].CustomID)
+	if results[0].ItemID != "q1" {
+		t.Fatalf("expected item_id correlation q1, got %q", results[0].ItemID)
 	}
 }
 
@@ -217,12 +227,12 @@ func TestBatchSubmitEmbeddingsUploadsJSONL(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	h, err := bc.Submit(context.Background(), []llm.BatchItem{embItem("e1"), embItem("e2")}, llm.BatchOptions{})
+	h, err := bc.Submit(context.Background(), []llm.BatchItem{embItem("e1"), embItem("e2")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 	if err != nil {
 		t.Fatalf("Submit embeddings: %v", err)
 	}
-	if h.Endpoint != "/v1/embeddings" {
-		t.Fatalf("expected embeddings endpoint, got %q", h.Endpoint)
+	if h.Operation != llm.BatchOperationEmbedding {
+		t.Fatalf("expected embedding operation, got %q", h.Operation)
 	}
 	env.mu.Lock()
 	body := string(env.uploaded[0])
@@ -287,7 +297,7 @@ func TestLoadBatchHandleRejectsMalformedJSON(t *testing.T) {
 }
 
 func TestBuildEmbeddingsBatchLineBodyRejectsEmptyInput(t *testing.T) {
-	if _, err := llm.BuildEmbeddingsBatchLineBody(llm.EmbeddingRequest{Model: "m"}); err == nil {
+	if _, err := openaicompat.BuildEmbeddingsBatchLineBody(llm.EmbeddingRequest{Model: "m"}); err == nil {
 		t.Fatal("expected an error for an embeddings request with no input")
 	}
 }
@@ -296,7 +306,9 @@ func TestBatchCancelEmptyIDRejected(t *testing.T) {
 	// The empty-id guard must fail before any network effect.
 	srv, n := countingServer(t)
 	bc := newBatchClient(t, srv.URL)
-	if _, err := bc.Cancel(context.Background(), ""); err == nil {
+	bad := validBatchHandle()
+	bad.ID = ""
+	if _, err := bc.Cancel(context.Background(), bad); err == nil {
 		t.Fatal("expected Cancel to reject an empty batch id")
 	}
 	if got := atomic.LoadInt32(n); got != 0 {

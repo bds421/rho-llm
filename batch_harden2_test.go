@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	llm "github.com/bds421/rho-llm"
 )
@@ -29,9 +30,9 @@ func failOnStep(t *testing.T, failPath string, code int) llm.BatchClient {
 		case r.URL.Path == "/files":
 			writeJSON(w, map[string]any{"id": "file-in"})
 		case r.URL.Path == "/batches":
-			writeJSON(w, map[string]any{"id": "batch-1", "status": "validating", "endpoint": "/v1/chat/completions"})
+			writeJSON(w, map[string]any{"id": "batch-1", "status": "validating", "endpoint": "/v1/chat/completions", "input_file_id": "file-in"})
 		default:
-			writeJSON(w, map[string]any{"id": "batch-1", "status": "completed", "endpoint": "/v1/chat/completions"})
+			writeJSON(w, map[string]any{"id": "batch-1", "status": "completed", "endpoint": "/v1/chat/completions", "input_file_id": "file-in"})
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -40,14 +41,14 @@ func failOnStep(t *testing.T, failPath string, code int) llm.BatchClient {
 
 func TestBatchSubmitUploadFailure(t *testing.T) {
 	bc := failOnStep(t, "/files", http.StatusInternalServerError)
-	if _, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a")}, llm.BatchOptions{}); err == nil {
+	if _, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour}); err == nil {
 		t.Fatal("expected Submit to fail when the file upload returns non-2xx")
 	}
 }
 
 func TestBatchSubmitCreateFailure(t *testing.T) {
 	bc := failOnStep(t, "/batches", http.StatusBadRequest)
-	if _, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a")}, llm.BatchOptions{}); err == nil {
+	if _, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour}); err == nil {
 		t.Fatal("expected Submit to fail when batch creation returns non-2xx")
 	}
 }
@@ -64,7 +65,7 @@ func TestBatchSubmitUploadNoIDRejected(t *testing.T) {
 	}))
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
-	if _, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a")}, llm.BatchOptions{}); err == nil || !strings.Contains(err.Error(), "no id") {
+	if _, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour}); err == nil || !strings.Contains(err.Error(), "no id") {
 		t.Fatalf("expected 'no id' error, got: %v", err)
 	}
 }
@@ -80,7 +81,7 @@ func TestBatchCancelTransportFailureSurfaced(t *testing.T) {
 	}))
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
-	if _, err := bc.Cancel(context.Background(), "batch-1"); err == nil {
+	if _, err := bc.Cancel(context.Background(), validBatchHandle()); err == nil {
 		t.Fatal("expected Cancel to surface a non-2xx from the cancel endpoint")
 	}
 }
@@ -93,14 +94,14 @@ func TestBatchResultsDownloadFailureSurfaced(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/content"):
 			http.Error(w, "gone", http.StatusInternalServerError)
 		case strings.HasPrefix(r.URL.Path, "/batches/"):
-			writeJSON(w, map[string]any{"id": "batch-1", "status": "completed", "endpoint": "/v1/chat/completions", "output_file_id": "file-out"})
+			writeJSON(w, map[string]any{"id": "batch-1", "status": "completed", "endpoint": "/v1/chat/completions", "input_file_id": "file-in", "output_file_id": "file-out"})
 		default:
 			http.Error(w, "unexpected", http.StatusInternalServerError)
 		}
 	}))
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
-	if _, err := bc.Results(context.Background(), "batch-1"); err == nil {
+	if _, err := bc.Results(context.Background(), validBatchHandle()); err == nil {
 		t.Fatal("expected Results to surface a download failure")
 	}
 }
@@ -110,7 +111,7 @@ func TestBatchResultsBatchLevelErrorsSurfaced(t *testing.T) {
 	// files. Those messages must surface as error results.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
-			"id": "batch-1", "status": "failed", "endpoint": "/v1/chat/completions",
+			"id": "batch-1", "status": "failed", "endpoint": "/v1/chat/completions", "input_file_id": "file-in",
 			"errors": map[string]any{"data": []any{
 				map[string]any{"code": "invalid_request", "message": "line 1: bad model", "line": 1},
 				map[string]any{"code": "invalid_request", "message": "line 2: missing url"},
@@ -120,7 +121,7 @@ func TestBatchResultsBatchLevelErrorsSurfaced(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
@@ -168,7 +169,7 @@ func resultsWithFileOfSize(t *testing.T, capBytes, fileBytes int) error {
 		t.Fatalf("NewBatchClient: %v", err)
 	}
 	t.Cleanup(func() { _ = bc.Close() })
-	_, err = bc.Results(context.Background(), "batch-1")
+	_, err = bc.Results(context.Background(), validBatchHandle())
 	return err
 }
 
@@ -202,13 +203,13 @@ func TestBatchResultsLastLineNoTrailingNewline(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
 	got := map[string]bool{}
 	for _, r := range results {
-		got[r.CustomID] = true
+		got[r.ItemID] = true
 	}
 	if !got["a"] || !got["b"] {
 		t.Fatalf("a newline-less final line was dropped; got %+v", got)
@@ -227,7 +228,7 @@ func TestBatchResultsHugeSingleLineNotCapped(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
@@ -256,13 +257,13 @@ func TestBatchResultsDedupAcrossOutputAndErrorFiles(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
 	n := 0
 	for _, r := range results {
-		if r.CustomID == "dup" {
+		if r.ItemID == "dup" {
 			n++
 			if r.Response == nil || r.Response.Content != "won" {
 				t.Fatalf("expected the output (success) line to win, got %+v", r)

@@ -1,7 +1,9 @@
 package llm
 
 import (
+	"context"
 	"fmt"
+	"iter"
 	"log/slog"
 )
 
@@ -9,6 +11,9 @@ import (
 // All clients get automatic retry with exponential backoff on transient errors
 // (429, 503, 502). Use NewClientWithKeys for multi-key rotation.
 func NewClient(cfg Config) (Client, error) {
+	if cfg.DisableRetries {
+		return newSingleClient(cfg)
+	}
 	return NewClientWithKeys(cfg, []string{cfg.APIKey})
 }
 
@@ -20,7 +25,85 @@ func NewClientWithKeys(cfg Config, keys []string) (Client, error) {
 	if len(keys) == 0 {
 		keys = []string{cfg.APIKey}
 	}
+	if cfg.DisableRetries {
+		if len(keys) != 1 {
+			return nil, fmt.Errorf("llm: retries-disabled client requires exactly one credential profile")
+		}
+		cfg.APIKey = keys[0]
+		return newSingleClient(cfg)
+	}
 	return newPooledClient(cfg, keys)
+}
+
+// NewModalityClient creates a durable non-chat client through the modality
+// adapter registered for the selected wire protocol. The returned client owns a
+// persistent SafeHTTPClient and applies the same retry, cancellation, bounded
+// response, error classification, and request capability checks as chat clients.
+// Callers should reuse the client and Close it when the worker shuts down.
+func NewModalityClient(cfg Config) (ModalityClient, error) {
+	cfg.Model = configuredModel(cfg)
+	if cfg.Model == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultTimeout
+	}
+	if _, known := PresetFor(cfg.Provider); !known && cfg.BaseURL == "" {
+		return nil, fmt.Errorf("unknown provider %q: set BaseURL for custom providers", cfg.Provider)
+	}
+	if err := CheckBaseURL(cfg); err != nil {
+		return nil, err
+	}
+	driver, err := modalityDriverFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	client, err := driver.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &capabilityValidatedModalityClient{ModalityClient: client, cfg: cfg}, nil
+}
+
+type capabilityValidatedModalityClient struct {
+	ModalityClient
+	cfg Config
+}
+
+func (client *capabilityValidatedModalityClient) GenerateEmbeddings(
+	ctx context.Context, req EmbeddingRequest,
+) (*EmbeddingResponse, error) {
+	if err := ValidateEmbeddingRequest(client.cfg, req); err != nil {
+		return nil, err
+	}
+	return client.ModalityClient.GenerateEmbeddings(ctx, req)
+}
+
+func (client *capabilityValidatedModalityClient) GenerateImages(
+	ctx context.Context, req ImageRequest,
+) (*ImageResponse, error) {
+	if err := ValidateImageRequest(client.cfg, req); err != nil {
+		return nil, err
+	}
+	return client.ModalityClient.GenerateImages(ctx, req)
+}
+
+func (client *capabilityValidatedModalityClient) SynthesizeSpeech(
+	ctx context.Context, req SpeechRequest,
+) (*SpeechResponse, error) {
+	if err := ValidateSpeechRequest(client.cfg, req); err != nil {
+		return nil, err
+	}
+	return client.ModalityClient.SynthesizeSpeech(ctx, req)
+}
+
+func (client *capabilityValidatedModalityClient) TranscribeAudio(
+	ctx context.Context, req TranscriptionRequest,
+) (string, error) {
+	if err := ValidateTranscriptionRequest(client.cfg, req); err != nil {
+		return "", err
+	}
+	return client.ModalityClient.TranscribeAudio(ctx, req)
 }
 
 // NewBatchClient creates an asynchronous batch client for bulk request processing.
@@ -33,7 +116,7 @@ func NewClientWithKeys(cfg Config, keys []string) (Client, error) {
 // Request/Embedding, so a single batch client can submit mixed models (subject to the
 // driver's single-endpoint homogeneity rule).
 func NewBatchClient(cfg Config) (BatchClient, error) {
-	cfg.Model = ResolveModelAlias(cfg.Model)
+	cfg.Model = configuredModel(cfg)
 
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = DefaultTimeout
@@ -63,7 +146,7 @@ func NewBatchClient(cfg Config) (BatchClient, error) {
 // newSingleClient creates a single (non-pooled) client based on protocol routing.
 func newSingleClient(cfg Config) (Client, error) {
 	// Resolve model alias to its full identifier
-	cfg.Model = ResolveModelAlias(cfg.Model)
+	cfg.Model = configuredModel(cfg)
 
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("model is required")
@@ -105,12 +188,37 @@ func newSingleClient(cfg Config) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	client = &capabilityValidatedClient{Client: client, cfg: cfg}
 
 	if cfg.LogRequests {
 		client = WithLogging(client)
 	}
 
 	return client, nil
+}
+
+// capabilityValidatedClient binds every chat dispatch to the exact reviewed
+// capabilities carried by the client config. Provider adapters remain concerned
+// only with wire translation; this wrapper is applied once by the factory.
+type capabilityValidatedClient struct {
+	Client
+	cfg Config
+}
+
+func (client *capabilityValidatedClient) Complete(ctx context.Context, req Request) (*Response, error) {
+	if err := ValidateRequestCapabilities(client.cfg, req, false); err != nil {
+		return nil, err
+	}
+	return client.Client.Complete(ctx, req)
+}
+
+func (client *capabilityValidatedClient) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
+	if err := ValidateRequestCapabilities(client.cfg, req, true); err != nil {
+		return func(yield func(StreamEvent, error) bool) {
+			yield(StreamEvent{}, err)
+		}
+	}
+	return client.Client.Stream(ctx, req)
 }
 
 // newPooledClient creates a pooled client with auth rotation.

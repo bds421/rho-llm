@@ -1,9 +1,28 @@
 package llm
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestCurrentGeminiCatalogExcludesShutdownPreview(t *testing.T) {
+	shutdownPreview := "gemini-3.1-flash-lite-" + "preview"
+	if _, ok := GetModelInfo(shutdownPreview); ok {
+		t.Fatal("shutdown Gemini 3.1 Flash-Lite preview remains registered")
+	}
+	available := GetAvailableModels("gemini")
+	if slices.Contains(available, shutdownPreview) {
+		t.Fatal("shutdown Gemini preview remains discoverable")
+	}
+	for _, model := range []string{
+		"gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
+	} {
+		if _, ok := GetModelInfo(model); !ok || !slices.Contains(available, model) {
+			t.Fatalf("current Gemini model %q is not registered and discoverable", model)
+		}
+	}
+}
 
 // TestComprehensiveThinkingFlags ensures that thinking flags are correctly and completely applied across the entire registry.
 func TestComprehensiveThinkingFlags(t *testing.T) {
@@ -47,11 +66,23 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 			}
 		}
 
-		// 6. Explicit Negatives (Models that should NEVER have either)
+		// 6. Gemini 3+ models expose API-controlled thinkingLevel. They are
+		// neither intrinsic-only nor valid explicit negatives.
+		if strings.HasPrefix(id, "gemini-3") {
+			if !info.SupportsThinking {
+				t.Errorf("Model %s (Gemini 3+) should have SupportsThinking=true", id)
+			}
+			if info.Thinking {
+				t.Errorf("Model %s (Gemini 3+) should not use intrinsic-only Thinking", id)
+			}
+		}
+
+		// 7. Explicit Negatives (Models that should NEVER have either)
 		// Haiku 4.5+ supports extended thinking; only Claude 3 Haiku does not.
 		isLegacyHaiku := strings.Contains(id, "claude-3-haiku")
-		isGemini25 := strings.HasPrefix(id, "gemini-2.5")
-		if (strings.Contains(id, "gemini-") && !isGemini25) || isLegacyHaiku || strings.Contains(id, "non-reasoning") {
+		isGeminiWithoutThinking := strings.HasPrefix(id, "gemini-") &&
+			!strings.HasPrefix(id, "gemini-2.5") && !strings.HasPrefix(id, "gemini-3")
+		if isGeminiWithoutThinking || isLegacyHaiku || strings.Contains(id, "non-reasoning") {
 			if info.SupportsThinking || info.Thinking {
 				t.Errorf("Model %s should not have any thinking flags set", id)
 			}

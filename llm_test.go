@@ -149,8 +149,8 @@ func TestFactoryDefaultModels(t *testing.T) {
 		{"claude", "claude-sonnet-4-6"},
 		{"xai", "grok-4.20-beta"},
 		{"grok", "grok-4.20-beta"},
-		{"gemini", "gemini-3.1-flash-lite-preview"},
-		{"google", "gemini-3.1-flash-lite-preview"},
+		{"gemini", "gemini-3.5-flash-lite"},
+		{"google", "gemini-3.5-flash-lite"},
 	}
 
 	for _, tc := range tests {
@@ -316,9 +316,12 @@ func TestResolveModelAlias(t *testing.T) {
 		{"grok4.3", "grok-4.3"},
 		{"gpt5.5", "gpt-5.5"},
 		{"gemini3.5", "gemini-3.5-flash"},
+		{"gemini3.6", "gemini-3.6-flash"},
+		{"gemini3.5-lite", "gemini-3.5-flash-lite"},
+		{"gemini3.1-lite", "gemini-3.1-flash-lite"},
 		{"grok-code", "grok-code-fast-1"},
 		{"gemini-pro", "gemini-3.1-pro-preview"},
-		{"flash-lite", "gemini-3.1-flash-lite-preview"},
+		{"flash-lite", "gemini-3.5-flash-lite"},
 		// Non-alias should pass through
 		{"claude-opus-4-6", "claude-opus-4-6"},
 		{"unknown-model", "unknown-model"},
@@ -583,65 +586,6 @@ func TestAPIErrorNilSafety(t *testing.T) {
 	}
 	if llm.IsAuthError(nil) {
 		t.Error("nil should not be auth error")
-	}
-}
-
-// =============================================================================
-// BACKOFF TESTS
-// =============================================================================
-
-// TestBackoffExponentialGrowth verifies backoff grows exponentially.
-func TestBackoffExponentialGrowth(t *testing.T) {
-	baseDelay := 1 * time.Second
-	maxDelay := 30 * time.Second
-
-	// Run multiple samples to account for jitter
-	for attempt := 0; attempt < 5; attempt++ {
-		var total time.Duration
-		samples := 100
-		for i := 0; i < samples; i++ {
-			total += llm.Backoff(attempt, baseDelay, maxDelay)
-		}
-		avg := total / time.Duration(samples)
-
-		// Expected center: min(baseDelay * 2^attempt, maxDelay)
-		expected := baseDelay
-		for j := 0; j < attempt; j++ {
-			expected *= 2
-			if expected > maxDelay {
-				expected = maxDelay
-				break
-			}
-		}
-
-		// Allow 35% tolerance for jitter
-		low := time.Duration(float64(expected) * 0.65)
-		high := time.Duration(float64(expected) * 1.35)
-		if high > maxDelay {
-			high = maxDelay
-		}
-
-		if avg < low || avg > high {
-			t.Errorf("attempt %d: avg=%v, expected ~%v (range %v-%v)", attempt, avg, expected, low, high)
-		}
-	}
-}
-
-// TestBackoffMaxCap verifies backoff is capped at maxDelay.
-func TestBackoffMaxCap(t *testing.T) {
-	for i := 0; i < 100; i++ {
-		d := llm.Backoff(20, 1*time.Second, 5*time.Second)
-		if d > 5*time.Second {
-			t.Errorf("backoff(%d) = %v, exceeds max 5s", 20, d)
-		}
-	}
-}
-
-// TestBackoffNegativeAttempt verifies negative attempt doesn't panic.
-func TestBackoffNegativeAttempt(t *testing.T) {
-	d := llm.Backoff(-1, 1*time.Second, 30*time.Second)
-	if d <= 0 || d > 30*time.Second {
-		t.Errorf("backoff(-1) = %v, expected positive value", d)
 	}
 }
 
@@ -2482,20 +2426,6 @@ func TestMarkSuccessByNameNotFound(t *testing.T) {
 	}
 }
 
-// TestBackoffVeryHighAttempt verifies backoff with very high attempt number.
-func TestBackoffVeryHighAttempt(t *testing.T) {
-	// Very high attempt should still be capped at maxDelay
-	for i := 0; i < 10; i++ {
-		d := llm.Backoff(100, 1*time.Second, 5*time.Second)
-		if d > 5*time.Second {
-			t.Errorf("backoff(100) = %v, exceeds max 5s", d)
-		}
-		if d <= 0 {
-			t.Errorf("backoff(100) = %v, should be positive", d)
-		}
-	}
-}
-
 // TestPooledClientStreamRetryWithNewProfile verifies the "retrying with new profile" log path.
 func TestPooledClientStreamRetryWithNewProfile(t *testing.T) {
 	callCount := 0
@@ -2739,20 +2669,6 @@ func TestPooledClientStreamMidStreamNonRetryable(t *testing.T) {
 	}
 }
 
-// TestBackoffBaseExceedsMax verifies backoff when baseDelay > maxDelay.
-func TestBackoffBaseExceedsMax(t *testing.T) {
-	// When baseDelay > maxDelay, should cap immediately
-	for i := 0; i < 10; i++ {
-		d := llm.Backoff(0, 10*time.Second, 5*time.Second)
-		if d > 5*time.Second {
-			t.Errorf("backoff(0, 10s, 5s) = %v, exceeds max 5s", d)
-		}
-		if d <= 0 {
-			t.Errorf("backoff(0, 10s, 5s) = %v, should be positive", d)
-		}
-	}
-}
-
 // TestNewClientWithKeysAndBaseURL verifies per-profile BaseURL through NewClientWithKeys.
 func TestNewClientWithKeysAndBaseURL(t *testing.T) {
 	cfg := llm.Config{
@@ -2925,10 +2841,11 @@ func TestContentImageValidation(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(prov.name+"/"+tc.name, func(t *testing.T) {
 				cfg := llm.Config{
-					Provider: prov.provider,
-					Model:    prov.model,
-					APIKey:   "test-key",
-					BaseURL:  "http://localhost:1",
+					Provider:          prov.provider,
+					Model:             prov.model,
+					ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityVision),
+					APIKey:            "test-key",
+					BaseURL:           "http://localhost:1",
 				}
 				client, err := llm.NewClient(cfg)
 				if err != nil {
@@ -3124,10 +3041,11 @@ func TestContentImageOpenAI(t *testing.T) {
 	defer srv.Close()
 
 	cfg := llm.Config{
-		Provider: "openai",
-		Model:    "gpt-4",
-		APIKey:   "test-key",
-		BaseURL:  srv.URL,
+		Provider:          "openai",
+		Model:             "gpt-4",
+		ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityVision),
+		APIKey:            "test-key",
+		BaseURL:           srv.URL,
 	}
 	client, err := llm.NewClient(cfg)
 	if err != nil {
@@ -3237,10 +3155,11 @@ func TestContentImageMixedMessage(t *testing.T) {
 			defer srv.Close()
 
 			cfg := llm.Config{
-				Provider: prov.provider,
-				Model:    prov.model,
-				APIKey:   "test-key",
-				BaseURL:  srv.URL,
+				Provider:          prov.provider,
+				Model:             prov.model,
+				ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityVision),
+				APIKey:            "test-key",
+				BaseURL:           srv.URL,
 			}
 			client, err := llm.NewClient(cfg)
 			if err != nil {
@@ -3370,11 +3289,12 @@ func TestLocalProviderRetryActualTransient(t *testing.T) {
 	defer srv.Close()
 
 	cfg := llm.Config{
-		Provider:  "ollama",
-		Model:     "llama3",
-		BaseURL:   srv.URL,
-		MaxTokens: 100,
-		Timeout:   5 * time.Second,
+		Provider:          "ollama",
+		Model:             "llama3",
+		ModelCapabilities: llm.Capabilities(llm.CapabilityChat),
+		BaseURL:           srv.URL,
+		MaxTokens:         100,
+		Timeout:           5 * time.Second,
 	}
 
 	client, err := llm.NewClient(cfg)
@@ -3483,8 +3403,11 @@ func TestThinkingLevelRejectedForOpenAICompat(t *testing.T) {
 	for _, provider := range providers {
 		t.Run(provider, func(t *testing.T) {
 			cfg := llm.Config{
-				Provider:      provider,
-				Model:         "test-model",
+				Provider: provider,
+				Model:    "test-model",
+				ModelCapabilities: llm.Capabilities(
+					llm.CapabilityChat, llm.CapabilityReasoning,
+				),
 				APIKey:        "test-key",
 				MaxTokens:     100,
 				ThinkingLevel: llm.ThinkingHigh,
@@ -3504,8 +3427,8 @@ func TestThinkingLevelRejectedForOpenAICompat(t *testing.T) {
 			if err == nil {
 				t.Fatal("Complete with ThinkingLevel on openai_compat should fail")
 			}
-			if !strings.Contains(err.Error(), "ThinkingLevel") {
-				t.Errorf("error = %q, want mention of ThinkingLevel", err.Error())
+			if !strings.Contains(err.Error(), "reasoning") {
+				t.Errorf("error = %q, want pre-transport reasoning rejection", err.Error())
 			}
 		})
 	}

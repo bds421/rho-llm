@@ -55,9 +55,27 @@ var sensitiveHeaders = []string{
 // a redirect to a different host leaks API keys (especially custom headers
 // like x-api-key that Go's stdlib doesn't recognize as auth headers).
 func SafeHTTPClient(timeout time.Duration) *http.Client {
+	client, _ := NewSafeHTTPClient(Config{Timeout: timeout})
+	return client
+}
+
+// NewSafeHTTPClient returns a redirect-safe client using the exact proxy
+// policy declared by cfg. ProxyURL takes precedence over ambient proxy
+// variables; DisableProxy deliberately bypasses them. The two controls are
+// mutually exclusive so callers cannot silently weaken an explicit boundary.
+func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
+	proxy, err := proxyPolicy(cfg)
+	if err != nil {
+		return nil, err
+	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
+			Proxy:           proxy,
 			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -74,7 +92,28 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 			}
 			return nil
 		},
+	}, nil
+}
+
+func proxyPolicy(cfg Config) (func(*http.Request) (*url.URL, error), error) {
+	proxyURL := strings.TrimSpace(cfg.ProxyURL)
+	if cfg.DisableProxy && proxyURL != "" {
+		return nil, fmt.Errorf("llm: ProxyURL and DisableProxy are mutually exclusive")
 	}
+	if cfg.DisableProxy {
+		return nil, nil
+	}
+	if proxyURL == "" {
+		return http.ProxyFromEnvironment, nil
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
+		return nil, fmt.Errorf("llm: ProxyURL is invalid")
+	}
+	return http.ProxyURL(parsed), nil
 }
 
 // sameHost returns true if two URLs have the same host (including port).
@@ -124,6 +163,11 @@ type Config struct {
 	// Model identifier (e.g., "claude-sonnet-4-6", "grok-4-fast-non-reasoning").
 	Model string `json:"model"`
 
+	// ModelCapabilities is an exact, deployment-scoped reviewed capability
+	// declaration for Model. When non-zero it takes precedence over process-global
+	// registry metadata and is never applied to a different request model.
+	ModelCapabilities CapabilitySet `json:"model_capabilities,omitempty"`
+
 	// API key for authentication. Empty is valid for local providers (Ollama, vLLM, LM Studio).
 	APIKey string `json:"api_key"`
 
@@ -150,6 +194,16 @@ type Config struct {
 	// net/http at request time, not by this library. For hardened deployments
 	// that only talk to public endpoints, set BlockPrivateBaseURL.
 	BaseURL string `json:"base_url,omitempty"`
+
+	// ProxyURL is an explicit HTTP(S) forward proxy for this config. It is
+	// intended for reviewed public-provider egress and overrides HTTP_PROXY,
+	// HTTPS_PROXY, and NO_PROXY. Credentials and path/query fragments are
+	// rejected so this non-secret transport setting is safe to report.
+	ProxyURL string `json:"proxy_url,omitempty"`
+
+	// DisableProxy explicitly bypasses both ProxyURL and ambient proxy
+	// variables. Use it for reviewed local/private model endpoints.
+	DisableProxy bool `json:"disable_proxy,omitempty"`
 
 	// BlockPrivateBaseURL is opt-in SSRF hardening: when true, client construction
 	// rejects a BaseURL whose host is a loopback, private, link-local, or
@@ -202,6 +256,12 @@ type Config struct {
 	// default (DefaultMaxRetries). Minimum effective value is 3 (for single-key
 	// resilience against transient errors).
 	MaxRetries int `json:"max_retries,omitempty"`
+
+	// DisableRetries forces exactly one provider transport attempt. It is for
+	// callers whose durable outer execution authority owns retry, idempotency,
+	// cancellation, and spend accounting. It applies to pooled chat clients and
+	// the common non-chat/batch HTTP transport.
+	DisableRetries bool `json:"disable_retries,omitempty"`
 
 	// BetaFeatures lists provider-specific beta feature flags.
 	// For Anthropic, these are joined with "," and sent as the "anthropic-beta" header.

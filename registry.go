@@ -15,20 +15,21 @@ var registryMu sync.RWMutex
 
 // ModelInfo holds per-model metadata used to adapt API requests and UI.
 type ModelInfo struct {
-	ID                   string  // Full model identifier
-	Provider             string  // anthropic, xai, gemini, openai, groq, etc.
-	MaxTokens            int     // Model-specific output limit (0 = use config default)
-	ContextWindow        int     // Max input tokens (0 = unknown)
-	InputPricePer1M      float64 // USD per 1M input tokens (0 = unknown/free)
-	OutputPricePer1M     float64 // USD per 1M output tokens (0 = unknown/free)
-	CacheWritePricePer1M float64 // Anthropic: price per 1M cache creation tokens (0 = not applicable)
-	CacheReadPricePer1M  float64 // Anthropic/Gemini: price per 1M cached input tokens (0 = not applicable)
-	SupportsThinking     bool    // Anthropic extended thinking
-	ThoughtSignature     bool    // Gemini 3 models require thought_signature in function call responses
-	Thinking             bool    // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
-	ResponsesAPI         bool    // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
-	NoToolSupport        bool    // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
-	Label                string  // Short display name
+	ID                   string        // Full model identifier
+	Provider             string        // anthropic, xai, gemini, openai, groq, etc.
+	MaxTokens            int           // Model-specific output limit (0 = use config default)
+	ContextWindow        int           // Max input tokens (0 = unknown)
+	InputPricePer1M      float64       // USD per 1M input tokens (0 = unknown/free)
+	OutputPricePer1M     float64       // USD per 1M output tokens (0 = unknown/free)
+	CacheWritePricePer1M float64       // Anthropic: price per 1M cache creation tokens (0 = not applicable)
+	CacheReadPricePer1M  float64       // Anthropic/Gemini: price per 1M cached input tokens (0 = not applicable)
+	SupportsThinking     bool          // Adapter/model supports explicit thinking-level control
+	ThoughtSignature     bool          // Gemini 3 models require thought_signature in function call responses
+	Thinking             bool          // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
+	ResponsesAPI         bool          // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
+	NoToolSupport        bool          // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
+	Capabilities         CapabilitySet // Reviewed model operations and request features.
+	Label                string        // Short display name
 }
 
 // modelRegistry maps model ID to its metadata. Built-in entries are written
@@ -70,17 +71,19 @@ var modelRegistry = map[string]ModelInfo{
 	"grok-3":                            {ID: "grok-3", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 3"},
 	"grok-3-mini":                       {ID: "grok-3-mini", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 3 Mini"},
 
-	// Gemini — from ai.google.dev/gemini-api/docs/pricing (2026-06-03)
+	// Gemini — from ai.google.dev/gemini-api/docs/pricing and /latest-model (2026-07-23)
 	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
-	"gemini-3.5-flash":              {ID: "gemini-3.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 9.00, CacheReadPricePer1M: 0.15, ThoughtSignature: true, Label: "Gemini 3.5 Flash"},
-	"gemini-3.1-pro-preview":        {ID: "gemini-3.1-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, ThoughtSignature: true, Label: "Gemini 3.1 Pro"},
-	"gemini-3.1-flash-lite-preview": {ID: "gemini-3.1-flash-lite-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, ThoughtSignature: true, Label: "Gemini 3.1 Flash Lite"},
-	"gemini-3-pro-preview":          {ID: "gemini-3-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, ThoughtSignature: true, Label: "Gemini 3 Pro"},
-	"gemini-3-flash-preview":        {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, ThoughtSignature: true, Label: "Gemini 3 Flash"},
-	"gemini-2.5-pro":                {ID: "gemini-2.5-pro", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "Gemini 2.5 Pro"},
-	"gemini-2.5-flash":              {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, Thinking: true, Label: "Gemini 2.5 Flash"},
-	"gemini-2.5-flash-lite":         {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Thinking: true, Label: "Flash Lite"},
-	"gemini-2.0-flash":              {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
+	"gemini-3.6-flash":       {ID: "gemini-3.6-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 7.50, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.6 Flash"},
+	"gemini-3.5-flash":       {ID: "gemini-3.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 9.00, CacheReadPricePer1M: 0.15, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.5 Flash"},
+	"gemini-3.5-flash-lite":  {ID: "gemini-3.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.03, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.5 Flash Lite"},
+	"gemini-3.1-pro-preview": {ID: "gemini-3.1-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.1 Pro"},
+	"gemini-3.1-flash-lite":  {ID: "gemini-3.1-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.1 Flash Lite"},
+	"gemini-3-pro-preview":   {ID: "gemini-3-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3 Pro"},
+	"gemini-3-flash-preview": {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3 Flash"},
+	"gemini-2.5-pro":         {ID: "gemini-2.5-pro", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "Gemini 2.5 Pro"},
+	"gemini-2.5-flash":       {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, Thinking: true, Label: "Gemini 2.5 Flash"},
+	"gemini-2.5-flash-lite":  {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Thinking: true, Label: "Flash Lite"},
+	"gemini-2.0-flash":       {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
 
 	// OpenAI — GPT-5.x family (2026-06-03)
 	// Reasoning models use ResponsesAPI: true — reasoning effort is controlled via /v1/responses, not Chat Completions.
@@ -204,6 +207,28 @@ var modelRegistry = map[string]ModelInfo{
 	"gemma3:12b":           {ID: "gemma3:12b", Provider: "ollama", NoToolSupport: true, Label: "Gemma3 12B"},
 	"gemma3:4b":            {ID: "gemma3:4b", Provider: "ollama", NoToolSupport: true, Label: "Gemma3 4B"},
 	"gemma2:2b":            {ID: "gemma2:2b", Provider: "ollama", NoToolSupport: true, Label: "Gemma2 2B"},
+
+	// OpenAI-compatible non-chat models. These are separate model identities so
+	// callers cannot infer modality support from a chat provider preset.
+	"text-embedding-3-small": {ID: "text-embedding-3-small", Provider: "openai", Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Text Embedding 3 Small"},
+	"text-embedding-3-large": {ID: "text-embedding-3-large", Provider: "openai", Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Text Embedding 3 Large"},
+	"gpt-image-1":            {ID: "gpt-image-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 1"},
+	"tts-1":                  {ID: "tts-1", Provider: "openai", Capabilities: CapabilitySet(CapabilitySpeechSynthesis), Label: "TTS 1"},
+	"whisper-1":              {ID: "whisper-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "Whisper 1"},
+}
+
+func init() {
+	// Existing curated entries are chat-generation models. Preserve their known
+	// negative tool metadata and add only conservative provider-family features;
+	// deployment-specific local/compatible models must declare their own set via
+	// RegisterModel.
+	for id, info := range modelRegistry {
+		if info.Capabilities != 0 {
+			continue
+		}
+		info.Capabilities = defaultChatCapabilities(info)
+		modelRegistry[id] = info
+	}
 }
 
 var defaultModels = map[string]string{
@@ -211,8 +236,8 @@ var defaultModels = map[string]string{
 	"claude":    "claude-sonnet-4-6",
 	"xai":       "grok-4.20-beta",
 	"grok":      "grok-4.20-beta",
-	"gemini":    "gemini-3.1-flash-lite-preview",
-	"google":    "gemini-3.1-flash-lite-preview",
+	"gemini":    "gemini-3.5-flash-lite",
+	"google":    "gemini-3.5-flash-lite",
 	"openai":    "gpt-5.4",
 	"gpt":       "gpt-5.4",
 	"groq":      "llama-3.3-70b-versatile",
@@ -260,9 +285,11 @@ var availableModels = map[string][]string{
 		"grok-3-mini",
 	},
 	"gemini": {
+		"gemini-3.6-flash",
 		"gemini-3.5-flash",
+		"gemini-3.5-flash-lite",
 		"gemini-3.1-pro-preview",
-		"gemini-3.1-flash-lite-preview",
+		"gemini-3.1-flash-lite",
 		"gemini-3-pro-preview",
 		"gemini-3-flash-preview",
 		"gemini-2.5-pro",
@@ -453,14 +480,17 @@ var modelAliases = map[string]string{
 	"gpt-instant": "gpt-5.3-chat-latest",
 
 	// Gemini aliases
-	"gemini":     "gemini-3.1-flash-lite-preview",
-	"gemini3.5":  "gemini-3.5-flash",
-	"gemini-pro": "gemini-3.1-pro-preview",
-	"gemini3.1":  "gemini-3.1-pro-preview",
-	"gemini3":    "gemini-3.1-pro-preview",
-	"gemini-3":   "gemini-3-pro-preview",
-	"flash":      "gemini-2.5-flash",
-	"flash-lite": "gemini-3.1-flash-lite-preview",
+	"gemini":         "gemini-3.5-flash-lite",
+	"gemini3.6":      "gemini-3.6-flash",
+	"gemini3.5":      "gemini-3.5-flash",
+	"gemini3.5-lite": "gemini-3.5-flash-lite",
+	"gemini-pro":     "gemini-3.1-pro-preview",
+	"gemini3.1":      "gemini-3.1-pro-preview",
+	"gemini3.1-lite": "gemini-3.1-flash-lite",
+	"gemini3":        "gemini-3.1-pro-preview",
+	"gemini-3":       "gemini-3-pro-preview",
+	"flash":          "gemini-2.5-flash",
+	"flash-lite":     "gemini-3.5-flash-lite",
 }
 
 // RegisterModel adds (or overrides) a model's metadata at runtime, so unlisted
@@ -474,6 +504,9 @@ func RegisterModel(info ModelInfo) error {
 	}
 	if strings.TrimSpace(info.Provider) == "" {
 		return fmt.Errorf("llm: RegisterModel: Provider is required (non-blank)")
+	}
+	if info.Capabilities&^allCapabilities != 0 {
+		return fmt.Errorf("llm: RegisterModel: capabilities contain unknown bits")
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	llm "github.com/bds421/rho-llm"
 	"github.com/bds421/rho-llm/provider/openaicompat"
@@ -42,6 +43,7 @@ func newBatchClient(t *testing.T, baseURL string) llm.BatchClient {
 	cfg.APIKey = "test-key"
 	cfg.BaseURL = baseURL
 	cfg.Model = "gpt-5.3-chat-latest"
+	cfg.DisableRetries = true
 	bc, err := llm.NewBatchClient(cfg)
 	if err != nil {
 		t.Fatalf("NewBatchClient: %v", err)
@@ -51,7 +53,7 @@ func newBatchClient(t *testing.T, baseURL string) llm.BatchClient {
 }
 
 func chatItem(id string) llm.BatchItem {
-	return llm.BatchItem{CustomID: id, Request: &llm.Request{
+	return llm.BatchItem{ItemID: id, Request: &llm.Request{
 		Model:     "gpt-5.3-chat-latest",
 		Messages:  []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "hi " + id}}}},
 		MaxTokens: 64,
@@ -59,7 +61,7 @@ func chatItem(id string) llm.BatchItem {
 }
 
 func embItem(id string) llm.BatchItem {
-	return llm.BatchItem{CustomID: id, Embedding: &llm.EmbeddingRequest{Model: "text-embedding-3-small", Input: []string{"hi " + id}}}
+	return llm.BatchItem{ItemID: id, Embedding: &llm.EmbeddingRequest{Model: "text-embedding-3-small", Input: []string{"hi " + id}}}
 }
 
 func chatBody(content string, in, out int) map[string]any {
@@ -148,7 +150,7 @@ func countingServer(t *testing.T) (*httptest.Server, *int32) {
 func TestBatchSubmitMixedKindsRejectedNoNetwork(t *testing.T) {
 	srv, n := countingServer(t)
 	bc := newBatchClient(t, srv.URL)
-	_, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a"), embItem("b")}, llm.BatchOptions{})
+	_, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a"), embItem("b")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 	if err == nil {
 		t.Fatal("expected homogeneity error for mixed chat+embedding batch")
 	}
@@ -165,7 +167,7 @@ func TestBatchSubmitChatResponsesMixedRejected(t *testing.T) {
 	bc := newBatchClient(t, srv.URL)
 	resp := chatItem("b")
 	resp.Request.Model = "gpt-5.5" // ResponsesAPI model → /v1/responses
-	_, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a"), resp}, llm.BatchOptions{})
+	_, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a"), resp}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 	if err == nil || !strings.Contains(err.Error(), "homogeneous") {
 		t.Fatalf("expected homogeneity error mixing chat+responses, got: %v", err)
 	}
@@ -177,10 +179,10 @@ func TestBatchSubmitChatResponsesMixedRejected(t *testing.T) {
 func TestBatchSubmitTaggedUnionRejected(t *testing.T) {
 	srv, n := countingServer(t)
 	bc := newBatchClient(t, srv.URL)
-	both := llm.BatchItem{CustomID: "x", Request: chatItem("x").Request, Embedding: embItem("x").Embedding}
-	neither := llm.BatchItem{CustomID: "y"}
+	both := llm.BatchItem{ItemID: "x", Request: chatItem("x").Request, Embedding: embItem("x").Embedding}
+	neither := llm.BatchItem{ItemID: "y"}
 	for name, item := range map[string]llm.BatchItem{"both": both, "neither": neither} {
-		if _, err := bc.Submit(context.Background(), []llm.BatchItem{item}, llm.BatchOptions{}); err == nil {
+		if _, err := bc.Submit(context.Background(), []llm.BatchItem{item}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour}); err == nil {
 			t.Fatalf("%s: expected tagged-union error", name)
 		}
 	}
@@ -189,12 +191,12 @@ func TestBatchSubmitTaggedUnionRejected(t *testing.T) {
 	}
 }
 
-func TestBatchSubmitDuplicateCustomIDRejected(t *testing.T) {
+func TestBatchSubmitDuplicateItemIDRejected(t *testing.T) {
 	srv, n := countingServer(t)
 	bc := newBatchClient(t, srv.URL)
-	_, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("dup"), chatItem("dup")}, llm.BatchOptions{})
-	if err == nil || !strings.Contains(err.Error(), "duplicate custom_id") {
-		t.Fatalf("expected duplicate custom_id error, got: %v", err)
+	_, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("dup"), chatItem("dup")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
+	if err == nil || !strings.Contains(err.Error(), "duplicate item_id") {
+		t.Fatalf("expected duplicate item_id error, got: %v", err)
 	}
 	if got := atomic.LoadInt32(n); got != 0 {
 		t.Fatalf("expected 0 network requests, got %d", got)
@@ -204,10 +206,10 @@ func TestBatchSubmitDuplicateCustomIDRejected(t *testing.T) {
 func TestBatchSubmitEmptyAndBlankIDRejected(t *testing.T) {
 	srv, n := countingServer(t)
 	bc := newBatchClient(t, srv.URL)
-	if _, err := bc.Submit(context.Background(), nil, llm.BatchOptions{}); err == nil {
+	if _, err := bc.Submit(context.Background(), nil, llm.BatchOptions{MaxTurnaround: 24 * time.Hour}); err == nil {
 		t.Fatal("expected error for empty items")
 	}
-	if _, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("")}, llm.BatchOptions{}); err == nil {
+	if _, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour}); err == nil {
 		t.Fatal("expected error for empty custom_id")
 	}
 	if got := atomic.LoadInt32(n); got != 0 {
@@ -223,11 +225,11 @@ func TestBatchSubmitUploadsJSONL(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	h, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a"), chatItem("b")}, llm.BatchOptions{})
+	h, err := bc.Submit(context.Background(), []llm.BatchItem{chatItem("a"), chatItem("b")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if h.ID != "batch-1" || h.Endpoint != "/v1/chat/completions" {
+	if h.ID != "batch-1" || h.Operation != llm.BatchOperationCompletion {
 		t.Fatalf("unexpected handle: %+v", h)
 	}
 	env.mu.Lock()
@@ -256,19 +258,19 @@ func TestBatchResultsHappyCorrelation(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
 	got := map[string]string{}
 	for _, r := range results {
 		if r.Error != nil {
-			t.Fatalf("unexpected error for %q: %v", r.CustomID, r.Error)
+			t.Fatalf("unexpected error for %q: %v", r.ItemID, r.Error)
 		}
 		if r.Response == nil {
-			t.Fatalf("nil response for %q", r.CustomID)
+			t.Fatalf("nil response for %q", r.ItemID)
 		}
-		got[r.CustomID] = r.Response.Content
+		got[r.ItemID] = r.Response.Content
 	}
 	if got["a"] != "hello-a" || got["b"] != "hello-b" {
 		t.Fatalf("bad correlation: %+v", got)
@@ -284,7 +286,7 @@ func TestBatchResultsMalformedLineBecomesError(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results should not abort on one bad line: %v", err)
 	}
@@ -293,7 +295,7 @@ func TestBatchResultsMalformedLineBecomesError(t *testing.T) {
 		if r.Error != nil {
 			sawError = true
 		}
-		if r.CustomID == "ok" && r.Response != nil && r.Response.Content == "good" {
+		if r.ItemID == "ok" && r.Response != nil && r.Response.Content == "good" {
 			sawGood = true
 		}
 	}
@@ -312,7 +314,7 @@ func TestBatchResultsNon2xxLineIsError(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
@@ -337,13 +339,13 @@ func TestBatchResultsErrorFileMerged(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
 	byID := map[string]llm.BatchResult{}
 	for _, r := range results {
-		byID[r.CustomID] = r
+		byID[r.ItemID] = r
 	}
 	if byID["good"].Response == nil {
 		t.Fatal("expected success from output file")
@@ -373,7 +375,7 @@ func TestBatchResultsOversizeDownloadRejected(t *testing.T) {
 	}
 	defer bc.Close()
 
-	if _, err := bc.Results(context.Background(), "batch-1"); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := bc.Results(context.Background(), validBatchHandle()); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected oversize download to be rejected, got: %v", err)
 	}
 }
@@ -384,7 +386,7 @@ func TestBatchResultsFailedNoFilesNoPanic(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Results on failed batch should not error: %v", err)
 	}
@@ -403,7 +405,7 @@ func TestBatchResultsEmbeddings(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	results, err := bc.Results(context.Background(), "batch-1")
+	results, err := bc.Results(context.Background(), validEmbeddingBatchHandle())
 	if err != nil {
 		t.Fatalf("Results: %v", err)
 	}
@@ -426,7 +428,7 @@ func TestBatchHandleRoundTripAndResultsFromEndpoint(t *testing.T) {
 	defer srv.Close()
 	bc := newBatchClient(t, srv.URL)
 
-	h, err := bc.Get(context.Background(), "batch-1")
+	h, err := bc.Get(context.Background(), validBatchHandle())
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -438,24 +440,24 @@ func TestBatchHandleRoundTripAndResultsFromEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadBatchHandle: %v", err)
 	}
-	if loaded.Endpoint != "/v1/chat/completions" || loaded.ID != "batch-1" {
+	if loaded.Operation != llm.BatchOperationCompletion || loaded.ID != "batch-1" ||
+		!bytes.Equal(loaded.AdapterState, h.AdapterState) {
 		t.Fatalf("round-trip lost fields: %+v", loaded)
 	}
-	// Results works from the (deserialized) batch id alone — the endpoint on the
-	// server-side object drives the parser.
-	results, err := bc.Results(context.Background(), loaded.ID)
+	// Results works from the complete deserialized handle; adapter state selects
+	// the exact response parser without exposing endpoint vocabulary to callers.
+	results, err := bc.Results(context.Background(), *loaded)
 	if err != nil || len(results) != 1 || results[0].Response == nil || results[0].Response.Content != "resumed" {
 		t.Fatalf("resume Results failed: %v / %+v", err, results)
 	}
 }
 
 func TestLoadBatchHandleRejectsSchemaVersions(t *testing.T) {
-	if _, err := llm.LoadBatchHandle([]byte(`{"schema_version":2,"id":"x"}`)); err == nil {
-		t.Fatal("expected rejection of newer schema_version 2")
+	if _, err := llm.LoadBatchHandle([]byte(`{"schema_version":1,"id":"x"}`)); err == nil {
+		t.Fatal("expected rejection of older schema_version 1")
 	}
-	// Absent/zero version is treated as current (forward-compat from pre-versioned writes).
-	if _, err := llm.LoadBatchHandle([]byte(`{"id":"x"}`)); err != nil {
-		t.Fatalf("absent schema_version should be accepted, got: %v", err)
+	if _, err := llm.LoadBatchHandle([]byte(`{"provider":"openai","id":"x"}`)); err == nil {
+		t.Fatal("expected rejection of missing schema_version")
 	}
 }
 
@@ -576,13 +578,13 @@ func TestBatchConcurrentRaceFree(t *testing.T) {
 			ctx := context.Background()
 			switch i % 4 {
 			case 0:
-				_, _ = bc.Submit(ctx, []llm.BatchItem{chatItem("c")}, llm.BatchOptions{})
+				_, _ = bc.Submit(ctx, []llm.BatchItem{chatItem("c")}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 			case 1:
-				_, _ = bc.Get(ctx, "batch-1")
+				_, _ = bc.Get(ctx, validBatchHandle())
 			case 2:
-				_, _ = bc.Results(ctx, "batch-1")
+				_, _ = bc.Results(ctx, validBatchHandle())
 			case 3:
-				_, _ = bc.Cancel(ctx, "batch-1")
+				_, _ = bc.Cancel(ctx, validBatchHandle())
 			}
 		}(i)
 	}

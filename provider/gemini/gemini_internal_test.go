@@ -34,11 +34,13 @@ func TestMakeToolCallIDResolveToolNameRoundTrip(t *testing.T) {
 	}
 }
 
-// TestResolveToolNameLegacyFormat verifies the legacy "call_<name>" format.
-func TestResolveToolNameLegacyFormat(t *testing.T) {
+// TestResolveToolNameRejectsNonCurrentSyntheticGrammar verifies that an ID
+// which was not emitted by makeToolCallID is never reinterpreted as a tool
+// name.
+func TestResolveToolNameRejectsNonCurrentSyntheticGrammar(t *testing.T) {
 	got := resolveToolName("call_my_tool")
-	if got != "my_tool" {
-		t.Errorf("resolveToolName(call_my_tool) = %q, want my_tool", got)
+	if got != "call_my_tool" {
+		t.Errorf("resolveToolName(call_my_tool) = %q, want unchanged ID", got)
 	}
 }
 

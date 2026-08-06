@@ -4,15 +4,108 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // This file centralizes the HTTP plumbing shared by every provider adapter so the
 // security-critical pieces — bounded reads and error construction — live in one
 // place. Wire-format translation stays per-adapter; only the transport is shared.
+
+// HTTPRequestFactory rebuilds one request for a retry attempt. Bodies must be
+// fresh because net/http consumes them.
+type HTTPRequestFactory func(context.Context) (*http.Request, error)
+
+// DoHTTP executes a provider HTTP request with the common retry policy,
+// retry hooks, proxy-aware client, and caller cancellation semantics. The final
+// HTTP response is returned even for non-2xx status so callers can decode its
+// provider error body. Auth rotation and circuit breaking remain properties of
+// NewClientWithKeys; a single Config contains only one credential.
+func DoHTTP(ctx context.Context, cfg Config, client *http.Client, build HTTPRequestFactory) (*http.Response, error) {
+	if client == nil {
+		var err error
+		client, err = NewSafeHTTPClient(cfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+	attempts := 1
+	if !cfg.DisableRetries {
+		attempts = cfg.MaxRetries
+		if attempts <= 0 {
+			attempts = DefaultMaxRetries
+		}
+		if attempts < 3 {
+			attempts = 3
+		}
+	}
+	policy := DefaultRetryPolicy
+	if cfg.RetryPolicy != nil {
+		policy = *cfg.RetryPolicy
+	}
+	provider := cfg.ProviderName
+	if provider == "" {
+		provider = cfg.Provider
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		req, err := build(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(req)
+		if err == nil && !retryableHTTPStatus(resp.StatusCode) {
+			return resp, nil
+		}
+		if err == nil {
+			lastErr = NewAPIErrorFromStatus(provider, resp.StatusCode, resp.Status)
+			if attempt+1 == attempts {
+				if cfg.RetryHook != nil {
+					cfg.RetryHook(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: lastErr, Provider: provider})
+				}
+				return resp, nil
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+			resp.Body.Close()
+		} else {
+			lastErr = err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if !IsRetryable(err) || attempt+1 == attempts {
+				if IsRetryable(err) && cfg.RetryHook != nil {
+					cfg.RetryHook(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: err, Provider: provider})
+				}
+				return nil, err
+			}
+		}
+		if cfg.RetryHook != nil {
+			cfg.RetryHook(RetryEvent{Type: RetryAttemptFailed, Attempt: attempt, Err: lastErr, Provider: provider})
+		}
+		delay := policy.Delay(attempt)
+		if cfg.RetryHook != nil {
+			cfg.RetryHook(RetryEvent{Type: RetryBackingOff, Attempt: attempt, Err: lastErr, Backoff: delay, Provider: provider})
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, fmt.Errorf("llm: retry loop exhausted: %w", lastErr)
+}
+
+func retryableHTTPStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests ||
+		status == http.StatusInternalServerError || status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
 
 // NewJSONRequest builds a POST request carrying a JSON body, with Content-Type set.
 // Adapters add their provider-specific auth/version headers afterwards.

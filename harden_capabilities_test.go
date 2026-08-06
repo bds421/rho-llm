@@ -1,6 +1,6 @@
 package llm_test
 
-// Hardening pass 3 — capabilities.go HTTP body-read integrity.
+// Hardening pass 3 — modality adapter HTTP body-read integrity.
 
 import (
 	"bufio"
@@ -44,13 +44,13 @@ func TestSynthesizeSpeechRejectsTruncatedBody(t *testing.T) {
 	defer srv.Close()
 
 	cfg := llm.Config{Provider: "openai", BaseURL: srv.URL, APIKey: "k", Timeout: 5 * time.Second}
-	audio, err := llm.SynthesizeSpeech(context.Background(), cfg, llm.SpeechRequest{
-		Model: "tts-1", Input: "hello", Voice: "alloy",
+	audio, err := synthesizeSpeech(context.Background(), cfg, llm.SpeechRequest{
+		Model: "tts-1", Input: "hello", Voice: "alloy", MediaType: "audio/mpeg",
 	})
 	if err == nil {
-		t.Fatalf("want an error on a truncated response; got %d bytes of (silently truncated) audio", len(audio))
+		t.Fatalf("want an error on a truncated response; got %d bytes of (silently truncated) audio", len(audio.Audio))
 	}
 	if audio != nil {
-		t.Fatalf("truncated response must return nil audio, got %d bytes", len(audio))
+		t.Fatalf("truncated response must return nil audio, got %d bytes", len(audio.Audio))
 	}
 }

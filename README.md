@@ -501,16 +501,13 @@ client = llm.WithLoggingPrefix(client, "[MyApp]")
 
 ## Exponential Backoff
 
-The pool uses configurable exponential backoff with jitter (default: 1s base, 30s cap). Override via `Config.RetryPolicy` or use the utility directly:
+The pool uses configurable exponential backoff with jitter (default: 1s base,
+30s cap). Override it with `Config.RetryPolicy`; callers that need the same
+calculation use that policy directly:
 
 ```go
-// Available as a utility for custom retry logic
-delay := llm.Backoff(attempt, 1*time.Second, 30*time.Second)
-// attempt 0: ~1s, 1: ~2s, 2: ~4s, 3: ~8s, ...
-
-// Or use RetryPolicy directly
 p := llm.RetryPolicy{BaseDelay: 100*time.Millisecond, MaxDelay: 5*time.Second, Factor: 3.0, Jitter: 0.1}
-delay = p.Delay(attempt)
+delay := p.Delay(attempt)
 ```
 
 ## More Capabilities
@@ -561,6 +558,38 @@ mods := llm.ModelsByProvider("anthropic")
 provs := llm.Providers()
 ```
 
+### Reviewed capability validation
+
+Validate the exact provider/model operation before dispatch. Unknown models and
+undeclared combinations fail closed instead of relying on a provider-family guess:
+
+```go
+err := llm.ValidateRequestCapabilities(cfg, req, false)
+err = llm.RequireCapabilities(cfg, llm.CapabilityEmbeddings)
+```
+
+Deployment-owned Ollama, vLLM, or custom OpenAI-compatible models use the same
+registry as hosted models; no separate local-provider switch is required:
+
+```go
+llm.RegisterModel(llm.ModelInfo{
+    ID: "acme/qwen-local", Provider: "vllm",
+    Capabilities: llm.Capabilities(
+        llm.CapabilityChat,
+        llm.CapabilityStream,
+        llm.CapabilityTools,
+        llm.CapabilityStructuredOutput,
+    ),
+})
+```
+
+The capability vocabulary also covers vision, document input, supported batch,
+image generation, speech synthesis, transcription, and enforceable reasoning
+effort. Intrinsic reasoning output alone does not satisfy `CapabilityReasoning`.
+Provider protocol support
+and reviewed model support are intersected, so metadata cannot claim an operation
+the selected adapter cannot encode.
+
 ### One-shot helpers & a mock client
 
 ```go
@@ -572,14 +601,73 @@ sess := llm.NewSession(mock)                 // drive Sessions/handoff in tests,
 
 ### Embeddings, image generation, audio
 
-Standalone OpenAI-compatible capability functions (reuse `SafeHTTPClient`, honor `BlockPrivateBaseURL`):
+Non-chat operations use the same registered-adapter pattern as chat. Construct
+one `ModalityClient` for an exact deployment and reuse it for the worker
+lifetime; its safe HTTP transport, connection pool, retry policy, proxy policy,
+bounded reads, caller cancellation, and classified errors are shared across
+all four operations:
 
 ```go
-emb, _ := llm.GenerateEmbeddings(ctx, cfg, llm.EmbeddingRequest{Model: "text-embedding-3-small", Input: []string{"hi"}})
-img, _ := llm.GenerateImages(ctx, cfg, llm.ImageRequest{Model: "gpt-image-1", Prompt: "a cat", Size: "1024x1024"})
-wav, _ := llm.SynthesizeSpeech(ctx, cfg, llm.SpeechRequest{Model: "tts-1", Input: "hello", Voice: "alloy"})
-text, _ := llm.TranscribeAudio(ctx, cfg, llm.TranscriptionRequest{Model: "whisper-1", Audio: bytes, Filename: "a.mp3"})
+cfg.Model = "text-embedding-3-small"
+modalities, err := llm.NewModalityClient(cfg)
+if err != nil { /* handle */ }
+defer modalities.Close()
+
+emb, _ := modalities.GenerateEmbeddings(ctx, llm.EmbeddingRequest{Model: cfg.Model, Input: []string{"hi"}})
+
+// A different exact deployment/client owns image generation.
+imageCfg := cfg; imageCfg.Model = "gpt-image-1"
+imageClient, _ := llm.NewModalityClient(imageCfg)
+defer imageClient.Close()
+img, _ := imageClient.GenerateImages(ctx, llm.ImageRequest{
+    Model: "gpt-image-1", Prompt: "a cat", WidthPixels: 1024, HeightPixels: 1024,
+    MediaType: "image/png",
+})
+speechCfg := cfg; speechCfg.Model = "tts-1"
+speechClient, _ := llm.NewModalityClient(speechCfg)
+defer speechClient.Close()
+speech, _ := speechClient.SynthesizeSpeech(ctx, llm.SpeechRequest{
+    Model: "tts-1", Input: "hello", Voice: "alloy", MediaType: "audio/wav",
+})
+_ = speech.Audio
+_ = speech.MediaType // verified from Content-Type plus bounded payload signature
+transcriptionCfg := cfg; transcriptionCfg.Model = "whisper-1"
+transcriptionClient, _ := llm.NewModalityClient(transcriptionCfg)
+defer transcriptionClient.Close()
+text, _ := transcriptionClient.TranscribeAudio(ctx, llm.TranscriptionRequest{
+    Model: "whisper-1", Audio: bytes, MediaType: "audio/mpeg",
+})
 ```
+
+Exact image count, geometry, output media type, speech voice, and transcription
+language are application choices. Rho neither selects preferred values nor
+imposes product-level size/count defaults; it validates only generic structure,
+reviewed model capability, and whether the registered adapter can encode the
+request. Omitted optional values retain the endpoint default where the operation
+contract permits omission.
+
+Generated base64 images receive a media type only after their decoded signature
+matches the requested format. URL-only responses fail because the request requires
+exact `b64_json` bytes. Speech synthesis returns
+`*SpeechResponse` rather than unlabeled bytes and fails closed on unknown or
+mismatched response formats. `ValidateEmbeddingRequest`, `ValidateImageRequest`,
+`ValidateSpeechRequest`, and `ValidateTranscriptionRequest` provide the same
+request/capability checks without network I/O.
+
+Speech requests use canonical output media types: `audio/mpeg`,
+`audio/ogg; codecs=opus`, `audio/aac`, `audio/flac`, `audio/wav`, or
+`audio/L16`. Wire/header aliases such as `audio/opus` and `audio/x-wav` are
+normalized only while verifying provider responses; they are rejected as request
+values so the returned media type always matches the admitted output contract.
+
+Inline image and PDF inputs require canonical RFC 4648 base64 whose decoded
+signature matches the declared media type. Transcription likewise verifies the
+uploaded FLAC, MP4/M4A, MP3, Ogg, WAV, or WebM signature before dispatch, so
+mislabeled bytes never reach a provider.
+
+The OpenAI-compatible transcription wire accepts an optional lowercase
+ISO-639-1 language code. The validator rejects regional or extended BCP47 tags
+such as `de-AT` rather than silently truncating them to `de`.
 
 ### Batch API (async, ~50% cheaper)
 
@@ -594,25 +682,27 @@ bc, _ := llm.NewBatchClient(cfg)           // gated by ProviderPreset.SupportsBa
 defer bc.Close()
 
 handle, _ := bc.Submit(ctx, []llm.BatchItem{
-    {CustomID: "q1", Request: &llm.Request{Model: "gpt-5.3-chat-latest",
+    {ItemID: "q1", Request: &llm.Request{Model: "gpt-5.3-chat-latest",
         Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "classify: ..."}}}}}},
-    {CustomID: "q2", Request: &llm.Request{Model: "gpt-5.3-chat-latest", /* ... */ }},
-}, llm.BatchOptions{}) // CompletionWindow defaults to "24h"
+    {ItemID: "q2", Request: &llm.Request{Model: "gpt-5.3-chat-latest", /* ... */ }},
+}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 
 blob, _ := json.Marshal(handle)            // persist; resume after a restart with llm.LoadBatchHandle(blob)
 
-done, _ := llm.WaitForBatch(ctx, bc, handle.ID, 30*time.Second) // polls until terminal; honors ctx
+done, _ := llm.WaitForBatch(ctx, bc, *handle, 30*time.Second) // polls until terminal; honors ctx
 if done.Status == llm.BatchCompleted {
-    results, _ := bc.Results(ctx, handle.ID)   // correlated by CustomID
+    results, _ := bc.Results(ctx, *done)       // correlated by ItemID
     for _, r := range results {
         if r.Error != nil { /* failed line */ } else { /* r.Response (or r.Embedding) */ }
     }
 }
 ```
 
-Each batch targets a single endpoint, so all items must be the same kind (all chat, all responses,
-or all embeddings); `Submit` rejects mixed/duplicate/empty sets before any upload. Batch cost is
-estimated at 50% via `CostInput{Batch: true}` / `Usage.AddBatchResponse`.
+Each batch has one neutral operation kind (`completion` or `embedding`); the adapter owns its exact
+wire endpoint and remote file identifiers in bounded, versioned opaque handle state. `Submit`
+rejects mixed/duplicate/empty sets and an unrepresentable caller-authored `MaxTurnaround` before
+any upload. Batch cost is estimated at 50% via `CostInput{Batch: true}` /
+`Usage.AddBatchResponse`.
 
 ### OAuth (device flow)
 
@@ -634,12 +724,15 @@ tok, _ := llm.PollDeviceToken(ctx, cfg, da)  // honors authorization_pending / s
 |-------|------|---------|-------------|
 | Provider | string | "anthropic" | Provider name |
 | Model | string | "claude-sonnet-4-6" | Model identifier |
+| ModelCapabilities | CapabilitySet | 0 | Exact deployment-scoped reviewed capabilities for Model; overrides global registry metadata |
 | APIKey | string | "" | API key (empty OK for local providers) |
 | MaxTokens | int | 8192 | Max output tokens |
 | Temperature | *float64 | nil | Sampling temperature (nil = provider default, omitted from wire) |
 | ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingLow/ThinkingMedium/ThinkingHigh |
 | Timeout | Duration | 120s | HTTP timeout |
 | BaseURL | string | "" | Override provider endpoint |
+| ProxyURL | string | "" | Explicit reviewed HTTP(S) forward proxy; overrides ambient proxy variables |
+| DisableProxy | bool | false | Explicitly bypass configured and ambient proxies for local/private endpoints |
 | AuthHeader | string | "Bearer" | Override auth header format |
 | ProviderName | string | "" | Override Client.Provider() |
 | LogRequests | bool | false | Enable request/response metadata logging |
@@ -766,8 +859,10 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `gemini`, `flash-lite` | `gemini-3.1-flash-lite-preview` |
+| `gemini`, `flash-lite`, `gemini3.5-lite` | `gemini-3.5-flash-lite` |
+| `gemini3.6` | `gemini-3.6-flash` |
 | `gemini3.5` | `gemini-3.5-flash` |
+| `gemini3.1-lite` | `gemini-3.1-flash-lite` |
 | `flash` | `gemini-2.5-flash` |
 | `gemini-pro`, `gemini3.1`, `gemini3`, `gemini-3` | `gemini-3.1-pro-preview` |
 
@@ -775,6 +870,11 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 > `ThoughtSignature` — the model returns an opaque signature in tool call responses
 > that must be echoed in the corresponding `tool_result`. The adapter handles this
 > automatically; no changes to calling code are required.
+
+`gemini-3.6-flash` and `gemini-3.5-flash-lite` deliberately do not advertise
+the sampling-temperature capability: Google deprecates and ignores
+`temperature`, `top_p`, and `top_k` for these models and states that future
+generations reject them.
 
 ### Cost and metadata
 
@@ -821,7 +921,8 @@ Provider implementations live in sub-packages under `provider/`, following the `
 llm/
   types.go, config.go, errors.go, ...   # Core types and interfaces
   register.go                            # RegisterProvider() registry
-  factory.go                             # NewClient() / NewBatchClient() -> registry lookup
+  modalityregister.go                    # RegisterModalityDriver() registry
+  factory.go                             # NewClient() / NewModalityClient() / NewBatchClient()
   batch.go                               # BatchClient interface + BatchItem/BatchResult/BatchHandle (async)
   batchregister.go                       # RegisterBatchProvider() + batch driver registry
   conversation.go                        # Conversation + Usage + versioned serialization
@@ -833,7 +934,7 @@ llm/
   discovery.go                           # Models() / ModelsByProvider() / Providers()
   simple.go                              # CompleteSimple / StreamSimple
   validate.go                            # ValidateToolCall()
-  capabilities.go                        # Embeddings, image gen, audio (OpenAI-compatible)
+  capabilities.go                        # Provider-neutral modality contracts + validation
   oauth.go                               # OAuth 2.0 device-flow helpers
   transport.go                           # Shared HTTP plumbing (bounded reads, error construction)
   retrypolicy.go                         # RetryPolicy + RetryHook (configurable backoff)
@@ -842,12 +943,13 @@ llm/
     all.go                               # Blank-imports all sub-packages
     anthropic/anthropic.go               # Anthropic Claude adapter
     gemini/gemini.go                     # Google Gemini adapter
-    openaicompat/openaicompat.go         # OpenAI-compatible adapter (18+ providers)
+    openaicompat/                         # Chat + modality OpenAI-compatible adapter
     openairesponses/responses.go         # OpenAI Responses API adapter (GPT-5 reasoning)
     openaibatch/openaibatch.go           # OpenAI Batch API driver (async; Files + Batches REST)
 ```
 
-Consumers that call `llm.NewClient()` must add a blank import in their `main.go`:
+Consumers that call `llm.NewClient()`, `llm.NewModalityClient()`, or the pure
+modality request validators must add a blank import in their `main.go`:
 
 ```go
 import _ "github.com/bds421/rho-llm/provider"  // register all provider adapters

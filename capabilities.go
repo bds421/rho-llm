@@ -1,24 +1,36 @@
 package llm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"mime/multipart"
-	"net/http"
+	"strings"
 )
 
-// This file adds non-chat capabilities for OpenAI-compatible providers — embeddings,
-// image generation, and audio (speech/transcription) — as standalone functions that
-// take a Config (provider/BaseURL/APIKey/AuthHeader). They reuse SafeHTTPClient
-// (TLS 1.2+, redirect header stripping) and honor BlockPrivateBaseURL. Providers
-// with non-OpenAI shapes (e.g. Gemini Imagen, Anthropic) are out of scope here.
+// ModalityClient is the provider-neutral synchronous interface for non-chat
+// model operations. Wire protocols register their implementation through
+// RegisterModalityDriver; callers construct clients with NewModalityClient and
+// reuse them so the underlying safe HTTP transport remains pooled.
+type ModalityClient interface {
+	GenerateEmbeddings(context.Context, EmbeddingRequest) (*EmbeddingResponse, error)
+	GenerateImages(context.Context, ImageRequest) (*ImageResponse, error)
+	SynthesizeSpeech(context.Context, SpeechRequest) (*SpeechResponse, error)
+	TranscribeAudio(context.Context, TranscriptionRequest) (string, error)
+	Provider() string
+	Model() string
+	Close() error
+}
 
-// =============================================================================
-// Embeddings — POST {BaseURL}/embeddings
-// =============================================================================
+// ModalityDriver is the protocol adapter contract registered by provider
+// packages. Validate* methods must be pure: they decide only whether the
+// protocol can encode an otherwise provider-neutral request. New constructs the
+// durable network client used for dispatch.
+type ModalityDriver interface {
+	New(Config) (ModalityClient, error)
+	ValidateEmbeddingRequest(Config, EmbeddingRequest) error
+	ValidateImageRequest(Config, ImageRequest) error
+	ValidateSpeechRequest(Config, SpeechRequest) error
+	ValidateTranscriptionRequest(Config, TranscriptionRequest) error
+}
 
 // EmbeddingRequest requests vector embeddings for one or more inputs.
 type EmbeddingRequest struct {
@@ -39,83 +51,25 @@ type EmbeddingResponse struct {
 	InputTokens int
 }
 
-// embeddingsAPIResponse is the OpenAI-compatible /embeddings response shape, shared by
-// the live GenerateEmbeddings call and the batch result parser so the decode lives in
-// one place.
-type embeddingsAPIResponse struct {
-	Model string `json:"model"`
-	Data  []struct {
-		Index     int       `json:"index"`
-		Embedding []float64 `json:"embedding"`
-	} `json:"data"`
-	Usage struct {
-		PromptTokens int `json:"prompt_tokens"`
-	} `json:"usage"`
-}
-
-// toResponse converts the wire shape to the neutral EmbeddingResponse.
-func (r *embeddingsAPIResponse) toResponse() *EmbeddingResponse {
-	res := &EmbeddingResponse{Model: r.Model, InputTokens: r.Usage.PromptTokens}
-	for _, d := range r.Data {
-		res.Embeddings = append(res.Embeddings, Embedding{Index: d.Index, Vector: d.Embedding})
-	}
-	return res
-}
-
-// embeddingsRequestBody is the OpenAI-compatible /embeddings request body, shared by
-// the live call and the batch line builder so the request shape lives in one place.
-func embeddingsRequestBody(req EmbeddingRequest) map[string]any {
-	return map[string]any{"model": req.Model, "input": req.Input}
-}
-
-// GenerateEmbeddings calls an OpenAI-compatible /embeddings endpoint.
-func GenerateEmbeddings(ctx context.Context, cfg Config, req EmbeddingRequest) (*EmbeddingResponse, error) {
-	if len(req.Input) == 0 {
-		return nil, fmt.Errorf("llm: embeddings require at least one input")
-	}
-	var out embeddingsAPIResponse
-	if err := postJSON(ctx, cfg, "/embeddings", embeddingsRequestBody(req), &out); err != nil {
-		return nil, err
-	}
-	return out.toResponse(), nil
-}
-
-// BuildEmbeddingsBatchLineBody builds the "body" object for one OpenAI batch line
-// targeting /v1/embeddings, reusing the same request shape as GenerateEmbeddings. Used
-// by the OpenAI batch driver (provider/openaibatch). No network call.
-func BuildEmbeddingsBatchLineBody(req EmbeddingRequest) (json.RawMessage, error) {
-	if len(req.Input) == 0 {
-		return nil, fmt.Errorf("llm: embeddings require at least one input")
-	}
-	return json.Marshal(embeddingsRequestBody(req))
-}
-
-// ParseEmbeddingsBatchResultBody parses one batch output line's response.body (an
-// /v1/embeddings response) into the neutral EmbeddingResponse.
-func ParseEmbeddingsBatchResultBody(raw json.RawMessage) (*EmbeddingResponse, error) {
-	var out embeddingsAPIResponse
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("llm: decode embeddings batch result body: %w", err)
-	}
-	return out.toResponse(), nil
-}
-
-// =============================================================================
-// Image generation — POST {BaseURL}/images/generations
-// =============================================================================
-
-// ImageRequest requests generated images from a prompt.
+// ImageRequest requests generated images from a prompt. Exact geometry, count,
+// and format are application-owned parameters; rho only validates whether the
+// selected adapter can encode them.
 type ImageRequest struct {
-	Model  string
-	Prompt string
-	N      int    // number of images (0 = provider default)
-	Size   string // e.g. "1024x1024" (empty = provider default)
+	Model        string
+	Prompt       string
+	N            int
+	WidthPixels  uint32
+	HeightPixels uint32
+	MediaType    string
 }
 
-// GeneratedImage holds one result, as base64 (b64_json) and/or a URL.
+// GeneratedImage carries provider-returned bytes and their verified media type.
+// OpenAI-compatible adapters require B64JSON and reject URL-only results because
+// an un-fetched URL cannot prove artifact identity or content type.
 type GeneratedImage struct {
-	B64JSON string
-	URL     string
+	MediaType string
+	B64JSON   string
+	URL       string
 }
 
 // ImageResponse holds the generated images.
@@ -123,196 +77,112 @@ type ImageResponse struct {
 	Images []GeneratedImage
 }
 
-// GenerateImages calls an OpenAI-compatible /images/generations endpoint and
-// requests base64 (b64_json) output.
-func GenerateImages(ctx context.Context, cfg Config, req ImageRequest) (*ImageResponse, error) {
-	if req.Prompt == "" {
-		return nil, fmt.Errorf("llm: image generation requires a prompt")
-	}
-	body := map[string]any{"model": req.Model, "prompt": req.Prompt, "response_format": "b64_json"}
-	if req.N > 0 {
-		body["n"] = req.N
-	}
-	if req.Size != "" {
-		body["size"] = req.Size
-	}
-	var out struct {
-		Data []struct {
-			B64JSON string `json:"b64_json"`
-			URL     string `json:"url"`
-		} `json:"data"`
-	}
-	if err := postJSON(ctx, cfg, "/images/generations", body, &out); err != nil {
-		return nil, err
-	}
-	res := &ImageResponse{}
-	for _, d := range out.Data {
-		res.Images = append(res.Images, GeneratedImage{B64JSON: d.B64JSON, URL: d.URL})
-	}
-	return res, nil
-}
-
-// =============================================================================
-// Audio out — POST {BaseURL}/audio/speech
-// =============================================================================
-
-// SpeechRequest synthesizes speech from text.
+// SpeechRequest synthesizes speech from text. Voice and format are selected by
+// the application rather than inferred by the intelligence transport.
 type SpeechRequest struct {
-	Model  string
-	Input  string
-	Voice  string
-	Format string // mp3, wav, opus, ... (empty = provider default)
+	Model     string
+	Input     string
+	Voice     string
+	MediaType string
 }
 
-// SynthesizeSpeech returns the raw audio bytes for the request.
-func SynthesizeSpeech(ctx context.Context, cfg Config, req SpeechRequest) ([]byte, error) {
-	if req.Input == "" {
-		return nil, fmt.Errorf("llm: speech synthesis requires input text")
-	}
-	body := map[string]any{"model": req.Model, "input": req.Input, "voice": req.Voice}
-	if req.Format != "" {
-		body["response_format"] = req.Format
-	}
-	return doPost(ctx, cfg, "/audio/speech", body)
+// SpeechResponse carries synthesized bytes and their verified media type.
+type SpeechResponse struct {
+	Audio     []byte
+	MediaType string
 }
-
-// =============================================================================
-// Audio in — POST {BaseURL}/audio/transcriptions (multipart)
-// =============================================================================
 
 // TranscriptionRequest transcribes audio bytes to text.
 type TranscriptionRequest struct {
-	Model    string
-	Audio    []byte
-	Filename string // e.g. "audio.mp3" (used for the multipart part)
-	Language string // optional ISO-639-1 hint
+	Model     string
+	Audio     []byte
+	MediaType string
+	Language  string
 }
 
-// TranscribeAudio uploads audio to an OpenAI-compatible /audio/transcriptions
-// endpoint (multipart/form-data) and returns the transcript text.
-func TranscribeAudio(ctx context.Context, cfg Config, req TranscriptionRequest) (string, error) {
-	if len(req.Audio) == 0 {
-		return "", fmt.Errorf("llm: transcription requires audio data")
+// ValidateEmbeddingRequest proves that req is supported by reviewed capability
+// metadata and encodable by the registered protocol adapter. It performs no
+// network I/O.
+func ValidateEmbeddingRequest(cfg Config, req EmbeddingRequest) error {
+	if len(req.Input) == 0 {
+		return fmt.Errorf("llm: embeddings require at least one input")
 	}
-	if err := CheckBaseURL(cfg); err != nil {
-		return "", err
+	if err := RequireCapabilitiesForModel(cfg, req.Model, CapabilityEmbeddings); err != nil {
+		return err
 	}
-	base := ResolveBaseURL(cfg)
-	if base == "" {
-		return "", fmt.Errorf("llm: no base URL for provider %q", cfg.Provider)
-	}
-	filename := req.Filename
-	if filename == "" {
-		filename = "audio"
-	}
-
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	if err := mw.WriteField("model", req.Model); err != nil {
-		return "", err
-	}
-	if req.Language != "" {
-		_ = mw.WriteField("language", req.Language)
-	}
-	fw, err := mw.CreateFormFile("file", filename)
-	if err != nil {
-		return "", err
-	}
-	if _, err := fw.Write(req.Audio); err != nil {
-		return "", err
-	}
-	if err := mw.Close(); err != nil {
-		return "", err
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", base+"/audio/transcriptions", &buf)
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", mw.FormDataContentType())
-	setAuth(httpReq, cfg)
-
-	data, err := doRaw(ctx, cfg, httpReq)
-	if err != nil {
-		return "", err
-	}
-	var out struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		return "", fmt.Errorf("llm: decode transcription response: %w", err)
-	}
-	return out.Text, nil
-}
-
-// =============================================================================
-// shared HTTP plumbing
-// =============================================================================
-
-func postJSON(ctx context.Context, cfg Config, path string, body any, out any) error {
-	data, err := doPost(ctx, cfg, path, body)
+	driver, err := modalityDriverFor(cfg)
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("llm: decode %s response: %w", path, err)
-	}
-	return nil
+	return driver.ValidateEmbeddingRequest(cfg, req)
 }
 
-func doPost(ctx context.Context, cfg Config, path string, body any) ([]byte, error) {
-	if err := CheckBaseURL(cfg); err != nil {
-		return nil, err
+// ValidateImageRequest proves that req is supported by reviewed capability
+// metadata and encodable by the registered protocol adapter. It deliberately
+// imposes no global image-size or count ceiling.
+func ValidateImageRequest(cfg Config, req ImageRequest) error {
+	if strings.TrimSpace(req.Prompt) == "" {
+		return fmt.Errorf("llm: image generation requires a prompt")
 	}
-	base := ResolveBaseURL(cfg)
-	if base == "" {
-		return nil, fmt.Errorf("llm: no base URL for provider %q", cfg.Provider)
+	if req.N < 0 {
+		return fmt.Errorf("llm: image count must be non-negative")
 	}
-	payload, err := json.Marshal(body)
+	if (req.WidthPixels == 0) != (req.HeightPixels == 0) {
+		return fmt.Errorf("llm: image output geometry must include width and height")
+	}
+	if err := RequireCapabilitiesForModel(cfg, req.Model, CapabilityImageGeneration); err != nil {
+		return err
+	}
+	driver, err := modalityDriverFor(cfg)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", base+path, bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	setAuth(httpReq, cfg)
-	return doRaw(ctx, cfg, httpReq)
+	return driver.ValidateImageRequest(cfg, req)
 }
 
-func doRaw(_ context.Context, cfg Config, httpReq *http.Request) ([]byte, error) {
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = DefaultTimeout
+// ValidateSpeechRequest proves that req is supported by reviewed capability
+// metadata and encodable by the registered protocol adapter.
+func ValidateSpeechRequest(cfg Config, req SpeechRequest) error {
+	if strings.TrimSpace(req.Input) == "" {
+		return fmt.Errorf("llm: speech synthesis requires input text")
 	}
-	resp, err := SafeHTTPClient(timeout).Do(httpReq)
+	if strings.TrimSpace(req.Voice) == "" || req.Voice != strings.TrimSpace(req.Voice) {
+		return fmt.Errorf("llm: speech synthesis requires an exact non-empty voice")
+	}
+	if err := RequireCapabilitiesForModel(cfg, req.Model, CapabilitySpeechSynthesis); err != nil {
+		return err
+	}
+	driver, err := modalityDriverFor(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return err
 	}
-	defer resp.Body.Close()
-	name := cfg.ProviderName
-	if name == "" {
-		name = cfg.Provider
-	}
-	data, readErr := io.ReadAll(io.LimitReader(resp.Body, cfg.EffectiveMaxResponseBodyBytes()))
-	if readErr != nil {
-		// A mid-read failure (connection dropped, Content-Length mismatch) must
-		// abort, not silently return a truncated body. This matters most for raw
-		// payloads like SynthesizeSpeech, where there's no later decode to catch
-		// the truncation. (A LimitReader hitting the cap returns nil error, so a
-		// bounded read is unaffected.)
-		return nil, fmt.Errorf("llm: incomplete response body from %s: %w", name, readErr)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, NewAPIErrorFromStatusWithLimit(name, resp.StatusCode, string(data), cfg.EffectiveMaxErrorMessageLen())
-	}
-	return data, nil
+	return driver.ValidateSpeechRequest(cfg, req)
 }
 
-func setAuth(httpReq *http.Request, cfg Config) {
-	authHeader := ResolveAuthHeader(cfg)
-	if authHeader != "" && cfg.APIKey != "" {
-		httpReq.Header.Set("Authorization", authHeader+" "+cfg.APIKey)
+// ValidateTranscriptionRequest proves that req is supported by reviewed
+// capability metadata and encodable by the registered protocol adapter.
+func ValidateTranscriptionRequest(cfg Config, req TranscriptionRequest) error {
+	if len(req.Audio) == 0 {
+		return fmt.Errorf("llm: transcription requires audio data")
 	}
+	if err := RequireCapabilitiesForModel(cfg, req.Model, CapabilityTranscription); err != nil {
+		return err
+	}
+	driver, err := modalityDriverFor(cfg)
+	if err != nil {
+		return err
+	}
+	return driver.ValidateTranscriptionRequest(cfg, req)
+}
+
+func modalityDriverFor(cfg Config) (ModalityDriver, error) {
+	protocol := ResolveProtocol(cfg)
+	driver := getModalityDriver(protocol)
+	if driver == nil {
+		return nil, fmt.Errorf(
+			"llm: no registered modality driver for protocol %q (provider %q)",
+			protocol, cfg.Provider,
+		)
+	}
+	return driver, nil
 }

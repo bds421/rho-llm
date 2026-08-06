@@ -20,7 +20,7 @@ func main() {
 	// 1. Configure the LLM client
 	cfg := llm.Config{
 		Provider: "gemini",
-		Model:    "gemini-3.1-flash-lite-preview",
+		Model:    "gemini-3.5-flash-lite",
 		APIKey:   os.Getenv("GEMINI_API_KEY"),
 		Timeout:  30 * time.Second,
 	}
