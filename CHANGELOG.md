@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CI workflow: `actions/checkout@v4` → `@v7`, `actions/setup-go@v5` → `@v6`
+  (Node 24 runtime; clears the Node 20 deprecation warning on GitHub Actions).
+
 ## [0.7.1] - 2026-08-07
 
 ### Fixed
