@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-07
+
+### Fixed
+
+- Bump module Go version `1.26.4` → `1.26.5` so `govulncheck` (and CI via
+  `go-version-file: go.mod`) pick up the stdlib fix for GO-2026-5856
+  (`crypto/tls` Encrypted Client Hello privacy leak). Direct deps unchanged
+  (`godotenv` already at latest stable `v1.5.1`).
+
 ## [0.7.0] - 2026-08-06
 
 ### Added
