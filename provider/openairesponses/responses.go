@@ -286,13 +286,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 			}
 
-		case "response.completed":
+		case "response.completed", "response.incomplete", "response.failed":
 			var ev struct {
-				Response struct {
-					ID     string         `json:"id"`
-					Status string         `json:"status"`
-					Usage  responsesUsage `json:"usage"`
-				} `json:"response"`
+				Response responsesResponse `json:"response"`
 			}
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed completed event from %s: %w", c.providerName, err)) {
@@ -300,12 +296,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				continue
 			}
-			stopReason := "end_turn"
-			if ev.Response.Status == "incomplete" {
-				stopReason = "max_tokens"
-			} else if ev.Response.Status == "failed" {
-				stopReason = "error"
-			}
+			stopReason, rawStopReason := responseStopReasons(&ev.Response)
 			// A streamed function call wins over the status-based reason, exactly
 			// like the non-streaming parseResponse path (which unconditionally sets
 			// "tool_use" for any function_call output item, even on an
@@ -321,6 +312,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			yield(llm.StreamEvent{
 				Type:           llm.EventDone,
 				StopReason:     stopReason,
+				RawStopReason:  rawStopReason,
 				InputTokens:    ev.Response.Usage.InputTokens,
 				OutputTokens:   ev.Response.Usage.OutputTokens,
 				ThinkingTokens: ev.Response.Usage.ReasoningTokens,
@@ -359,7 +351,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		return
 	}
 
-	// Clean EOF without response.completed: the server truncated the turn.
+	// Clean EOF without a terminal response event: the server truncated the turn.
 	// Yield an explicit error instead of ending silently (see the anthropic
 	// adapter for the rationale; io.ErrUnexpectedEOF makes it pool-retryable).
 	if !completed {
@@ -732,6 +724,28 @@ func (c *Client) buildAssistantMessage(apiReq *responsesRequest, msg llm.Message
 // RESPONSE PARSING
 // =============================================================================
 
+// Responses has no finish_reason. Preserve the incomplete detail when present,
+// otherwise the response status, before applying the neutral normalization.
+func responseStopReasons(resp *responsesResponse) (normalized, raw string) {
+	raw = resp.Status
+	switch resp.Status {
+	case "completed":
+		return llm.StopEndTurn, raw
+	case "incomplete":
+		if resp.IncompleteDetails != nil && resp.IncompleteDetails.Reason != "" {
+			raw = resp.IncompleteDetails.Reason
+			if raw != "max_output_tokens" {
+				return raw, raw
+			}
+		}
+		return llm.StopMaxTokens, raw
+	case "failed":
+		return "error", raw
+	default:
+		return raw, raw
+	}
+}
+
 func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 	resp := &llm.Response{
 		ID:           apiResp.ID,
@@ -745,26 +759,7 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 		resp.ThinkingTokens = apiResp.Usage.ReasoningTokens
 	}
 
-	// Map status to stop reason
-	switch apiResp.Status {
-	case "completed":
-		resp.StopReason = "end_turn"
-	case "incomplete":
-		if apiResp.IncompleteDetails != nil {
-			switch apiResp.IncompleteDetails.Reason {
-			case "max_output_tokens":
-				resp.StopReason = "max_tokens"
-			default:
-				resp.StopReason = apiResp.IncompleteDetails.Reason
-			}
-		} else {
-			resp.StopReason = "max_tokens"
-		}
-	case "failed":
-		resp.StopReason = "error"
-	default:
-		resp.StopReason = apiResp.Status
-	}
+	resp.StopReason, resp.RawStopReason = responseStopReasons(apiResp)
 
 	// Extract output items
 	var contentParts []string

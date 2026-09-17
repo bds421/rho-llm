@@ -18,7 +18,7 @@ func (c *Client) BuildGenerateContentBody(req llm.Request) (json.RawMessage, err
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(apiReq)
+	return llm.MergeSamplingParams(apiReq, req.SamplingParams)
 }
 
 // ParseGenerateContentBody parses a generateContent response into llm.Response.

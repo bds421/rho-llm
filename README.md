@@ -2,7 +2,7 @@
 
 Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), an async **Batch API** (~50% cheaper bulk processing), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports only the Go standard library (the `examples/` use `joho/godotenv`).
 
-**Requires Go 1.26.4+** (`go 1.26.4` in `go.mod`; 1.26.4 fixes stdlib CVEs in `net/textproto` and `crypto/x509`).
+**Requires Go 1.26.8+** (the minimum toolchain in `go.mod`, including the standard-library security updates described in the changelog).
 
 ## Install
 
@@ -18,6 +18,7 @@ go get github.com/bds421/rho-llm
 | Google Gemini | Native | x-goog-api-key | generativelanguage.googleapis.com |
 | OpenAI | OpenAI-compat / Responses | Bearer | api.openai.com/v1 |
 | xAI/Grok | OpenAI-compat | Bearer | api.x.ai/v1 |
+| Meta | OpenAI-compat | Bearer | api.meta.ai/v1 |
 | Groq | OpenAI-compat | Bearer | api.groq.com/openai/v1 |
 | Cerebras | OpenAI-compat | Bearer | api.cerebras.ai/v1 |
 | Mistral | OpenAI-compat | Bearer | api.mistral.ai/v1 |
@@ -191,11 +192,11 @@ for event, err := range client.Stream(ctx, req) {
 |-------|--------|-------------|
 | `EventContent` | `Text` | A chunk of generated text. Concatenate all chunks for the full response. |
 | `EventToolUse` | `ToolCall` (ID, Name, Input) | The model is invoking a tool. Handle it and continue the conversation with the result. |
-| `EventThinking` | `Thinking` | Extended thinking output (requires `ThinkingLevel` in config). |
-| `EventDone` | `StopReason`, `InputTokens`, `OutputTokens` | Stream completed. `StopReason` is normalized across all providers: `end_turn`, `tool_use`, or `max_tokens`. |
+| `EventThinking` | `Thinking` | Thinking output returned by the provider, including models that reason by default. |
+| `EventDone` | `StopReason`, `RawStopReason`, `InputTokens`, `OutputTokens` | Stream completed. Common stop reasons normalize to `end_turn`, `tool_use`, or `max_tokens`; provider-specific reasons can remain unchanged. `RawStopReason` preserves the provider value when available. |
 | `EventError` | `Error` | An error occurred mid-stream. |
 
-**Stream completion:** `EventDone` is emitted when the API sends a completion signal (finish reason + usage stats). If the connection drops or the API response is malformed, the iterator may exhaust without `EventDone`. Handle iterator exhaustion as the authoritative "stream ended" signal; treat `EventDone` as optional metadata. Token counts use the sentinel `llm.TokensNotReported` (-1) when the provider did not report usage; compare against this constant to distinguish "not reported" from "zero tokens" (0).
+**Stream completion:** Require `EventDone` to recognize a completed turn. An unexpected connection close produces an error; iterator exhaustion alone does not prove the response completed. Token counts can use the sentinel `llm.TokensNotReported` (-1) when the provider did not report usage; compare against this constant to distinguish "not reported" from "zero tokens" (0).
 
 **Malformed events:** If a provider sends an SSE event with invalid JSON, the iterator yields an error for that event and continues parsing subsequent events. Callers should check `err` on every iteration and decide whether to `break` or continue. This ensures data corruption is never silent.
 
@@ -212,6 +213,23 @@ req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, result, fals
 ```
 
 **For a full working example of an agentic Tool Use loop, see [`examples/tool_use/main.go`](examples/tool_use/main.go).**
+
+Use `Request.ToolChoice` to constrain tool selection when `Tools` is non-empty:
+
+```go
+req.ToolChoice = llm.ForceTool("get_weather")
+// Or llm.NewToolChoice(llm.ToolChoiceRequired / llm.ToolChoiceNone / llm.ToolChoiceAuto).
+```
+
+The adapters translate this neutral choice to their protocol's wire format. A nil
+choice uses the provider default. Malformed choices fail before dispatch; choices
+are omitted when no tools are supplied.
+
+`Request.SamplingParams` carries provider-specific top-level body fields such as
+OpenRouter routing (`"provider"`), vLLM `"priority"`, or supported sampling knobs.
+Keys already emitted by the adapter and reserved structural keys are rejected.
+Use typed request fields where available. The map is protocol-specific: for
+example, a top-level `"top_p"` is not a Gemini `generationConfig` setting.
 
 If a tool execution fails, you can pass `isError: true` so the model knows the call failed and can attempt to recover:
 ```go
@@ -255,7 +273,15 @@ req := llm.Request{
 }
 ```
 
-**Note:** Anthropic's API requires `temperature = 1.0` when extended thinking is enabled. The adapter enforces this automatically. A warning-level log is emitted when a temperature override occurs.
+For `claude-sonnet-5`, `ThinkingLevel` selects adaptive thinking effort instead
+of a token budget (`minimal` maps to `low`). A positive `ThinkingBudget` with
+reasoning enabled is rejected because this model removed manual budgets.
+`ThinkingNone` explicitly disables thinking unless a configured thinking level
+is inherited. The model does not advertise custom-temperature support.
+
+**Note:** For Anthropic manual extended thinking, an explicit temperature other
+than `1.0` is rejected before dispatch. An omitted temperature stays omitted;
+the library does not rewrite an application's sampling value.
 
 If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
 

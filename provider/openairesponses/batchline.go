@@ -27,7 +27,7 @@ func (c *Client) BuildResponsesBatchLineBody(req llm.Request) (json.RawMessage, 
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(apiReq)
+	return llm.MergeSamplingParams(apiReq, req.SamplingParams)
 }
 
 // ParseResponsesBatchResultBody parses one batch output line's response.body (a

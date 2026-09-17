@@ -222,6 +222,7 @@ func (s *Session) StreamMessages(ctx context.Context, msgs ...Message) iter.Seq2
 			ThinkingRedacted:    thinkingRedacted,
 			ToolCalls:           toolCalls,
 			StopReason:          final.StopReason,
+			RawStopReason:       final.RawStopReason,
 			InputTokens:         final.InputTokens,
 			OutputTokens:        final.OutputTokens,
 			ThinkingTokens:      final.ThinkingTokens,

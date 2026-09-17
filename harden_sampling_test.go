@@ -13,12 +13,75 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
 	llm "github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/provider/anthropic"
+	"github.com/bds421/rho-llm/provider/gemini"
 	"github.com/bds421/rho-llm/provider/openaicompat"
+	"github.com/bds421/rho-llm/provider/openairesponses"
 )
+
+func TestSamplingParamsBatchBodiesMatchLiveRequests(t *testing.T) {
+	for i, p := range tcProtocols {
+		t.Run(p.name, func(t *testing.T) {
+			c, err := p.new(llm.Config{Provider: p.name, Model: p.model, APIKey: "k", BaseURL: "http://localhost"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			var build func(llm.Request) (json.RawMessage, error)
+			switch c := c.(type) {
+			case *openaicompat.Client:
+				build = c.BuildChatBatchLineBody
+			case *openairesponses.Client:
+				build = c.BuildResponsesBatchLineBody
+			case *anthropic.Client:
+				build = c.BuildMessageBatchParams
+			case *gemini.Client:
+				build = c.BuildGenerateContentBody
+			default:
+				t.Fatalf("unsupported batch codec %T", c)
+			}
+			for _, tc := range []struct {
+				name    string
+				params  map[string]any
+				wantErr bool
+			}{
+				{"passthrough", map[string]any{"seed": 42, "provider": map[string]any{"order": []string{"a", "b"}}}, false},
+				{"reserved_model", map[string]any{"model": "hijacked"}, true},
+				{"reserved_stream", map[string]any{"stream": true}, true},
+				{"reserved_absent_tools", map[string]any{"tools": []any{}}, true},
+				{"empty_key", map[string]any{"": 1}, true},
+				{"unmarshalable_value", map[string]any{"bad": make(chan int)}, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					req := llm.Request{MaxTokens: 16, Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")}, SamplingParams: tc.params}
+					raw, err := build(req)
+					if tc.wantErr {
+						if err == nil {
+							t.Fatalf("invalid SamplingParams accepted by batch codec: %s", raw)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					var got map[string]any
+					if err := json.Unmarshal(raw, &got); err != nil {
+						t.Fatal(err)
+					}
+					want := tcDo(t, i, req, false)
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("batch body differs from live request: batch=%v live=%v", got, want)
+					}
+				})
+			}
+		})
+	}
+}
 
 // SamplingParams must actually reach the wire — otherwise the whole escape
 // hatch is decorative and callers silently lose provider routing/tuning.
@@ -138,8 +201,29 @@ func TestSamplingParamsNilIsNoOp(t *testing.T) {
 
 // Merging into a non-object body must error rather than produce garbage.
 func TestSamplingParamsRejectsNonObjectBody(t *testing.T) {
-	if _, err := llm.MergeSamplingParams([]int{1, 2, 3}, map[string]any{"x": 1}); err == nil {
-		t.Fatal("merging into a JSON array was accepted")
+	for _, tc := range []struct {
+		name string
+		body any
+	}{
+		{"nil", nil},
+		{"nil_pointer", (*struct{})(nil)},
+		{"nil_map", map[string]any(nil)},
+		{"nil_slice", []int(nil)},
+		{"raw_null", json.RawMessage(`null`)},
+		{"array", []int{1, 2, 3}},
+		{"string", "request"},
+		{"number", 42},
+		{"boolean", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := llm.MergeSamplingParams(tc.body, map[string]any{"x": 1})
+			if err == nil || !contains(err.Error(), "non-object request body") {
+				t.Fatalf("expected non-object error, got body=%s err=%v", body, err)
+			}
+			if body != nil {
+				t.Fatalf("rejected request returned a body: %s", body)
+			}
+		})
 	}
 }
 

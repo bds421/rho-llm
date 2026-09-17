@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-09-17
+
+### Fixed
+
+- Sonnet 5 uses adaptive thinking and effort instead of the removed manual
+  thinking-budget format. Explicit manual budgets with reasoning enabled fail
+  before transport, and custom temperature is no longer advertised. The effective
+  `ThinkingNone` explicitly disables thinking on this model.
+- OpenAI Responses streams recognize `response.incomplete` and `response.failed`
+  as terminal events instead of misclassifying them as unexpected EOF. Both
+  completion paths preserve `RawStopReason` from incomplete details or status.
+- Batch request codecs preserve `SamplingParams` and enforce the same key
+  protections as live completion requests across all four protocols.
+- `MergeSamplingParams` rejects JSON-null request bodies (including typed nil
+  pointers and maps) instead of panicking when assigning a passthrough key.
+- Batch cancellation regression coverage now cancels after the first successful
+  poll has been decoded, removing a timing assumption that intermittently failed
+  the race-enabled CI suite.
+
+### Changed
+
+- README minimum Go version matches `go.mod` (1.26.8), describes `ToolChoice`
+  and `SamplingParams`, and corrects stale streaming-completion and temperature
+  override guidance.
+
 ## [0.7.3] - 2026-09-17
 
 ### Added

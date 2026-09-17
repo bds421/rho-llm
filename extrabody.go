@@ -46,6 +46,9 @@ func MergeSamplingParams(apiReq any, params map[string]any) ([]byte, error) {
 		// top-level merge to mean anything.
 		return nil, fmt.Errorf("llm: cannot merge SamplingParams into a non-object request body: %w", err)
 	}
+	if merged == nil {
+		return nil, fmt.Errorf("llm: cannot merge SamplingParams into a non-object request body: null")
+	}
 
 	// Iterate in sorted order so a request with several offending keys always
 	// reports the same one — an error that changes between identical runs is

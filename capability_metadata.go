@@ -362,6 +362,10 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 }
 
 func supportsSamplingTemperature(info ModelInfo) bool {
+	// Sonnet 5 accepts only provider-default sampling parameters.
+	if info.ID == "claude-sonnet-5" {
+		return false
+	}
 	// OpenAI/xAI reasoning endpoints reject or ignore custom temperature.
 	if (canonicalProvider(info.Provider) == "openai" || canonicalProvider(info.Provider) == "xai") &&
 		(info.Thinking || info.ResponsesAPI) {

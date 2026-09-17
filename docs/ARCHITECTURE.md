@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of September 2026 (v0.7.3).
+> **Status:** Reflects the current implementation as of September 2026 (v0.7.4).
 
 ---
 
@@ -188,6 +188,7 @@ type StreamEvent struct {
     OutputTokens   int    // usage / done (-1 = not reported)
     ThinkingTokens int    // Gemini: tokens consumed by thinking (0 for other providers)
     StopReason     string // done: "end_turn" | "tool_use" | "max_tokens"
+    RawStopReason  string // provider's original reason, when available
 
     CacheCreationTokens int // Anthropic: tokens written to cache (EventDone)
     CacheReadTokens     int // Anthropic/Gemini: tokens read from cache (EventDone)
@@ -505,8 +506,12 @@ type ModelInfo struct {
 
 Different LLM providers implement chain-of-thought reasoning in fundamentally different ways. The registry abstracts these semantic capabilities:
 
-1. **API-Controlled Budgets (`SupportsThinking: true`)**
-   Models like Anthropic's Claude 4 series require the client to explicitly allocate a "thinking budget" in the API request payload. The config `ThinkingLevel` is mapped into this budget. Only the `anthropic` and `gemini` adapters support *requesting* thinking — the OpenAI-compatible adapter returns an explicit error if `ThinkingLevel` is set, since the OpenAI chat completions API has no equivalent parameter. However, all three adapters **parse** thinking from responses: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, and OpenAI-compat via the `reasoning_content` field.
+1. **API-Controlled Reasoning (`SupportsThinking: true` or `ResponsesAPI: true`)**
+   `ThinkingLevel` maps to a token budget or effort according to the model and
+   protocol. Anthropic, Gemini, and OpenAI Responses support requesting reasoning
+   for reviewed models. The OpenAI-compatible Chat Completions adapter rejects an
+   explicit `ThinkingLevel`; it can still parse reasoning returned by models that
+   reason by default. All four adapters parse reasoning output where available.
 
 2. **Intrinsic Reasoning (`Thinking: true`)**
    Models like DeepSeek-R1 and Grok 4 Reasoning emit chain-of-thought intrinsically inside their standard output streams. They do not require specific API flags to enable this, but the registry flags them so your application knows they will consume output tokens for reasoning before answering.
@@ -570,7 +575,10 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Endpoint: `https://api.anthropic.com/v1/messages`
 - Auth: `x-api-key: <key>` + `anthropic-version: 2023-06-01`
 - Streaming: SSE with `event: content_block_delta` / `event: message_delta`
-- Extended thinking: enabled via `thinking: {type: enabled, budget_tokens: N}` — budget mapped from ThinkingLevel (`ThinkingNone`→disabled, `ThinkingLow`→4096, `ThinkingMedium`→16384, `ThinkingHigh`→65536)
+- Manual extended thinking uses `thinking: {type: enabled, budget_tokens: N}`,
+  with a budget mapped from `ThinkingLevel`. Sonnet 5 instead uses adaptive
+  thinking with `output_config.effort`; explicit manual budgets are rejected.
+  On Sonnet 5, the effective `ThinkingNone` explicitly disables thinking.
 - Tool use: native anthropic format with `type: tool_use` content blocks
 - Context caching: `cache_control: {type: "ephemeral"}` on content blocks, system blocks, and tool definitions. Cache tokens reported in `usage` for both Complete and Stream responses.
 

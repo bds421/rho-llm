@@ -98,16 +98,17 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 // System is any to support both plain string and structured content blocks
 // (required for cache_control on system prompts).
 type anthropicRequest struct {
-	Model         string             `json:"model"`
-	Messages      []anthropicMessage `json:"messages"`
-	System        any                `json:"system,omitempty"`
-	MaxTokens     int                `json:"max_tokens"`
-	Temperature   *float64           `json:"temperature,omitempty"`
-	Tools         []anthropicTool    `json:"tools,omitempty"`
-	ToolChoice    any                `json:"tool_choice,omitempty"`
-	Stream        bool               `json:"stream,omitempty"`
-	Thinking      *anthropicThinking `json:"thinking,omitempty"`
-	StopSequences []string           `json:"stop_sequences,omitempty"`
+	Model         string                 `json:"model"`
+	Messages      []anthropicMessage     `json:"messages"`
+	System        any                    `json:"system,omitempty"`
+	MaxTokens     int                    `json:"max_tokens"`
+	Temperature   *float64               `json:"temperature,omitempty"`
+	Tools         []anthropicTool        `json:"tools,omitempty"`
+	ToolChoice    any                    `json:"tool_choice,omitempty"`
+	Stream        bool                   `json:"stream,omitempty"`
+	Thinking      *anthropicThinking     `json:"thinking,omitempty"`
+	OutputConfig  *anthropicOutputConfig `json:"output_config,omitempty"`
+	StopSequences []string               `json:"stop_sequences,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -131,6 +132,11 @@ type anthropicCacheControl struct {
 type anthropicThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Display      string `json:"display,omitempty"`
+}
+
+type anthropicOutputConfig struct {
+	Effort string `json:"effort"`
 }
 
 // anthropicResponse is the Anthropic API response format.
@@ -262,6 +268,11 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 }
 
 func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, error) {
+	// Keep live and batch encoding consistent when reasoning is configured on
+	// the client rather than on each individual request.
+	if req.ThinkingLevel == llm.ThinkingNone {
+		req.ThinkingLevel = c.config.ThinkingLevel
+	}
 	if err := req.ToolChoice.Validate(); err != nil {
 		return anthropicRequest{}, err
 	}
@@ -474,7 +485,22 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	}
 
 	// Configure thinking
-	if req.ThinkingLevel != llm.ThinkingNone {
+	if llm.ResolveModelAlias(apiReq.Model) == "claude-sonnet-5" {
+		// Sonnet 5 removed manual budgets and defaults to adaptive thinking.
+		// Preserve ThinkingNone's no-thinking behavior explicitly.
+		apiReq.Thinking = &anthropicThinking{Type: "disabled"}
+		if req.ThinkingLevel != llm.ThinkingNone {
+			if req.ThinkingBudget > 0 {
+				return anthropicRequest{}, fmt.Errorf("anthropic: claude-sonnet-5 does not support ThinkingBudget; use ThinkingLevel to control adaptive effort")
+			}
+			effort := string(req.ThinkingLevel)
+			if req.ThinkingLevel == llm.ThinkingMinimal {
+				effort = "low"
+			}
+			apiReq.Thinking = &anthropicThinking{Type: "adaptive", Display: "summarized"}
+			apiReq.OutputConfig = &anthropicOutputConfig{Effort: effort}
+		}
+	} else if req.ThinkingLevel != llm.ThinkingNone {
 		budget := llm.ThinkingBudgetTokens(req.ThinkingLevel, req.ThinkingBudget)
 		// Clamp budget to model's max output tokens — budget_tokens cannot
 		// exceed max_tokens, which itself cannot exceed the model's limit.

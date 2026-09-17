@@ -30,7 +30,7 @@ func (c *Client) BuildChatBatchLineBody(req llm.Request) (json.RawMessage, error
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(apiReq)
+	return llm.MergeSamplingParams(apiReq, req.SamplingParams)
 }
 
 // ParseChatBatchResultBody parses one batch output line's response.body (a

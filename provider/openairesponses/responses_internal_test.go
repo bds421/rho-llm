@@ -961,7 +961,7 @@ func TestParseStreamReasoning(t *testing.T) {
 
 // TestParseStreamIncompleteStatus verifies that incomplete status maps to max_tokens.
 func TestParseStreamIncompleteStatus(t *testing.T) {
-	sseData := "data: " + `{"type":"response.completed","response":{"id":"resp_i","status":"incomplete","usage":{"input_tokens":100,"output_tokens":4096}}}` + "\n\n"
+	sseData := "data: " + `{"type":"response.incomplete","response":{"id":"resp_i","status":"incomplete","usage":{"input_tokens":100,"output_tokens":4096}}}` + "\n\n"
 
 	c := &Client{providerName: "openai_responses"}
 	var events []llm.StreamEvent
@@ -1007,8 +1007,8 @@ func TestParseStreamError(t *testing.T) {
 }
 
 // TestParseStreamDoneSignal verifies that [DONE] terminates parsing — and,
-// since the Responses protocol's only legitimate terminal event is
-// response.completed, that ending on a bare [DONE] surfaces as a truncation
+// since the Responses protocol uses terminal response events, that ending
+// on a bare [DONE] surfaces as a truncation
 // error rather than a silent end (R-H2).
 func TestParseStreamDoneSignal(t *testing.T) {
 	sseData := "data: " + `{"type":"response.output_text.delta","delta":"hello"}` + "\n\n" +
@@ -1395,7 +1395,7 @@ func TestParseResponseEmptyOutput(t *testing.T) {
 
 // TestParseStreamFailedStatus verifies that failed status maps to error stop reason.
 func TestParseStreamFailedStatus(t *testing.T) {
-	sseData := "data: " + `{"type":"response.completed","response":{"id":"r","status":"failed","usage":{"input_tokens":1,"output_tokens":0}}}` + "\n\n"
+	sseData := "data: " + `{"type":"response.failed","response":{"id":"r","status":"failed","usage":{"input_tokens":1,"output_tokens":0}}}` + "\n\n"
 
 	c := &Client{providerName: "openai_responses"}
 	var events []llm.StreamEvent

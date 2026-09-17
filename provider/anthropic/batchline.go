@@ -24,7 +24,7 @@ func (c *Client) BuildMessageBatchParams(req llm.Request) (json.RawMessage, erro
 	}
 	// Batch params must not request streaming.
 	apiReq.Stream = false
-	return json.Marshal(apiReq)
+	return llm.MergeSamplingParams(apiReq, req.SamplingParams)
 }
 
 // ParseMessageBatchResult parses one succeeded Message object from a batch

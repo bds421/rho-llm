@@ -9,6 +9,7 @@ package llm_test
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -103,6 +104,21 @@ func TestWaitForBatchTerminalFirstPollNoSleep(t *testing.T) {
 	}
 }
 
+// Cancel only after the real client's Get has decoded a successful response.
+// Signaling from the HTTP handler would still race with response decoding.
+type cancelAfterBatchGet struct {
+	llm.BatchClient
+	cancel context.CancelFunc
+}
+
+func (bc cancelAfterBatchGet) Get(ctx context.Context, handle llm.BatchHandle) (*llm.BatchHandle, error) {
+	h, err := bc.BatchClient.Get(ctx, handle)
+	if err == nil {
+		bc.cancel()
+	}
+	return h, err
+}
+
 func TestWaitForBatchHonorsContextCancel(t *testing.T) {
 	// A batch that never terminates must not block forever: cancelling ctx returns
 	// the last observed handle together with ctx.Err(). Exercises the select's
@@ -111,23 +127,22 @@ func TestWaitForBatchHonorsContextCancel(t *testing.T) {
 	bc := newBatchClient(t, srv.URL)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bc = cancelAfterBatchGet{BatchClient: bc, cancel: cancel}
 	var last *llm.BatchHandle
 	var werr error
 	done := make(chan struct{})
 	go func() {
-		last, werr = llm.WaitForBatch(ctx, bc, validBatchHandle(), 30*time.Millisecond)
+		last, werr = llm.WaitForBatch(ctx, bc, validBatchHandle(), time.Hour)
 		close(done)
 	}()
-	time.Sleep(15 * time.Millisecond) // let the first Get succeed and the loop enter its sleep
-	cancel()
-
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForBatch did not return after ctx cancel")
 	}
-	if werr == nil {
-		t.Fatal("expected a context error after cancel")
+	if !errors.Is(werr, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", werr)
 	}
 	if last == nil || last.Status != llm.BatchRunning {
 		t.Fatalf("expected the last observed (in_progress) handle on cancel, got %+v", last)
