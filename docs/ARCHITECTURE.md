@@ -1,12 +1,12 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the actual implementation as of June 2026 (v0.5.0).
+> **Status:** Reflects the actual implementation as of September 2026 (v0.6.0).
 
 ---
 
 ## 1. Overview
 
-`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-three providers across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
+`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-four providers across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
 
 **Key capabilities:**
 - Single `Client` interface for all providers and protocols
@@ -47,6 +47,7 @@ github.com/bds421/rho-llm/
 ├── discovery.go         # Models() / ModelsByProvider() / Providers()
 ├── simple.go            # CompleteSimple / StreamSimple
 ├── validate.go          # ValidateToolCall() against a tool's InputSchema
+├── extrabody.go         # MergeSamplingParams() — provider-specific request-body passthrough
 ├── capabilities.go      # Embeddings, image generation, audio (OpenAI-compatible)
 ├── oauth.go             # OAuth 2.0 device-flow helpers (RFC 8628)
 ├── transport.go         # Shared HTTP plumbing: bounded reads + APIError construction
@@ -63,7 +64,7 @@ github.com/bds421/rho-llm/
     ├── all.go                       # Blank-imports all sub-packages
     ├── anthropic/anthropic.go       # Native Anthropic API adapter
     ├── gemini/gemini.go             # Native Google Gemini API adapter
-    ├── openaicompat/openaicompat.go # OpenAI-compatible adapter (18+ providers)
+    ├── openaicompat/openaicompat.go # OpenAI-compatible adapter (20 providers)
     ├── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning)
     └── openaibatch/openaibatch.go   # OpenAI Batch API driver (async; Files + Batches REST)
 ```
@@ -163,6 +164,16 @@ Message
 `ContentDocument` parts carry inline PDFs (base64), validated via `ValidateDocumentSource()`. Gemini serializes them as `inlineData` and Anthropic as native `document` blocks (both parse the PDF text layer); OpenAI-compatible adapters emit an `image_url` data URI for vision models such as xAI Grok. The OpenAI Responses adapter returns an explicit error for documents rather than dropping them silently. Supported media types: `application/pdf`.
 
 `ThoughtSignature` on `tool_use` parts is a Gemini 3 requirement — the model returns an opaque signature that must be echoed back in the corresponding `tool_result` message. The adapters handle this automatically.
+
+### Stop reasons
+
+Adapters normalize each provider's finish/stop reason into one vocabulary (`end_turn`,
+`tool_use`, `max_tokens`, `error`, `aborted`); a reason with no unified equivalent passes
+through verbatim. `Response.RawStopReason` / `StreamEvent.RawStopReason` carry the provider's
+own value alongside it, so a normalized `max_tokens` can still be traced back to OpenAI's
+`length` or Gemini's `MAX_TOKENS`. When an adapter *synthesizes* a stop reason (a `[DONE]`
+with no `finish_reason` from a spec-violating server), the raw field is left empty rather than
+reporting a value the provider never sent.
 
 ### Stream Events
 
@@ -522,6 +533,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Auth: `x-api-key: <key>` + `anthropic-version: 2023-06-01`
 - Streaming: SSE with `event: content_block_delta` / `event: message_delta`
 - Extended thinking: enabled via `thinking: {type: enabled, budget_tokens: N}` — budget mapped from ThinkingLevel (`ThinkingNone`→disabled, `ThinkingLow`→4096, `ThinkingMedium`→16384, `ThinkingHigh`→65536)
+- Tool choice: `Request.ToolChoice` → `tool_choice` as an object — `{"type":"any"}` for Required (Anthropic spells it "any", not "required"), `{"type":"none"}`, `{"type":"tool","name":…}`. Auto is omitted (it is the default).
 - Tool use: native anthropic format with `type: tool_use` content blocks
 - Context caching: `cache_control: {type: "ephemeral"}` on content blocks, system blocks, and tool definitions. Cache tokens reported in `usage` for both Complete and Stream responses.
 
@@ -534,6 +546,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is exposed as `resp.ThinkingTokens` / `event.ThinkingTokens`, separate from `OutputTokens` (which maps to `candidatesTokenCount` only). Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` is 0.
 - System prompt: mapped to `systemInstruction.parts[0].text`
 - Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`.
+- Tool choice: `Request.ToolChoice` → `toolConfig.functionCallingConfig.mode`. Gemini has no "required" mode: Required maps to `ANY`, and forcing one tool is `ANY` narrowed by `allowedFunctionNames: [name]`. `NONE` maps directly; Auto is omitted.
 
 ### OpenAI-Compatible (`provider/openaicompat/`)
 
@@ -545,6 +558,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
   - Tool calls are flushed before `EventDone` even if `finish_reason` is missing (handles network drops and spec-violating servers like Ollama)
 - Tool use: OpenAI function-calling format, translated to/from the shared `ToolCall` types. Multiple tool results in a single Anthropic-style message are expanded to separate `role: "tool"` messages as OpenAI requires.
 - Thinking: `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.) is parsed into `resp.Thinking` / `EventThinking`. Requesting thinking via `ThinkingLevel` is still rejected — the adapter can *parse* thinking from models that think by default, but cannot *request* it.
+- Tool choice: `Request.ToolChoice` → `tool_choice` as the bare strings `"none"` / `"required"`, or `{"type":"function","function":{"name":…}}` to force one tool. Auto is omitted. (The Responses adapter uses the same strings but a flatter forced shape: `{"type":"function","name":…}`.)
 - Works for: OpenAI, xAI/Grok, Groq, Cerebras, Mistral, OpenRouter, Ollama, vLLM, LM Studio, any custom proxy
 
 ---
@@ -566,9 +580,11 @@ type Config struct {
     LogRequests      bool           // Enable metadata logging
     BlockPrivateBaseURL bool        // Opt-in SSRF guard: reject loopback/private BaseURL hosts
 
-    // (Request carries ResponseFormat for structured output; per-Config safety
-    //  limits — MaxErrorBodyBytes, MaxResponseBodyBytes, … — are read via the
-    //  Effective*() accessors. See README "Config Reference" for the full set.)
+    // (Request carries ResponseFormat for structured output, ToolChoice for
+    //  constraining tool use, and SamplingParams for provider-specific
+    //  request-body passthrough; per-Config safety limits — MaxErrorBodyBytes,
+    //  MaxResponseBodyBytes, … — are read via the Effective*() accessors.
+    //  See README "Config Reference" for the full set.)
 
     // Resilience
     RetryPolicy       *RetryPolicy  // Configurable backoff (nil = DefaultRetryPolicy)
@@ -584,7 +600,7 @@ type Config struct {
 **Defaults (`DefaultConfig()`):**
 ```
 Provider:         "anthropic"
-Model:            "claude-sonnet-4-6"
+Model:            GetDefaultModel("anthropic")  // tracks the registry, currently "claude-opus-5"
 MaxTokens:        8192
 Temperature:      nil (omitted from wire)
 ThinkingLevel:    "" (ThinkingNone)

@@ -78,9 +78,25 @@ Version: CHANGELOG `[X.Y.Z]` section + annotated `vX.Y.Z` tag + `docs/ARCHITECTU
   correct, finite, never negative. Test: `TestEstimateCostAllTokenTypesAndSentinel`.
   → 3rd consecutive clean pass; clean streak reached 3.
 
+- **Pass 16 (unreleased, 2026-09-17):** the pi-`ai` gap-closing surface — `ToolChoice`,
+  `SamplingParams`, `RawStopReason` — across all four adapters. **Two defects found and fixed:**
+  (1) a `SamplingParams` passthrough with last-write-wins semantics let a caller silently
+  override `model`/`messages`/`tools` and redirect a request; structural keys are now refused
+  (33 hijack subtests go red without the guard). (2) `DefaultConfig().Model` hardcoded
+  `claude-sonnet-4-6` and had drifted from the registry default — it now tracks
+  `GetDefaultModel("anthropic")`. Also pinned: constraints never ship without tools, Auto is
+  never emitted, malformed choices fail at the boundary, and a *synthesized* stop reason
+  leaves `RawStopReason` empty rather than fabricating provenance. 100% coverage on all new
+  code; every test proven red against an injected regression. Tests:
+  `harden_toolchoice_test.go`, `harden_sampling_test.go`.
+  → clean streak broken at 3 (two real defects).
+
 ## Still untested / weak (candidate future passes)
 - `capabilities.go` capability flags vs actual model support (thinking/image/tool on an unsupporting model).
 - `buildRequest` with an empty model across adapters (sends `model:""` vs erroring early).
 - openai_compat sending a ContentDocument (PDF) it can't support (vs openai_responses' clear error).
 - Image/document validators: structurally correct but the image validator (`ValidateImageSource`) is untested.
+- Registry data freshness itself: nothing fails when a hardcoded price/model ID goes stale
+  upstream (the 20x `gpt-oss-120b` overcharge and the retired Anthropic IDs were both found by
+  a manual refresh, not by a test).
 - `middleware.go` logging, `discovery.go`, `factory.go` protocol resolution edges.

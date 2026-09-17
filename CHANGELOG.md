@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-17
+
+### Added
+
+- **New Ant Ling provider preset** (`antling`, alias `ling`) → `https://api.ant-ling.com/v1`
+  (OpenAI-compatible, Ling/Ring model family; no registry pricing yet — model IDs pass through
+  directly).
+- **New models**: `grok-build-0.1` (xAI's coding-specific model, 256K context, $1.00/$2.00 per
+  1M), `command-a-plus-05-2026` (Cohere Command A+, Apache 2.0, 218B/25B MoE, 128K context — price
+  unconfirmed, left at 0), `qwen3.7-max`/`qwen3.7-plus` (Alibaba DashScope, superseding
+  `qwen3.6-plus` as flagship — price unconfirmed, left at 0), `gemma4:12b`/`gemma4:e2b`
+  (Ollama).
+- **`Request.ToolChoice`** — provider-neutral tool choice (`auto` / `none` / `required` /
+  a named tool), wired through all four wire protocols and translated to each one's own
+  shape: OpenAI's `"required"`, Anthropic's `{"type":"any"}`, Gemini's
+  `toolConfig.functionCallingConfig` mode `ANY` (+ `allowedFunctionNames` to force one tool),
+  and the Responses API's flatter `{"type":"function","name":…}`. Because it is expressed
+  once and re-translated per provider, a forced tool call survives a `SwitchProvider` handoff.
+  A malformed choice (mode `tool` with no name, an unknown mode, a name on a mode that takes
+  none) fails at the library boundary instead of as an opaque provider 400, and a constraint is
+  never sent without tools (every provider rejects that). Closes the largest gap vs. pi `ai`
+  0.84.3.
+- **`Request.SamplingParams`** — a `map[string]any` passthrough merged into the request body
+  at the top level, for provider-specific knobs the neutral `Request` does not model
+  (OpenRouter's `provider` routing object, vLLM's `priority`, `thinking_token_budget`,
+  `top_p`/`seed`, …). One mechanism covers what pi `ai` spreads across `samplingParams`,
+  `OpenRouterRouting` and `vllmPriority`. **Keys that would hijack the request are refused,
+  not silently applied**: anything the adapter already set, plus a reserved list of structural
+  fields (`model`, `messages`, `tools`, `system`, `contents`, `input`, …) refused even when
+  absent from that particular body — so a stray `model` key cannot redirect a request to a
+  different model, and `messages` cannot rewrite its history.
+- **`Response.RawStopReason` / `StreamEvent.RawStopReason`** — the provider's own stop reason,
+  preserved verbatim alongside the normalized one (pi `ai` 0.83.0). Previously a normalized
+  `max_tokens` could have come from OpenAI's `length` or Gemini's `MAX_TOKENS` with no way to
+  tell. When rho-llm *synthesizes* a stop reason (a `[DONE]` with no `finish_reason`), the raw
+  field is deliberately left empty rather than fabricating provenance the provider never sent.
+- **Model-registry refresh against the live landscape (2026-09-17)**, all verified at each
+  provider's own docs:
+  - **Anthropic Claude 5 family added**: `claude-fable-5-1` ($10/$50), `claude-fable-5`,
+    `claude-opus-5` ($5/$25, new `anthropic`/`claude`/`opus` default), `claude-sonnet-5`
+    ($2/$10 — the introductory price became standard; the scheduled 2026-09-01 rise to $3/$15
+    was cancelled), plus the dateless `claude-haiku-4-5` alias ID. **Fable 5.1 cache reads are
+    0.025x input ($0.25/MTok), not the usual 0.1x** — pinned by a regression test.
+  - **OpenAI**: `gpt-6-astra`, `gpt-5.6-sol` (new `openai`/`gpt` default), `gpt-5.6-terra`,
+    `gpt-5.6-luna`; cached-input prices added for `gpt-5.5`/`gpt-5.4`.
+  - **Gemini**: `gemini-3.8-flash` (new default), `gemini-3.7-flash`, `gemini-3.6-flash`,
+    `gemini-3.5-flash-lite`.
+  - **xAI**: `grok-4.6` (new default) and `grok-4.5`; the 4.20 family re-registered under the
+    IDs the docs now publish (no `-beta` infix), with the old spellings kept as legacy rows.
+  - **Moonshot/Kimi** `kimi-k3` (new default), `kimi-k2.7-code-highspeed`, `kimi-k2.6`;
+    **Z.ai** `glm-5.3` (new default) and `glm-5.3-flash`; **Mistral-hosted** `z-ai-glm-5-3`/
+    `z-ai-glm-5-2`.
+
+### Security
+
+- **Minimum Go bumped 1.26.4 → 1.26.8**, clearing 5 reachable Go standard-library
+  vulnerabilities that `govulncheck` flagged in the HTTP/TLS paths every adapter uses
+  (GO-2026-6218, GO-2026-6090, GO-2026-5972, GO-2026-5856, GO-2026-5026 — an Encrypted
+  Client Hello privacy leak in `crypto/tls`, an `encoding/asn1` issue, and `net/http` /
+  `net/url` parsing issues). CI derives its toolchain from `go.mod`, so it was building on
+  the vulnerable 1.26.4. No rho-llm code changed.
+
+### Fixed
+
+- **Groq `openai/gpt-oss-120b` was priced 20x too high** — $3.00/$8.00 vs the documented
+  $0.15/$0.60 (console.groq.com/docs/models). It is the `groq` default, so every cost estimate
+  for the default Groq model was overstated by 20x on input and 13x on output.
+  `openai/gpt-oss-20b` was likewise corrected ($0.30/$0.80 → $0.075/$0.30).
+- **DeepSeek `deepseek-v4-flash` is retired and silently reroutes** to `deepseek-flash` at
+  different pricing, so its registered prices no longer matched what a request actually costs.
+  `deepseek-flash` added as the new default; the old ID is kept as a correctly-priced row.
+  DeepSeek now bills peak/off-peak (2x during 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri) — the
+  registry models the off-peak rate and says so.
+- `GetDefaultModel` no longer hardcodes a fallback model ID; it falls back to the Anthropic
+  default so the two can't drift apart.
+
+### Removed
+
+- **Retired Anthropic models** (requests now fail on the first-party API): `claude-opus-4-1`,
+  `claude-opus-4-1-20250805`, `claude-opus-4-0`, `claude-opus-4-20250514`, `claude-sonnet-4-0`,
+  `claude-sonnet-4-20250514`, `claude-3-haiku-20240307`.
+- **Mistral's entire previous lineup** — Mistral renamed everything (`mistral-large-3-25-12`
+  style) and retired all 11 registered IDs; the **Magistral and Devstral lines are retired
+  outright** with no replacement, so the `magistral`/`devstral*` aliases are gone.
+- **Groq** `qwen/qwen3.6-27b` (no longer in Groq's catalog; superseded by the preview
+  `qwen/qwen3.8-27b`) and both `deepseek-r1-distill-*` entries (no longer listed).
+
+### Changed
+
+- **Repointed the `pi` cross-reference** in CLAUDE.md/README.md from `badlogic/pi-mono` to
+  `earendil-works/pi` (the upstream repo was transferred/renamed; the old path 301-redirects).
+- **DeepSeek registry replaced**: `deepseek-chat` → `deepseek-v4-flash` (new default) and
+  `deepseek-v4-pro`, ahead of DeepSeek's 2026-07-24 deprecation of `deepseek-chat`/
+  `deepseek-reasoner`. New pricing (per api-docs.deepseek.com): V4 Flash $0.14/$0.28 per 1M
+  (cache-read $0.0028), V4 Pro $0.435/$0.87 per 1M (cache-read $0.003625), both 1M context /
+  384K max output. `deepseek-cloud`/`deepseek-v4` aliases now resolve to `deepseek-v4-flash`.
+
+### Removed
+
+- **Groq's deprecated Llama models**: `llama-3.3-70b-versatile` and `llama-3.1-8b-instant`
+  (Groq shuts them down 2026-08-16) and `meta-llama/llama-4-scout-17b-16e-instruct` (shuts down
+  2026-07-17) — per console.groq.com/docs/deprecations. New Groq default: `openai/gpt-oss-120b`
+  (was `llama-3.3-70b-versatile`). The `llama`/`llama-70b`/`llama-8b`/`llama4`/`llama-4-scout`
+  aliases are removed with no replacement — Groq no longer hosts any Llama model.
+
 ## [0.5.0] - 2026-06-24
 
 ### Added

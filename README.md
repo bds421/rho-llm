@@ -33,21 +33,22 @@ go get github.com/bds421/rho-llm
 | Z.ai/GLM | OpenAI-compat | Bearer | api.z.ai/api/openai/v1 |
 | MiniMax | OpenAI-compat | Bearer | api.minimax.io/v1 |
 | Moonshot/Kimi | OpenAI-compat | Bearer | api.moonshot.ai/v1 |
+| Ant Ling | OpenAI-compat | Bearer | api.ant-ling.com/v1 |
 | Ollama | OpenAI-compat | None | localhost:11434/v1 |
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
-> **Counting:** 23 built-in provider presets across 4 wire protocols — the OpenAI
+> **Counting:** 24 built-in provider presets across 4 wire protocols — the OpenAI
 > row spans two (`openai_compat` and the auto-selected `openai_responses` for GPT-5
-> reasoning models), and `claude`/`google`/`grok`/`qwen`/`z-ai`/`glm`/`kimi` are aliases
-> of providers already listed. 18 of them ship curated **model metadata** (pricing + capabilities)
+> reasoning models), and `claude`/`google`/`grok`/`qwen`/`z-ai`/`glm`/`kimi`/`ling` are aliases
+> of providers already listed. 13 of them ship curated **model metadata** (pricing + capabilities)
 > for cost estimation and discovery; the rest work fully — any model ID can be passed
 > directly — and you can add metadata for any model at runtime (see
 > [Model Registry](#model-registry)). Unknown providers work too via `Config.BaseURL`.
 
 ## Quick Start
 
-This example demonstrates a complete request using Google Gemini, but the code is identical for all 23 providers.
+This example demonstrates a complete request using Google Gemini, but the code is identical for all 24 providers.
 
 ```go
 import _ "github.com/bds421/rho-llm/provider" // required: register adapters
@@ -200,7 +201,7 @@ for event, err := range client.Stream(ctx, req) {
 
 ## Tool Use
 
-Tool use (function calling) lets the model invoke functions you define. When a model wants to call a tool, `resp.StopReason` will be `"tool_use"`. You manage the conversation by executing the tool locally and feeding `llm.NewToolResultMessage` back into the message history.
+Tool use (function calling) lets the model invoke functions you define. When a model wants to call a tool, `resp.StopReason` will be `"tool_use"` (the normalized vocabulary; `resp.RawStopReason` keeps the provider's own value, e.g. OpenAI's `"tool_calls"`). You manage the conversation by executing the tool locally and feeding `llm.NewToolResultMessage` back into the message history.
 
 Use `llm.NewAssistantMessage(resp)` to append the assistant's response — it preserves both text and `tool_use` blocks. Using `NewTextMessage(RoleAssistant, resp.Content)` would drop tool call blocks, causing the next request to fail.
 
@@ -216,6 +217,41 @@ If a tool execution fails, you can pass `isError: true` so the model knows the c
 ```go
 req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, "location not found", true))
 ```
+
+### Constraining tool choice
+
+`Request.ToolChoice` controls *whether* and *which* tool the model may call. It is
+provider-neutral: each adapter translates it to its own wire shape (OpenAI's `"required"`,
+Anthropic's `{"type":"any"}`, Gemini's `functionCallingConfig` mode `ANY`), so the same
+constraint survives a cross-provider handoff.
+
+```go
+req.ToolChoice = llm.NewToolChoice(llm.ToolChoiceRequired) // must call some tool
+req.ToolChoice = llm.NewToolChoice(llm.ToolChoiceNone)     // must answer with text
+req.ToolChoice = llm.ForceTool("get_weather")              // must call this one
+// nil (the default) = auto: the model decides
+```
+
+A malformed choice fails immediately rather than as an opaque provider error, and a
+constraint is never sent without `Tools` (providers reject that).
+
+## Provider-Specific Request Fields
+
+`Request.SamplingParams` passes arbitrary fields straight into the request body for knobs the
+neutral `Request` does not model — OpenRouter's `provider` routing object, vLLM's `priority`,
+`top_p`/`seed`, and so on.
+
+```go
+req.SamplingParams = map[string]any{
+    "top_p":    0.5,
+    "provider": map[string]any{"order": []string{"anthropic", "openrouter"}},
+}
+```
+
+Keys that would change *what is asked, of which model, with what history* are refused rather
+than silently applied: anything the adapter already set, plus structural fields (`model`,
+`messages`, `tools`, `system`, `contents`, `input`, …). Use the typed `Request` fields for
+those. This is an escape hatch — anything expressible as a typed field belongs there instead.
 
 ## Thinking & Reasoning
 
@@ -666,131 +702,166 @@ tok, _ := llm.PollDeviceToken(ctx, cfg, da)  // honors authorization_pending / s
 Use `ResolveModelAlias()` for short aliases:
 
 ```go
-model := llm.ResolveModelAlias("opus")   // -> "claude-opus-4-8"
-model = llm.ResolveModelAlias("grok")    // -> "grok-4.20-beta"
-model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
+model := llm.ResolveModelAlias("opus")   // -> "claude-opus-5"
+model = llm.ResolveModelAlias("grok")    // -> "grok-4.6"
+model = llm.ResolveModelAlias("flash")   // -> "gemini-3.8-flash"
 ```
 
 ### Anthropic aliases
 
 | Alias | Resolves to |
 |-------|-------------|
-| `opus` | `claude-opus-4-8` |
-| `sonnet` | `claude-sonnet-4-6` |
-| `haiku` | `claude-haiku-4-5-20251001` |
-| `claude` | `claude-sonnet-4-6` |
+| `fable` | `claude-fable-5-1` |
+| `haiku` | `claude-haiku-4-5` |
+| `opus-4-8`, `opus4.8` | `claude-opus-4-8` |
+| `claude`, `opus`, `opus-5`, `opus5` | `claude-opus-5` |
+| `sonnet`, `sonnet-5`, `sonnet5` | `claude-sonnet-5` |
 
 ### xAI / Grok aliases
 
 | Alias | Resolves to |
 |-------|-------------|
-| `grok4.3`, `grok-4-3` | `grok-4.3` |
-| `grok`, `grok4.2`, `grok4.20`, `grok4` | `grok-4.20-beta` |
-| `grok4.1`, `grok-4.1` | `grok-4-1-fast-non-reasoning` |
-| `grok-reasoning`, `grok-4-reasoning` | `grok-4-fast-reasoning` |
-| `grok-4.1-reasoning` | `grok-4-1-fast-reasoning` |
-| `grok-code` | `grok-code-fast-1` |
 | `grok-mini` | `grok-3-mini` |
+| `grok-4-1`, `grok4.1` | `grok-4-1-fast-non-reasoning` |
+| `grok-4-1-reasoning` | `grok-4-1-fast-reasoning` |
+| `grok4.2`, `grok4.20` | `grok-4.20-0309-non-reasoning` |
+| `grok-4-reasoning`, `grok-reasoning` | `grok-4.20-0309-reasoning` |
+| `grok-multi-agent` | `grok-4.20-multi-agent-0309` |
+| `grok-4-3`, `grok4.3` | `grok-4.3` |
+| `grok-4-5`, `grok4.5` | `grok-4.5` |
+| `grok`, `grok-4`, `grok-4-6`, `grok4`, `grok4.6` | `grok-4.6` |
+| `grok-build` | `grok-build-0.1` |
+| `grok-code` | `grok-code-fast-1` |
 
 ### OpenAI aliases
 
 | Alias | Resolves to |
 |-------|-------------|
-| `gpt5.5` | `gpt-5.5` |
-| `gpt5.5-pro` | `gpt-5.5-pro` |
-| `gpt`, `gpt5.4`, `gpt5` | `gpt-5.4` |
-| `gpt5.3`, `gpt-instant` | `gpt-5.3-chat-latest` |
-| `gpt5.4-mini` | `gpt-5.4-mini` |
-| `gpt5.4-nano` | `gpt-5.4-nano` |
-| `gpt5.2` | `gpt-5.2` |
-| `gpt5.1` | `gpt-5.1` |
+| `gpt4.1` | `gpt-4.1` |
 | `gpt5-mini` | `gpt-5-mini` |
 | `gpt5-nano` | `gpt-5-nano` |
-| `gpt4.1` | `gpt-4.1` |
+| `gpt5.1` | `gpt-5.1` |
+| `gpt5.2` | `gpt-5.2` |
+| `gpt-instant`, `gpt5.3` | `gpt-5.3-chat-latest` |
+| `gpt5.4` | `gpt-5.4` |
+| `gpt5.4-mini` | `gpt-5.4-mini` |
+| `gpt5.4-nano` | `gpt-5.4-nano` |
+| `gpt5.5` | `gpt-5.5` |
+| `gpt5.5-pro` | `gpt-5.5-pro` |
+| `luna` | `gpt-5.6-luna` |
+| `gpt`, `gpt5`, `gpt5.6`, `sol` | `gpt-5.6-sol` |
+| `terra` | `gpt-5.6-terra` |
+| `astra`, `gpt-6`, `gpt6` | `gpt-6-astra` |
 
 ### Groq aliases
 
 | Alias | Resolves to |
 |-------|-------------|
-| `groq` | `llama-3.3-70b-versatile` |
-| `llama`, `llama-70b` | `llama-3.3-70b-versatile` |
-| `llama-8b` | `llama-3.1-8b-instant` |
-| `llama4`, `llama-4-scout` | `meta-llama/llama-4-scout-17b-16e-instruct` |
-| `gpt-oss` | `openai/gpt-oss-120b` |
+| `gpt-oss`, `groq` | `openai/gpt-oss-120b` |
 | `gpt-oss-20b` | `openai/gpt-oss-20b` |
+| `qwen3.8-27b` | `qwen/qwen3.8-27b` |
 
 ### Mistral aliases
 
 | Alias | Resolves to |
 |-------|-------------|
-| `mistral-large` | `mistral-large-2512` |
-| `mistral-medium` | `mistral-medium-latest` |
-| `mistral-small` | `mistral-small-2603` |
-| `magistral` | `magistral-medium-2509` |
-| `codestral` | `codestral-2508` |
-| `devstral` | `devstral-2512` |
-| `devstral-small` | `devstral-small-2-2512` |
-| `ministral` | `ministral-8b-2512` |
+| `codestral` | `codestral-25-08` |
+| `ministral` | `ministral-3-8b-25-12` |
+| `mistral-large` | `mistral-large-3-25-12` |
+| `mistral-medium` | `mistral-medium-3-5-26-04` |
+| `mistral-small` | `mistral-small-4-0-26-03` |
 
 ### DeepSeek aliases
 
 | Alias | Resolves to |
 |-------|-------------|
-| `deepseek-cloud`, `deepseek-v4` | `deepseek-chat` |
+| `deepseek-cloud`, `deepseek-v4` | `deepseek-flash` |
+| `deepseek-v4-pro` | `deepseek-v4-pro` |
 
 ### Cohere aliases
 
 | Alias | Resolves to |
 |-------|-------------|
 | `cohere`, `command-a` | `command-a-03-2025` |
+| `command-a-plus` | `command-a-plus-05-2026` |
 
-### DashScope/Qwen aliases
+### Z.ai / GLM aliases
 
 | Alias | Resolves to |
 |-------|-------------|
-| `qwen-cloud` | `qwen3.6-plus` |
+| `glm-5-2`, `glm5.2` | `glm-5.2` |
+| `glm`, `glm-5-3`, `glm5.3` | `glm-5.3` |
+| `glm-flash` | `glm-5.3-flash` |
+
+### MiniMax aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `minimax`, `minimax-m3` | `MiniMax-M3` |
+
+### Moonshot / Kimi aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `kimi-k2.6` | `kimi-k2.6` |
+| `k2.7`, `kimi-k2.7` | `kimi-k2.7-code` |
+| `k3`, `kimi`, `kimi-k3` | `kimi-k3` |
+
+### DashScope / Qwen aliases
+
+| Alias | Resolves to |
+|-------|-------------|
 | `qwen-omni` | `qwen3.5-omni-plus` |
+| `qwen-cloud` | `qwen3.6-plus` |
+
+### Gemini aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `gemini-3` | `gemini-3-pro-preview` |
+| `gemini-pro`, `gemini3`, `gemini3.1` | `gemini-3.1-pro-preview` |
+| `gemini3.5` | `gemini-3.5-flash` |
+| `flash-lite` | `gemini-3.5-flash-lite` |
+| `gemini3.6` | `gemini-3.6-flash` |
+| `gemini3.7` | `gemini-3.7-flash` |
+| `flash`, `gemini`, `gemini3.8` | `gemini-3.8-flash` |
 
 ### Ollama aliases
 
 | Alias | Resolves to |
 |-------|-------------|
 | `deepseek` | `deepseek-r1:14b` |
-| `mistral-local` | `mistral-small3.2:24b` |
-| `qwen-local` | `qwen3:8b` |
-| `qwen-code` | `qwen3-coder:30b` |
-| `gemma`, `gemma4` | `gemma4:e4b` |
 | `gemma3` | `gemma3:12b` |
+| `gemma`, `gemma4` | `gemma4:e4b` |
+| `mistral-local` | `mistral-small3.2:24b` |
+| `qwen-code` | `qwen3-coder:30b` |
+| `qwen-local` | `qwen3:8b` |
 
-### Gemini aliases
+> **Gemini 3 note:** Gemini 3.x models use `ThoughtSignature` — the model returns an
+> opaque signature in tool call responses that must be echoed in the corresponding
+> `tool_result`. The adapter handles this automatically; no changes to calling code
+> are required.
 
-| Alias | Resolves to |
-|-------|-------------|
-| `gemini`, `flash-lite` | `gemini-3.1-flash-lite-preview` |
-| `gemini3.5` | `gemini-3.5-flash` |
-| `flash` | `gemini-2.5-flash` |
-| `gemini-pro`, `gemini3.1`, `gemini3`, `gemini-3` | `gemini-3.1-pro-preview` |
+> **Note:** these tables are generated from `modelAliases` in `registry.go`; that map is
+> the source of truth. Aliases track the current flagship, so a bare family name
+> (`opus`, `sonnet`, `grok`, `gpt`, `gemini`) moves when a provider ships a new one.
 
-> **Gemini 3 note:** `gemini-3-pro-preview` and `gemini-3-flash-preview` use
-> `ThoughtSignature` — the model returns an opaque signature in tool call responses
-> that must be echoed in the corresponding `tool_result`. The adapter handles this
-> automatically; no changes to calling code are required.
 
 ### Cost and metadata
 
 ```go
 // Estimate cost from token counts (cache-aware)
-cost := llm.EstimateCost(llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: inputTokens, OutputTokens: outputTokens})
+cost := llm.EstimateCost(llm.CostInput{Model: "claude-sonnet-5", InputTokens: inputTokens, OutputTokens: outputTokens})
 
 // Query per-model metadata (context window, pricing, thinking support)
-info, ok := llm.GetModelInfo("grok-4.20-beta")
+info, ok := llm.GetModelInfo("grok-4.6")
 fmt.Printf("Context: %d tokens\n", info.ContextWindow)
 
 // Detect provider from model ID
 provider := llm.ProviderForModel("gemini-2.5-flash") // -> "gemini"
 
 // Get the default model for a provider
-model := llm.GetDefaultModel("xai") // -> "grok-4.20-beta"
+model := llm.GetDefaultModel("xai") // -> "grok-4.6"
 ```
 
 **Extending the registry at runtime.** Unlisted models return a cost estimate of `0`
@@ -857,4 +928,4 @@ Consumers that only use types (`llm.Client`, `llm.Config`, `llm.Message`, etc.) 
 
 ## Acknowledgements
 
-The name **rho** is a tribute to [pi](https://github.com/badlogic/pi-mono/tree/main/packages/ai) — rho is the next letter in the Greek alphabet. pi's `ai` package is a great multi-provider LLM library; rho brings the same idea to Go.
+The name **rho** is a tribute to [pi](https://github.com/earendil-works/pi/tree/main/packages/ai) (formerly `badlogic/pi-mono`) — rho is the next letter in the Greek alphabet. pi's `ai` package is a great multi-provider LLM library; rho brings the same idea to Go.
