@@ -73,6 +73,9 @@ req := llm.Request{
     },
 }
 resp, err := client.Complete(context.Background(), req)
+if err != nil {
+    panic(err)
+}
 
 fmt.Println(resp.Content)
 ```
@@ -82,8 +85,9 @@ fmt.Println(resp.Content)
 #### Ollama (local, no API key)
 ```go
 cfg := llm.Config{
-    Provider: "ollama",
-    Model:    "llama3", // or "mistral", "phi3", etc.
+    Provider:          "ollama",
+    Model:             "llama3", // an installed Ollama model
+    ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityStream),
 }
 ```
 
@@ -93,15 +97,17 @@ Unknown providers (not in the presets list) **must** set `BaseURL`. Without it, 
 
 ```go
 cfg := llm.Config{
-    Provider:   "custom",
-    BaseURL:    "http://my-proxy:8080/v1", // required for unknown providers
-    APIKey:     "my-key",
+    Provider:          "custom",
+    Model:             "my-model",
+    BaseURL:           "http://my-proxy:8080/v1", // required for unknown providers
+    APIKey:            "my-key",
+    ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityStream),
 }
 ```
 
 ## Image / Vision Support
 
-Send images to vision-capable models using `ContentImage` parts with base64-encoded data. All three protocol adapters serialize images to the correct wire format automatically.
+Send images to vision-capable models using `ContentImage` parts with base64-encoded data. All four protocol adapters serialize images to the correct wire format automatically.
 
 ```go
 import (
@@ -109,7 +115,10 @@ import (
     "os"
 )
 
-imgBytes, _ := os.ReadFile("photo.png")
+imgBytes, err := os.ReadFile("photo.png")
+if err != nil {
+    panic(err)
+}
 imgData := base64.StdEncoding.EncodeToString(imgBytes)
 
 req := llm.Request{
@@ -124,6 +133,9 @@ req := llm.Request{
     }},
 }
 resp, err := client.Complete(ctx, req)
+if err != nil {
+    panic(err)
+}
 
 // Or use the convenience helper for single-image messages:
 msg := llm.NewImageMessage(llm.RoleUser, "image/png", imgData)
@@ -136,7 +148,10 @@ Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
 Send PDFs to document-capable models using `ContentDocument` parts with base64-encoded data. Gemini and Anthropic parse PDFs natively (preserving text layout); OpenAI-compatible vision models (e.g. xAI Grok) receive the PDF as an `image_url` data URI. The Responses API adapter returns an explicit error rather than silently dropping a document.
 
 ```go
-pdfBytes, _ := os.ReadFile("invoice.pdf")
+pdfBytes, err := os.ReadFile("invoice.pdf")
+if err != nil {
+    panic(err)
+}
 pdfData := base64.StdEncoding.EncodeToString(pdfBytes)
 
 req := llm.Request{
@@ -151,6 +166,9 @@ req := llm.Request{
     }},
 }
 resp, err := client.Complete(ctx, req)
+if err != nil {
+    panic(err)
+}
 
 // Or use the convenience helper for single-document messages:
 msg := llm.NewDocumentMessage(llm.RoleUser, "application/pdf", pdfData)
@@ -162,7 +180,15 @@ Supported media types: `application/pdf`.
 
 `client.Stream()` returns a Go 1.23 iterator (`iter.Seq2[StreamEvent, error]`) that yields events as the model generates tokens. This lets you display partial output in real time rather than waiting for the full response. Use `break` to abort early — the iterator cleans up the underlying HTTP connection automatically.
 
-**Completion is explicit.** Every stream either yields an `EventDone` (carrying the stop reason and final token usage) or yields an error — never both, and never neither. If the server closes the connection mid-turn without sending its protocol-final event, the adapter yields an explicit error (wrapping `io.ErrUnexpectedEOF`) instead of ending silently, so a truncated turn can never be mistaken for a complete one. To abort an in-flight stream, cancel the `ctx` you passed to `Stream()` — a caller-cancelled stream is reported to you but is *not* counted as a provider failure (no key cooldown, no circuit-breaker trip).
+**Completion is explicit.** A successfully completed stream yields exactly one
+`EventDone` carrying the stop reason and final token usage. If the stream ends
+without its protocol-final event, the adapter yields a terminal error (wrapping
+`io.ErrUnexpectedEOF`) instead of ending silently, so a truncated turn cannot be
+mistaken for a complete one. A recoverable malformed-event error can occur before
+a later `EventDone` if the caller chooses to continue iterating. To abort an
+in-flight stream, cancel the `ctx` passed to `Stream()` — caller cancellation is
+reported but does *not* count as a provider failure (no key cooldown or
+circuit-breaker trip).
 
 ```go
 for event, err := range client.Stream(ctx, req) {
@@ -194,7 +220,7 @@ for event, err := range client.Stream(ctx, req) {
 | `EventToolUse` | `ToolCall` (ID, Name, Input) | The model is invoking a tool. Handle it and continue the conversation with the result. |
 | `EventThinking` | `Thinking` | Thinking output returned by the provider, including models that reason by default. |
 | `EventDone` | `StopReason`, `RawStopReason`, `InputTokens`, `OutputTokens` | Stream completed. Common stop reasons normalize to `end_turn`, `tool_use`, or `max_tokens`; provider-specific reasons can remain unchanged. `RawStopReason` preserves the provider value when available. |
-| `EventError` | `Error` | An error occurred mid-stream. |
+| `EventError` | `Error` | Available to custom clients; built-in adapters report failures through the iterator's `error` value. |
 
 **Stream completion:** Require `EventDone` to recognize a completed turn. An unexpected connection close produces an error; iterator exhaustion alone does not prove the response completed. Token counts can use the sentinel `llm.TokensNotReported` (-1) when the provider did not report usage; compare against this constant to distinguish "not reported" from "zero tokens" (0).
 
@@ -250,11 +276,12 @@ if ok && info.SupportsThinking {
     fmt.Println("Model supports extended thinking budgets")
     
     // Opt-in via config
-    cfg := llm.Config{
+    thinkingCfg := llm.Config{
         Provider:      "anthropic",
         Model:         "claude-opus-4-6",
         ThinkingLevel: llm.ThinkingLow, // or llm.ThinkingMedium / llm.ThinkingHigh
     }
+    fmt.Printf("Configure %s with %s thinking\n", thinkingCfg.Model, thinkingCfg.ThinkingLevel)
 }
 
 // 2. Intrinsic reasoning models (e.g. DeepSeek-R1, Grok 4 R)
@@ -292,10 +319,16 @@ For multi-turn chat, a `Conversation` is a plain, serializable, provider-neutral
 ```go
 sess := llm.NewSession(client, llm.WithSystem("You are concise."))
 
-resp, _ := sess.Send(ctx, "What's the capital of France?")
+resp, err := sess.Send(ctx, "What's the capital of France?")
+if err != nil {
+    panic(err)
+}
 fmt.Println(resp.Content) // "Paris."
 
-resp, _ = sess.Send(ctx, "And its population?") // history is carried automatically
+resp, err = sess.Send(ctx, "And its population?") // history is carried automatically
+if err != nil {
+    panic(err)
+}
 fmt.Println(resp.Content)
 
 fmt.Printf("conversation cost so far: $%.4f\n", sess.Usage().Cost)
@@ -304,9 +337,15 @@ fmt.Printf("conversation cost so far: $%.4f\n", sess.Usage().Cost)
 **Persist & resume** — a `Conversation` round-trips losslessly through JSON (versioned with `schema_version` so the format can evolve safely):
 
 ```go
-blob, _ := json.Marshal(sess.Conversation())   // save anywhere
+blob, err := json.Marshal(sess.Conversation()) // save anywhere
+if err != nil {
+    panic(err)
+}
 // ... later ...
-conv, _ := llm.LoadConversation(blob)           // validates schema_version
+conv, err := llm.LoadConversation(blob)        // validates schema_version
+if err != nil {
+    panic(err)
+}
 sess = llm.NewSession(client, llm.WithConversation(conv))
 ```
 
@@ -314,7 +353,10 @@ sess = llm.NewSession(client, llm.WithConversation(conv))
 
 ```go
 sess.SwitchProvider(anthropicClient) // continue the same chat on a different provider
-resp, _ = sess.Send(ctx, "Continue.")
+resp, err = sess.Send(ctx, "Continue.")
+if err != nil {
+    panic(err)
+}
 ```
 
 On a handoff, `NormalizeForProvider` (applied automatically by `Session`, and exported for direct `Client` users) prepares the transcript for the target provider: extended-thinking blocks are replayed verbatim only to the **same** provider that produced them (Anthropic requires the original signature) and otherwise **degrade to plain text** so the reasoning survives; orphaned tool calls get a synthetic error result (every provider rejects an unanswered tool call); dangling tool results are dropped; and errored/aborted turns are dropped. Text, images, documents, and tool calls carry over unchanged.
@@ -349,7 +391,10 @@ req := llm.Request{
     }},
 }
 
-resp, _ := client.Complete(ctx, req)
+resp, err := client.Complete(ctx, req)
+if err != nil {
+    panic(err)
+}
 fmt.Printf("Cache write: %d tokens, Cache read: %d tokens\n",
     resp.CacheCreationTokens, resp.CacheReadTokens)
 ```
@@ -357,6 +402,9 @@ fmt.Printf("Cache write: %d tokens, Cache read: %d tokens\n",
 Cache token usage is also available in streaming via `EventDone`:
 ```go
 for event, err := range client.Stream(ctx, req) {
+    if err != nil {
+        panic(err)
+    }
     if event.Type == llm.EventDone {
         fmt.Printf("Cache: write=%d read=%d\n",
             event.CacheCreationTokens, event.CacheReadTokens)
@@ -373,7 +421,10 @@ req := llm.Request{
     CachedContent: "cachedContents/abc123", // Pre-created via Gemini API
     Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "Summarize.")},
 }
-resp, _ := client.Complete(ctx, req)
+resp, err := client.Complete(ctx, req)
+if err != nil {
+    panic(err)
+}
 fmt.Printf("Cached tokens: %d\n", resp.CacheReadTokens)
 ```
 
@@ -399,11 +450,19 @@ cfg := llm.Config{
 }
 
 // Single-key: gets retry/backoff + circuit breaker on transient errors
-client, err := llm.NewClient(cfg)
+singleClient, err := llm.NewClient(cfg)
+if err != nil {
+    panic(err)
+}
+defer singleClient.Close()
 
 // Multi-key: rotates between keys on failure
 keys := []string{"key1", "key2", "key3"}
-client, err := llm.NewClientWithKeys(cfg, keys)
+pooledClient, err := llm.NewClientWithKeys(cfg, keys)
+if err != nil {
+    panic(err)
+}
+defer pooledClient.Close()
 ```
 
 ### Circuit Breaker
@@ -516,14 +575,17 @@ cfg := llm.Config{
     APIKey:      apiKey,
     LogRequests: true,  // Logs provider, model, tokens, cost, elapsed time
 }
-client, _ := llm.NewClient(cfg)
+client, err := llm.NewClient(cfg)
+if err != nil {
+    panic(err)
+}
 ```
 
-Or wrap an existing client manually:
+Or wrap an existing client manually (choose one wrapper):
 
 ```go
 client = llm.WithLogging(client)
-client = llm.WithLoggingPrefix(client, "[MyApp]")
+// Alternatively: client = llm.WithLoggingPrefix(client, "[MyApp]")
 ```
 
 ## Exponential Backoff
@@ -547,7 +609,12 @@ Set `Request.ResponseFormat` to constrain output to JSON. Wired for OpenAI-compa
 req.ResponseFormat = &llm.ResponseFormat{
     Type:   llm.ResponseFormatJSONSchema, // or llm.ResponseFormatJSONObject
     Name:   "person",
-    Schema: map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}},
+    Schema: map[string]any{
+        "type":                 "object",
+        "properties":           map[string]any{"name": map[string]any{"type": "string"}},
+        "required":             []string{"name"},
+        "additionalProperties": false,
+    },
 }
 ```
 
@@ -573,8 +640,13 @@ Persist conversations with a pluggable `Store` (in-memory or file; both stdlib-o
 
 ```go
 store := llm.NewFileStore("./chats")        // or llm.NewMemoryStore()
-store.Save(ctx, "chat-1", sess.Conversation())
-conv, err := store.Load(ctx, "chat-1")       // llm.ErrConversationNotFound if absent
+if err := store.Save(ctx, "chat-1", sess.Conversation()); err != nil {
+    panic(err)
+}
+conv, err := store.Load(ctx, "chat-1") // llm.ErrConversationNotFound if absent
+if err != nil {
+    panic(err)
+}
 ```
 
 ### Model & provider discovery
@@ -676,8 +748,9 @@ request. Omitted optional values retain the endpoint default where the operation
 contract permits omission.
 
 Generated base64 images receive a media type only after their decoded signature
-matches the requested format. URL-only responses fail because the request requires
-exact `b64_json` bytes. Speech synthesis returns
+matches the requested format. URL-only responses fail because rho requires inline
+bytes: GPT Image models return base64 by contract, while legacy compatible models
+are sent `response_format: "b64_json"`. Speech synthesis returns
 `*SpeechResponse` rather than unlabeled bytes and fails closed on unknown or
 mismatched response formats. `ValidateEmbeddingRequest`, `ValidateImageRequest`,
 `ValidateSpeechRequest`, and `ValidateTranscriptionRequest` provide the same
@@ -778,9 +851,16 @@ ev, _ := session.Recv(ctx) // session.created, response.audio.delta, ...
 For providers that issue tokens via OAuth, use the RFC 8628 device-authorization grant; the resulting access token becomes `Config.APIKey`:
 
 ```go
-da, _  := llm.StartDeviceAuth(ctx, llm.DeviceAuthConfig{ClientID: "...", DeviceAuthURL: "...", TokenURL: "..."})
+authCfg := llm.DeviceAuthConfig{ClientID: "...", DeviceAuthURL: "...", TokenURL: "..."}
+da, err := llm.StartDeviceAuth(ctx, authCfg)
+if err != nil {
+    panic(err)
+}
 fmt.Printf("Visit %s and enter %s\n", da.VerificationURI, da.UserCode)
-tok, _ := llm.PollDeviceToken(ctx, cfg, da)  // honors authorization_pending / slow_down
+tok, err := llm.PollDeviceToken(ctx, authCfg, da) // honors authorization_pending / slow_down
+if err != nil {
+    panic(err)
+}
 ```
 
 ### SSRF hardening
@@ -821,15 +901,17 @@ tok, _ := llm.PollDeviceToken(ctx, cfg, da)  // honors authorization_pending / s
 | MaxToolInputBytes | int | 1 MB | Cap on accumulated tool input JSON |
 | MaxErrorMessageLen | int | 4096 | Cap on stored error message length |
 | BlockPrivateBaseURL | bool | false | Opt-in SSRF guard: reject loopback/private/link-local BaseURL hosts |
-| ResponseFormat | *ResponseFormat | nil | Structured output (JSON mode / JSON schema) — OpenAI-compat + Gemini |
+
+Structured output is selected per call with `Request.ResponseFormat`; it is not a
+client `Config` field.
 
 ## Model Registry
 
 Use `ResolveModelAlias()` for short aliases:
 
 ```go
-model := llm.ResolveModelAlias("opus")   // -> "claude-opus-4-8"
-model = llm.ResolveModelAlias("grok")    // -> "grok-4.20-beta"
+model := llm.ResolveModelAlias("opus")   // -> "claude-opus-5"
+model = llm.ResolveModelAlias("grok")    // -> "grok-4.5"
 model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 ```
 
@@ -837,20 +919,21 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `opus` | `claude-opus-4-8` |
-| `sonnet` | `claude-sonnet-4-6` |
-| `haiku` | `claude-haiku-4-5-20251001` |
-| `claude` | `claude-sonnet-4-6` |
+| `opus` | `claude-opus-5` |
+| `sonnet` | `claude-sonnet-5` |
+| `haiku` | `claude-haiku-4-5` |
+| `claude` | `claude-sonnet-5` |
 
 ### xAI / Grok aliases
 
 | Alias | Resolves to |
 |-------|-------------|
 | `grok4.3`, `grok-4-3` | `grok-4.3` |
-| `grok`, `grok4.2`, `grok4.20`, `grok4` | `grok-4.20-beta` |
-| `grok4.1`, `grok-4.1` | `grok-4-1-fast-non-reasoning` |
+| `grok`, `grok4`, `grok-4` | `grok-4.5` |
+| `grok4.2`, `grok4.20` | `grok-4.20-0309-reasoning` |
+| `grok4.1`, `grok-4-1` | `grok-4-1-fast-non-reasoning` |
 | `grok-reasoning`, `grok-4-reasoning` | `grok-4-fast-reasoning` |
-| `grok-4.1-reasoning` | `grok-4-1-fast-reasoning` |
+| `grok-4-1-reasoning` | `grok-4-1-fast-reasoning` |
 | `grok-code` | `grok-code-fast-1` |
 | `grok-mini` | `grok-3-mini` |
 
@@ -860,7 +943,8 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 |-------|-------------|
 | `gpt5.5` | `gpt-5.5` |
 | `gpt5.5-pro` | `gpt-5.5-pro` |
-| `gpt`, `gpt5.4`, `gpt5` | `gpt-5.4` |
+| `gpt`, `gpt5` | `gpt-5.6-sol` |
+| `gpt5.4` | `gpt-5.4` |
 | `gpt5.3`, `gpt-instant` | `gpt-5.3-chat-latest` |
 | `gpt5.4-mini` | `gpt-5.4-mini` |
 | `gpt5.4-nano` | `gpt-5.4-nano` |
@@ -933,7 +1017,8 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | `gemini3.5` | `gemini-3.5-flash` |
 | `gemini3.1-lite` | `gemini-3.1-flash-lite` |
 | `flash` | `gemini-2.5-flash` |
-| `gemini-pro`, `gemini3.1`, `gemini3`, `gemini-3` | `gemini-3.1-pro-preview` |
+| `gemini-pro`, `gemini3.1`, `gemini3` | `gemini-3.1-pro-preview` |
+| `gemini-3` | `gemini-3-pro-preview` |
 
 > **Gemini 3 note:** `gemini-3-pro-preview` and `gemini-3-flash-preview` use
 > `ThoughtSignature` — the model returns an opaque signature in tool call responses

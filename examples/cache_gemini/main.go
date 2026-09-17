@@ -35,7 +35,10 @@ import (
 const (
 	cacheAPIBase = "https://generativelanguage.googleapis.com/v1beta/cachedContents"
 	modelName    = "gemini-2.5-pro"
+	cacheTimeout = 30 * time.Second
 )
+
+var cacheHTTPClient = &http.Client{Timeout: cacheTimeout}
 
 //go:embed system_prompt.txt
 var systemPrompt string
@@ -49,7 +52,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 
 	// =========================================================================
 	// Step 1: Load the system instruction to cache
@@ -67,7 +71,7 @@ func main() {
 	// =========================================================================
 
 	fmt.Println("\nCreating cache...")
-	cacheName, err := createCache(apiKey, systemPrompt)
+	cacheName, err := createCache(ctx, apiKey, systemPrompt)
 	if err != nil {
 		fmt.Printf("Failed to create cache: %v\n", err)
 		fmt.Println("\nNote: The content may be too small to cache. Gemini requires")
@@ -79,7 +83,9 @@ func main() {
 	// Ensure cleanup on exit
 	defer func() {
 		fmt.Println("\nDeleting cache...")
-		if err := deleteCache(apiKey, cacheName); err != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cacheTimeout)
+		defer cleanupCancel()
+		if err := deleteCache(cleanupCtx, apiKey, cacheName); err != nil {
 			fmt.Printf("Warning: failed to delete cache: %v\n", err)
 		} else {
 			fmt.Println("Cache deleted.")
@@ -144,7 +150,7 @@ func printResponse(label string, resp *llm.Response) {
 
 // createCache creates a CachedContent resource with the given system instruction.
 // Returns the cache resource name (e.g. "cachedContents/abc123").
-func createCache(apiKey, systemInstruction string) (string, error) {
+func createCache(ctx context.Context, apiKey, systemInstruction string) (string, error) {
 	payload := map[string]interface{}{
 		"model": "models/" + modelName,
 		"systemInstruction": map[string]interface{}{
@@ -161,13 +167,21 @@ func createCache(apiKey, systemInstruction string) (string, error) {
 	}
 
 	endpoint := fmt.Sprintf("%s?key=%s", cacheAPIBase, apiKey)
-	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(body)) // #nosec G107 -- example only; constant base + the caller's own key (Gemini cache API requires ?key=)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body)) // #nosec G107 -- constant base + the caller's own key (Gemini cache API requires ?key=)
+	if err != nil {
+		return "", fmt.Errorf("build POST: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := cacheHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("POST: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("read response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
@@ -179,26 +193,32 @@ func createCache(apiKey, systemInstruction string) (string, error) {
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("decode: %w", err)
 	}
+	if result.Name == "" {
+		return "", fmt.Errorf("decode: response has no cache name")
+	}
 
 	return result.Name, nil
 }
 
 // deleteCache deletes a CachedContent resource.
-func deleteCache(apiKey, cacheName string) error {
+func deleteCache(ctx context.Context, apiKey, cacheName string) error {
 	endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/%s?key=%s", cacheName, apiKey)
-	req, err := http.NewRequest("DELETE", endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := cacheHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if readErr != nil {
+			return fmt.Errorf("status %d; read response: %w", resp.StatusCode, readErr)
+		}
 		return fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
 	return nil

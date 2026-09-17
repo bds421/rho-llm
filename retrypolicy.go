@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"time"
 )
@@ -20,6 +21,24 @@ const (
 	// RetryExhausted fires when all retry attempts have been used up.
 	RetryExhausted
 )
+
+// String returns a stable label suitable for logs and metrics.
+func (eventType RetryEventType) String() string {
+	switch eventType {
+	case RetryAttemptFailed:
+		return "attempt_failed"
+	case RetryRotating:
+		return "rotating"
+	case RetryBackingOff:
+		return "backing_off"
+	case RetryCircuitOpen:
+		return "circuit_open"
+	case RetryExhausted:
+		return "exhausted"
+	default:
+		return fmt.Sprintf("RetryEventType(%d)", eventType)
+	}
+}
 
 // RetryEvent carries context about a retry lifecycle event.
 type RetryEvent struct {

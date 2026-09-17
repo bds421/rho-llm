@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-09-17
+
+### Added
+
+- `RetryEventType.String` exposes stable retry lifecycle labels for logs and
+  metrics (`attempt_failed`, `rotating`, `backing_off`, `circuit_open`, and
+  `exhausted`).
+
+### Fixed
+
+- OpenAI-compatible image generation omits `response_format` for GPT Image
+  models, whose API rejects that legacy parameter and already guarantees
+  base64 output. Other compatible image endpoints still request `b64_json`.
+- Shipped examples now use a reviewed failover model, cap tool-loop duration and
+  rounds, and give Gemini cache create/delete calls deadlines, bounded response
+  reads, and strict response validation.
+- Corrected all defects found by compiling and locally exercising every README
+  Go fence: stale aliases, the misplaced `ResponseFormat` config entry, invalid
+  strict JSON Schema, incomplete local/custom provider recipes, ignored errors,
+  duplicate logging wrappers, OAuth config ambiguity, and streaming prose.
+- Corrected the embedded cache-review prompt's claim about `http.Get`: the
+  default client reuses its transport but does not impose a request timeout.
+
 ## [0.7.4] - 2026-09-17
 
 ### Fixed

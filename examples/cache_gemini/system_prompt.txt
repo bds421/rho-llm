@@ -367,7 +367,7 @@ Flag:
 
 Bad:
     func getData() ([]byte, error) {
-        resp, err := http.Get(url)  // creates new transport each time
+        resp, err := http.Get(url)  // default client has no request timeout
         ...
     }
 
@@ -377,7 +377,7 @@ Good:
     }
 
     func getData() ([]byte, error) {
-        resp, err := client.Get(url)  // reuses connections
+        resp, err := client.Get(url)  // reuses connections and enforces a timeout
         ...
     }
 

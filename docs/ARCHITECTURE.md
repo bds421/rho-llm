@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of September 2026 (v0.7.4).
+> **Status:** Reflects the current implementation as of September 2026 (v0.7.5).
 
 ---
 
@@ -12,7 +12,7 @@
 - Single `Client` interface for all providers and protocols
 - Streaming via Go 1.23 `iter.Seq2[StreamEvent, error]` iterators
 - Tool use / function calling
-- Image/vision support (base64 images in all 3 adapters)
+- Image/vision support (base64 images in all four protocol adapters)
 - Document/PDF support (`ContentDocument`: native on Gemini/Anthropic, data URI on OpenAI-compatible)
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
 - Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForProvider`); pluggable persistence (`Store`: `MemoryStore`/`FileStore`)
@@ -168,7 +168,12 @@ Message
         └── {Type: ContentToolResult, ToolResultID, ToolResultContent, IsError}
 ```
 
-`ContentImage` parts are fully implemented across all three adapters. Each adapter validates images via `ValidateImageSource()` and serializes to its native wire format: Anthropic uses inline `image` blocks with a `source` object; Gemini uses `inlineData` parts; OpenAI-compatible switches content from string to array with `image_url` data URIs. Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+`ContentImage` parts are fully implemented across all four protocol adapters.
+Each adapter validates images via `ValidateImageSource()` and serializes to its
+native wire format: Anthropic uses inline `image` blocks with a `source` object;
+Gemini uses `inlineData` parts; OpenAI-compatible uses `image_url` data URIs; and
+OpenAI Responses uses `input_image`. Supported media types: `image/jpeg`,
+`image/png`, `image/gif`, `image/webp`.
 
 `ContentDocument` parts carry inline PDFs (base64), validated via `ValidateDocumentSource()`. Gemini serializes them as `inlineData` and Anthropic as native `document` blocks (both parse the PDF text layer); OpenAI-compatible adapters emit an `image_url` data URI for vision models such as xAI Grok. The OpenAI Responses adapter returns an explicit error for documents rather than dropping them silently. Supported media types: `application/pdf`.
 
@@ -375,7 +380,7 @@ Stream():
 
 `rotateClient()` does NOT close the replaced client — doing so would race with in-flight requests still holding a reference. Orphaned clients are garbage collected; their `Close()` method (which drains idle HTTP connections via `CloseIdleConnections()`) is called by the `refCountedClient` mechanism when the last reference is released.
 
-**`Close()` limitation:** The `Close()` methods on all three adapters call `httpClient.CloseIdleConnections()`, which only drains idle connections. Active streaming connections are not forcefully terminated — they are cleaned up by context cancellation or HTTP timeout. This is the correct Go pattern: `http.Client` has no API for forceful connection termination. To cleanly abort an in-progress stream, cancel the context passed to `Stream()`.
+**`Close()` limitation:** The `Close()` methods on all four protocol adapters call `httpClient.CloseIdleConnections()`, which only drains idle connections. Active streaming connections are not forcefully terminated — they are cleaned up by context cancellation or HTTP timeout. This is the correct Go pattern: `http.Client` has no API for forceful connection termination. To cleanly abort an in-progress stream, cancel the context passed to `Stream()`.
 
 **Thundering herd prevention:** When 50 goroutines hit a 429 simultaneously, naive single-checked locking would let all 50 create new clients. `PooledClient` uses double-checked locking with a dedicated `rotateMu` mutex:
 
@@ -796,7 +801,7 @@ the same `[]BatchResult`.
 
 ### Why a unified interface over provider SDKs?
 
-Provider SDKs have incompatible types, inconsistent error models, and evolve independently. A thin HTTP adapter per protocol gives full control over retry logic, streaming, and error classification without taking on SDK dependency churn. The three protocols (Anthropic native, Gemini native, OpenAI-compat) cover the entire current provider landscape.
+Provider SDKs have incompatible types, inconsistent error models, and evolve independently. A thin HTTP adapter per protocol gives full control over retry logic, streaming, and error classification without taking on SDK dependency churn. The four protocols (Anthropic native, Gemini native, OpenAI-compatible, and OpenAI Responses) cover the current provider landscape.
 
 ### Why `*APIError` instead of typed error vars?
 

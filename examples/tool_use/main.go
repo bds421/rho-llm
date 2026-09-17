@@ -20,7 +20,8 @@ func executeMyTool(toolName string, input any) string {
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 
 	cfg := llm.Config{
 		Provider: "gemini",
@@ -63,7 +64,11 @@ func main() {
 	}
 
 	// 2. The Agentic Loop: Handle tool calls sequentially until the model stops returning "tool_use"
-	for resp.StopReason == "tool_use" {
+	const maxToolRounds = 8
+	for toolRound := 0; resp.StopReason == "tool_use"; toolRound++ {
+		if toolRound >= maxToolRounds {
+			panic(fmt.Errorf("tool loop exceeded %d rounds", maxToolRounds))
+		}
 		fmt.Printf("Model wants to use tools: %d calls requested\n", len(resp.ToolCalls))
 
 		var results []llm.Message

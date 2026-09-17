@@ -149,9 +149,15 @@ func (c *Client) GenerateImages(
 	ctx context.Context, req llm.ImageRequest,
 ) (*llm.ImageResponse, error) {
 	format, _ := imageOutputFormat(req.MediaType)
+	model := c.modalityModel(req.Model)
 	bodyValue := map[string]any{
-		"model": c.modalityModel(req.Model), "prompt": req.Prompt,
-		"response_format": "b64_json",
+		"model": model, "prompt": req.Prompt,
+	}
+	// GPT Image models always return base64 and reject response_format. Legacy
+	// OpenAI-compatible image endpoints still need b64_json to avoid URL-only
+	// responses, which rho cannot verify or label safely.
+	if !strings.HasPrefix(model, "gpt-image-") {
+		bodyValue["response_format"] = "b64_json"
 	}
 	if req.N > 0 {
 		bodyValue["n"] = req.N

@@ -3864,6 +3864,25 @@ func TestCircuitBreakerStreamIntegration(t *testing.T) {
 	}
 }
 
+func TestRetryEventTypeString(t *testing.T) {
+	tests := []struct {
+		event llm.RetryEventType
+		want  string
+	}{
+		{llm.RetryAttemptFailed, "attempt_failed"},
+		{llm.RetryRotating, "rotating"},
+		{llm.RetryBackingOff, "backing_off"},
+		{llm.RetryCircuitOpen, "circuit_open"},
+		{llm.RetryExhausted, "exhausted"},
+		{llm.RetryEventType(99), "RetryEventType(99)"},
+	}
+	for _, test := range tests {
+		if got := test.event.String(); got != test.want {
+			t.Errorf("%d.String() = %q, want %q", test.event, got, test.want)
+		}
+	}
+}
+
 // TestRetryHookReceivesEvents verifies the RetryHook fires on retry lifecycle events.
 func TestRetryHookReceivesEvents(t *testing.T) {
 	var mu sync.Mutex

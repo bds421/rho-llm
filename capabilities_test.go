@@ -152,8 +152,10 @@ func TestGenerateImages(t *testing.T) {
 		res.Images[0].MediaType != "image/png" {
 		t.Errorf("parsed wrong: %+v", res)
 	}
-	if gotBody["response_format"] != "b64_json" || gotBody["size"] != "1024x1024" ||
-		gotBody["output_format"] != "png" {
+	if _, present := gotBody["response_format"]; present {
+		t.Errorf("GPT Image request includes unsupported response_format: %+v", gotBody)
+	}
+	if gotBody["size"] != "1024x1024" || gotBody["output_format"] != "png" {
 		t.Errorf("request body wrong: %+v", gotBody)
 	}
 	if _, err := generateImages(context.Background(), cfgFor(srv.URL), llm.ImageRequest{Prompt: ""}); err == nil {
@@ -169,6 +171,34 @@ func TestGenerateImages(t *testing.T) {
 		MediaType: "image/tiff",
 	}); err == nil {
 		t.Error("adapter-unsupported media type should error")
+	}
+}
+
+func TestGenerateImagesLegacyCompatibleModelRequestsBase64(t *testing.T) {
+	var gotBody map[string]any
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		io.WriteString(w, `{"data":[{"b64_json":"`+png+`"}]}`)
+	}))
+	defer server.Close()
+
+	cfg := cfgFor(server.URL)
+	cfg.Model = "vendor-image"
+	cfg.ModelCapabilities = llm.Capabilities(llm.CapabilityImageGeneration)
+	client, err := llm.NewModalityClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.GenerateImages(context.Background(), llm.ImageRequest{
+		Model: "vendor-image", Prompt: "base64",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["response_format"] != "b64_json" {
+		t.Fatalf("legacy compatible request body = %+v, want response_format=b64_json", gotBody)
 	}
 }
 

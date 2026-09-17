@@ -15,7 +15,7 @@ func main() {
 
 	cfg := llm.Config{
 		Provider: "openai",
-		Model:    "gpt-4o",
+		Model:    "gpt-4.1",
 		Timeout:  30 * time.Second,
 	}
 
