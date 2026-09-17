@@ -314,3 +314,36 @@ func TestDefaultConfigTracksRegistryDefault(t *testing.T) {
 		t.Errorf("DefaultConfig().Model = %q is not in the registry at all", got)
 	}
 }
+
+// Two published prices were wrong by large factors on their own provider's
+// DEFAULT model, which is the worst place for a pricing error to hide: every
+// cost estimate for the out-of-the-box model is wrong, and nothing fails.
+// Verified 2026-09-17 against platform.claude.com/docs pricing and
+// console.groq.com/docs/models.
+func TestDefaultModelPricesMatchPublishedRates(t *testing.T) {
+	cases := []struct {
+		model           string
+		wantIn, wantOut float64
+		note            string
+	}{
+		// Sonnet 5's introductory $2/$10 became the standard price; the
+		// scheduled 2026-09-01 rise to $3/$15 was cancelled. Registry had $3/$15.
+		{"claude-sonnet-5", 2.00, 10.00, "Anthropic default — was 50% over"},
+		// Groq publishes $0.15/$0.60. Registry had $3.00/$8.00 — 20x/13x over,
+		// on the `groq` default model.
+		{"openai/gpt-oss-120b", 0.15, 0.60, "Groq default — was 20x over"},
+		{"openai/gpt-oss-20b", 0.075, 0.30, "was 4x over"},
+	}
+	for _, c := range cases {
+		t.Run(c.model, func(t *testing.T) {
+			info, ok := llm.GetModelInfo(c.model)
+			if !ok {
+				t.Fatalf("%s missing from the registry", c.model)
+			}
+			if info.InputPricePer1M != c.wantIn || info.OutputPricePer1M != c.wantOut {
+				t.Errorf("%s = $%g/$%g, want $%g/$%g (%s)",
+					c.model, info.InputPricePer1M, info.OutputPricePer1M, c.wantIn, c.wantOut, c.note)
+			}
+		})
+	}
+}

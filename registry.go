@@ -40,7 +40,7 @@ var modelRegistry = map[string]ModelInfo{
 	// Claude 5 family (no minor segment in major-version IDs).
 	"claude-fable-5":             {ID: "claude-fable-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheReadPricePer1M: 1.00, SupportsThinking: true, Label: "Fable 5"},
 	"claude-opus-5":              {ID: "claude-opus-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 5"},
-	"claude-sonnet-5":            {ID: "claude-sonnet-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 1000000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 5"},
+	"claude-sonnet-5":            {ID: "claude-sonnet-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheReadPricePer1M: 0.20, SupportsThinking: true, Label: "Sonnet 5"},
 	"claude-opus-4-8":            {ID: "claude-opus-4-8", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.8"},
 	"claude-opus-4-7":            {ID: "claude-opus-4-7", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.7"},
 	"claude-opus-4-6":            {ID: "claude-opus-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.6"},
@@ -138,11 +138,11 @@ var modelRegistry = map[string]ModelInfo{
 	"o3-pro":  {ID: "o3-pro", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 20.00, OutputPricePer1M: 80.00, Thinking: true, Label: "O3 Pro"},
 	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O4 Mini"},
 
-	// Groq — cloud inference (2026-02-21)
+	// Groq — cloud inference (prices re-verified 2026-09-17 at console.groq.com/docs/models)
 	"llama-3.3-70b-versatile":                   {ID: "llama-3.3-70b-versatile", Provider: "groq", MaxTokens: 32768, ContextWindow: 128000, InputPricePer1M: 0.59, OutputPricePer1M: 0.79, Label: "Llama 3.3 70B"},
 	"llama-3.1-8b-instant":                      {ID: "llama-3.1-8b-instant", Provider: "groq", MaxTokens: 8192, ContextWindow: 128000, InputPricePer1M: 0.05, OutputPricePer1M: 0.08, Label: "Llama 3.1 8B"},
-	"openai/gpt-oss-120b":                       {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 3.00, OutputPricePer1M: 8.00, Label: "GPT-OSS 120B"},
-	"openai/gpt-oss-20b":                        {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.30, OutputPricePer1M: 0.80, Label: "GPT-OSS 20B"},
+	"openai/gpt-oss-120b":                       {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, Label: "GPT-OSS 120B"},
+	"openai/gpt-oss-20b":                        {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 0.075, OutputPricePer1M: 0.30, Label: "GPT-OSS 20B"},
 	"deepseek-r1-distill-llama-70b":             {ID: "deepseek-r1-distill-llama-70b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.75, OutputPricePer1M: 0.99, Thinking: true, Label: "DeepSeek R1 70B"},
 	"deepseek-r1-distill-qwen-32b":              {ID: "deepseek-r1-distill-qwen-32b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.69, OutputPricePer1M: 0.69, Thinking: true, Label: "DeepSeek R1 32B"},
 	"meta-llama/llama-4-scout-17b-16e-instruct": {ID: "meta-llama/llama-4-scout-17b-16e-instruct", Provider: "groq", MaxTokens: 16384, ContextWindow: 327680, InputPricePer1M: 0.11, OutputPricePer1M: 0.34, Label: "Llama 4 Scout"},
