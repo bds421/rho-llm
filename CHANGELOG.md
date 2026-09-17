@@ -7,10 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-09-17
+
+### Added
+
+- **`Request.ToolChoice`** — provider-neutral tool choice (`auto` / `none` / `required` /
+  a named tool), wired through all four wire protocols and translated to each one's own
+  shape: OpenAI's `"required"`, Anthropic's `{"type":"any"}`, Gemini's
+  `toolConfig.functionCallingConfig` mode `ANY` (+ `allowedFunctionNames` to force one tool),
+  and the Responses API's flatter `{"type":"function","name":…}`. Expressed once, so a forced
+  tool call survives a `SwitchProvider` handoff. A malformed choice (mode `tool` with no name,
+  an unknown mode, a name on a mode that takes none) fails at the library boundary instead of
+  as an opaque provider 400, and a constraint is never sent without tools.
+- **`Request.SamplingParams`** — a `map[string]any` merged into the request body at the top
+  level, for provider-specific knobs the neutral `Request` does not model (OpenRouter's
+  `provider` routing object, vLLM's `priority`, `top_p`/`seed`). **Keys that would hijack the
+  request are refused, not silently applied**: anything the adapter already set, plus a
+  reserved list of structural fields (`model`, `messages`, `tools`, `system`, `contents`,
+  `input`, …) refused even when absent from that particular body — so a stray `model` key
+  cannot redirect a request to a different model, and `messages` cannot rewrite its history.
+- **`Response.RawStopReason` / `StreamEvent.RawStopReason`** — the provider's own stop reason,
+  preserved verbatim alongside the normalized one, so a normalized `max_tokens` can be traced
+  back to OpenAI's `length` or Gemini's `MAX_TOKENS`. When a stop reason is *synthesized*
+  (a `[DONE]` with no `finish_reason`), the raw field is left empty rather than fabricating
+  provenance the provider never sent.
+
+### Fixed
+
+- **`claude-sonnet-5` was priced 50% too high** — $3.00/$15.00 against Anthropic's published
+  $2.00/$10.00. The introductory price became standard; the scheduled 2026-09-01 rise to
+  $3/$15 was cancelled. It is the `anthropic`/`claude` default, so every out-of-the-box cost
+  estimate was wrong. Max output also corrected to 128K.
+- **Groq `openai/gpt-oss-120b` was priced 20x too high** — $3.00/$8.00 against a published
+  $0.15/$0.60, on the `groq` default model. `openai/gpt-oss-20b` likewise ($0.30/$0.80 →
+  $0.075/$0.30). Context/max-output corrected to 131072/65536.
+- **`DefaultConfig().Model` had drifted from the registry** — it returned `claude-sonnet-4-6`
+  while `GetDefaultModel("anthropic")` returned `claude-sonnet-5`. It now reads from the
+  registry, so the two cannot diverge again.
+
+### Security
+
+- **Minimum Go bumped 1.26.5 → 1.26.8.** v0.7.1 moved to 1.26.5 for GO-2026-5856, but
+  `govulncheck` still reported four reachable Go standard-library vulnerabilities on that
+  toolchain, all fixed in 1.26.6: GO-2026-6218 (`net/url`), GO-2026-6090 (`crypto/tls`),
+  GO-2026-5972 (`encoding/asn1`) and GO-2026-5026 (`net/http`). They are reachable from the
+  HTTP paths every adapter uses, so `make ci` was red on `main`. No rho-llm code changed.
+
 ### Changed
 
 - CI workflow: `actions/checkout@v4` → `@v7`, `actions/setup-go@v5` → `@v6`
   (Node 24 runtime; clears the Node 20 deprecation warning on GitHub Actions).
+- CLAUDE.md: added a fetch-first rule for releases — an agent's git state is a session-start
+  snapshot, not a live view of the remote, and this repo takes releases from several people.
+
+> **Note:** the code in this entry was tagged `v0.7.2`; this CHANGELOG section and the
+> `docs/ARCHITECTURE.md` stamp followed one commit later and are tagged `v0.7.3`. `v0.7.2`
+> was already cached by the Go module proxy, so the tag was left where it was rather than
+> moved — a published tag is immutable.
 
 ## [0.7.1] - 2026-08-07
 

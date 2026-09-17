@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of August 2026 (v0.7.1).
+> **Status:** Reflects the current implementation as of September 2026 (v0.7.3).
 
 ---
 
