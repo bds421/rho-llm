@@ -46,6 +46,8 @@ var presets = map[string]ProviderPreset{
 	"minimax":    {BaseURL: "https://api.minimax.io/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"moonshot":   {BaseURL: "https://api.moonshot.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"kimi":       {BaseURL: "https://api.moonshot.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"antling":    {BaseURL: "https://api.ant-ling.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"ling":       {BaseURL: "https://api.ant-ling.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 
 	// Providers requiring auth that the preset model can't express are intentionally
 	// NOT listed: Amazon Bedrock (AWS SigV4) and Google Vertex AI (GCP service-account
