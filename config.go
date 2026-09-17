@@ -160,7 +160,7 @@ type Config struct {
 	// "cerebras", "mistral", "openrouter", "ollama", "vllm", "lmstudio", etc.
 	Provider string `json:"provider"`
 
-	// Model identifier (e.g., "claude-sonnet-4-6", "grok-4-fast-non-reasoning").
+	// Model identifier (e.g., "claude-sonnet-5", "grok-4.5").
 	Model string `json:"model"`
 
 	// ModelCapabilities is an exact, deployment-scoped reviewed capability
@@ -316,8 +316,11 @@ const (
 // Set BetaFeatures explicitly (or nil) to opt out.
 func DefaultConfig() Config {
 	return Config{
-		Provider:         "anthropic",
-		Model:            "claude-sonnet-4-6",
+		Provider: "anthropic",
+		// Track the registry's Anthropic default rather than hardcoding an ID —
+		// a literal here silently drifts from defaultModels every time the
+		// flagship moves (it had been left on claude-sonnet-4-6).
+		Model:            GetDefaultModel("anthropic"),
 		MaxTokens:        8192,
 		ThinkingLevel:    ThinkingNone,
 		Timeout:          DefaultTimeout,

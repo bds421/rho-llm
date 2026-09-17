@@ -93,7 +93,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 		return nil, err
 	}
 
-	body, err := json.Marshal(apiReq)
+	body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -139,7 +139,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 			return
 		}
 
-		body, err := json.Marshal(apiReq)
+		body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
 		if err != nil {
 			yield(llm.StreamEvent{}, fmt.Errorf("failed to marshal request: %w", err))
 			return
@@ -176,7 +176,21 @@ type geminiRequest struct {
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 	Tools             []geminiTool            `json:"tools,omitempty"`
+	ToolConfig        *geminiToolConfig       `json:"toolConfig,omitempty"`
 	CachedContent     string                  `json:"cachedContent,omitempty"` // pre-created cache resource name
+}
+
+// geminiToolConfig carries Gemini's function-calling mode. Gemini spells tool
+// choice differently from every other provider: an uppercase mode enum, with
+// "force one named tool" expressed as mode ANY plus a one-element
+// allowedFunctionNames list rather than a dedicated mode.
+type geminiToolConfig struct {
+	FunctionCallingConfig geminiFunctionCallingConfig `json:"functionCallingConfig"`
+}
+
+type geminiFunctionCallingConfig struct {
+	Mode                 string   `json:"mode"`
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
 }
 
 type geminiThinkingConfig struct {
@@ -256,6 +270,9 @@ type geminiUsageMetadata struct {
 }
 
 func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
+	if err := req.ToolChoice.Validate(); err != nil {
+		return geminiRequest{}, err
+	}
 	apiReq := geminiRequest{
 		GenerationConfig: &geminiGenerationConfig{
 			Temperature:     req.Temperature, // nil = omit from wire (provider default)
@@ -450,9 +467,33 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 			})
 		}
 		apiReq.Tools = []geminiTool{tool}
+		apiReq.ToolConfig = toolChoiceWire(req.ToolChoice)
 	}
 
 	return apiReq, nil
+}
+
+// toolChoiceWire maps the neutral ToolChoice onto Gemini's toolConfig. Gemini
+// has no "required" mode: forcing a call is mode ANY, and forcing one specific
+// tool is ANY narrowed by allowedFunctionNames. AUTO is the default, so it is
+// left off the wire.
+func toolChoiceWire(tc *llm.ToolChoice) *geminiToolConfig {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case llm.ToolChoiceNone:
+		return &geminiToolConfig{FunctionCallingConfig: geminiFunctionCallingConfig{Mode: "NONE"}}
+	case llm.ToolChoiceRequired:
+		return &geminiToolConfig{FunctionCallingConfig: geminiFunctionCallingConfig{Mode: "ANY"}}
+	case llm.ToolChoiceTool:
+		return &geminiToolConfig{FunctionCallingConfig: geminiFunctionCallingConfig{
+			Mode:                 "ANY",
+			AllowedFunctionNames: []string{tc.Name},
+		}}
+	default: // ToolChoiceAuto — omit, it is the default
+		return nil
+	}
 }
 
 func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *llm.Response {
@@ -476,6 +517,7 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 	if len(apiResp.Candidates) > 0 {
 		candidate := apiResp.Candidates[0]
 		resp.StopReason = normalizeStopReason(candidate.FinishReason)
+		resp.RawStopReason = candidate.FinishReason
 
 		callIndex := 0
 		for _, part := range candidate.Content.Parts {
@@ -588,6 +630,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				yield(llm.StreamEvent{
 					Type:            llm.EventDone,
 					StopReason:      normalizeStopReason(candidate.FinishReason),
+					RawStopReason:   candidate.FinishReason,
 					InputTokens:     inputTokens,
 					OutputTokens:    outputTokens,
 					ThinkingTokens:  thinkingTokens,

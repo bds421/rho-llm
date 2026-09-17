@@ -58,6 +58,15 @@ finished task lives in the changelog, not the todo list.
 
 ## Releases & remotes
 
+- ⚠️ **ALWAYS `git fetch origin --tags` FIRST** — before starting work, and again immediately
+  before tagging or pushing. The git state in your context is a snapshot from session start,
+  **not** a live view of the remote; `git status`/`git log`/`git tag` are all local and say
+  nothing about what others have pushed. This repo gets releases from other people mid-session.
+  Never pick a version number, tag, or "latest release" from local data alone — a tag is a claim
+  on a shared namespace, so verify with `git ls-remote --tags origin` before creating one.
+  (This is not hypothetical: a session once refreshed the registry, tagged `v0.6.0`, and only
+  on push discovered `v0.6.0`/`v0.7.0`/`v0.7.1` were already published — duplicating six weeks
+  of someone else's work. If a push is rejected, **never** reach for `--force`.)
 - **Two remotes.** `origin` → GitHub `github.com/bds421/rho-llm` (canonical/public). `gitlab` →
   `git@gitlab2024.bds421-cloud.com:bds421/rho/llm.git` (internal mirror on the bds421-cloud GitLab,
   alongside the team's other `bds421/rho/*` projects). Releases can go to either or both.

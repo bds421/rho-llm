@@ -470,6 +470,73 @@ type Tool struct {
 	CacheControl bool `json:"cache_control,omitempty"`
 }
 
+// ToolChoiceMode selects how the model may use the tools in a Request.
+type ToolChoiceMode string
+
+const (
+	// ToolChoiceAuto lets the model decide whether to call a tool. This is every
+	// provider's default, so a nil *ToolChoice and ToolChoiceAuto behave alike.
+	ToolChoiceAuto ToolChoiceMode = "auto"
+	// ToolChoiceNone forbids tool calls; the model must answer with text.
+	ToolChoiceNone ToolChoiceMode = "none"
+	// ToolChoiceRequired forces the model to call some tool of its choosing.
+	ToolChoiceRequired ToolChoiceMode = "required"
+	// ToolChoiceTool forces the model to call one named tool (see ToolChoice.Name).
+	ToolChoiceTool ToolChoiceMode = "tool"
+)
+
+// ToolChoice constrains which tool (if any) the model may call. Nil means
+// "provider default", which is Auto everywhere.
+//
+// Each adapter translates this to its own wire shape — OpenAI's "required" vs
+// Anthropic's {"type":"any"} vs Gemini's function_calling_config.mode "ANY" —
+// so callers express the intent once and it travels across a provider handoff.
+//
+// A ToolChoice that constrains tool use (anything but Auto) is only meaningful
+// alongside Tools; adapters drop it when Tools is empty rather than sending a
+// constraint the provider would reject.
+type ToolChoice struct {
+	Mode ToolChoiceMode `json:"mode"`
+	// Name is the tool to force, required when Mode is ToolChoiceTool and
+	// ignored otherwise.
+	Name string `json:"name,omitempty"`
+}
+
+// ToolChoiceAutoChoice, ToolChoiceNoneChoice and ToolChoiceRequiredChoice are
+// ready-made values for the modes that take no name.
+func NewToolChoice(mode ToolChoiceMode) *ToolChoice { return &ToolChoice{Mode: mode} }
+
+// ForceTool returns a ToolChoice that forces a call to the named tool.
+func ForceTool(name string) *ToolChoice {
+	return &ToolChoice{Mode: ToolChoiceTool, Name: name}
+}
+
+// Validate reports whether the ToolChoice is coherent. A nil receiver is valid
+// (it means "provider default"). Adapters call this before building a request so
+// a malformed choice fails loudly here instead of as an opaque provider 400.
+func (tc *ToolChoice) Validate() error {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case ToolChoiceAuto, ToolChoiceNone, ToolChoiceRequired:
+		if tc.Name != "" {
+			return fmt.Errorf("llm: ToolChoice.Name is only valid with Mode %q, got Mode %q", ToolChoiceTool, tc.Mode)
+		}
+		return nil
+	case ToolChoiceTool:
+		if tc.Name == "" {
+			return fmt.Errorf("llm: ToolChoice.Mode %q requires a tool Name", ToolChoiceTool)
+		}
+		return nil
+	case "":
+		return fmt.Errorf("llm: ToolChoice.Mode is empty (use %q, %q, %q or %q)",
+			ToolChoiceAuto, ToolChoiceNone, ToolChoiceRequired, ToolChoiceTool)
+	default:
+		return fmt.Errorf("llm: unknown ToolChoice.Mode %q", tc.Mode)
+	}
+}
+
 // ToolCall represents a tool invocation by the LLM.
 type ToolCall struct {
 	ID               string `json:"id"`
@@ -490,6 +557,7 @@ type Request struct {
 	MaxTokens        int              `json:"max_tokens"`
 	Temperature      *float64         `json:"temperature,omitempty"`
 	Tools            []Tool           `json:"tools,omitempty"`
+	ToolChoice       *ToolChoice      `json:"tool_choice,omitempty"`       // constrain tool use; nil = provider default (auto)
 	ThinkingLevel    ThinkingLevel    `json:"thinking_level,omitempty"`    // low, medium, high (zero value = none)
 	ThinkingBudget   int              `json:"thinking_budget,omitempty"`   // custom token budget; overrides ThinkingLevel default when > 0
 	ReasoningSummary ReasoningSummary `json:"reasoning_summary,omitempty"` // OpenAI Responses API: auto, detailed, concise
@@ -504,6 +572,22 @@ type Request struct {
 	// (text.format), and Gemini (responseMimeType/responseSchema). Anthropic has
 	// no native JSON mode (use a tool or prompt). Nil = free text.
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+
+	// SamplingParams passes provider-specific request-body fields straight through
+	// to the wire, for knobs the neutral Request does not model: OpenRouter's
+	// "provider" routing object, vLLM's "priority", llama.cpp/SGLang thinking
+	// budgets, "top_p"/"top_k"/"seed", and so on.
+	//
+	// Keys are merged into the adapter's JSON body at the TOP level, after the
+	// adapter has built it. Merging is deliberately restricted: a key that the
+	// adapter already set — the structural fields that define the request, such as
+	// "model", "messages" and "tools" — is REJECTED with an error rather than
+	// silently overriding it, so a stray key cannot redirect a request to another
+	// model or rewrite its history. Use the typed Request fields for those.
+	//
+	// Values must marshal to JSON. This is an escape hatch, not the neutral
+	// currency: anything expressible as a typed Request field belongs there.
+	SamplingParams map[string]any `json:"sampling_params,omitempty"`
 }
 
 // ResponseFormat selects structured output for a Request.
@@ -532,6 +616,7 @@ type Response struct {
 	ThinkingSignature string     `json:"thinking_signature,omitempty"` // Anthropic: authenticates the thinking block for replay on the next turn
 	ThinkingRedacted  bool       `json:"thinking_redacted,omitempty"`  // Anthropic: thinking block is redacted (encrypted)
 	StopReason        string     `json:"stop_reason"`                  // end_turn, tool_use, max_tokens
+	RawStopReason     string     `json:"raw_stop_reason,omitempty"`    // the provider's own stop reason before normalization (e.g. "STOP", "length", "stop_sequence")
 	InputTokens       int        `json:"input_tokens"`
 	OutputTokens      int        `json:"output_tokens"`
 	ThinkingTokens    int        `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
@@ -569,7 +654,8 @@ type StreamEvent struct {
 	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking
 
 	// Done event
-	StopReason string `json:"stop_reason,omitempty"`
+	StopReason    string `json:"stop_reason,omitempty"`
+	RawStopReason string `json:"raw_stop_reason,omitempty"` // the provider's own stop reason before normalization
 
 	// Cache token usage (reported in EventDone, Anthropic only)
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`

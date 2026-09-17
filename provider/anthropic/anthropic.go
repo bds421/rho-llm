@@ -104,6 +104,7 @@ type anthropicRequest struct {
 	MaxTokens     int                `json:"max_tokens"`
 	Temperature   *float64           `json:"temperature,omitempty"`
 	Tools         []anthropicTool    `json:"tools,omitempty"`
+	ToolChoice    any                `json:"tool_choice,omitempty"`
 	Stream        bool               `json:"stream,omitempty"`
 	Thinking      *anthropicThinking `json:"thinking,omitempty"`
 	StopSequences []string           `json:"stop_sequences,omitempty"`
@@ -178,7 +179,7 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 		return nil, err
 	}
 
-	body, err := json.Marshal(apiReq)
+	body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -225,7 +226,7 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 		return
 	}
 
-	body, err := json.Marshal(apiReq)
+	body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
 	if err != nil {
 		yield(llm.StreamEvent{}, fmt.Errorf("failed to marshal request: %w", err))
 		return
@@ -261,6 +262,9 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 }
 
 func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, error) {
+	if err := req.ToolChoice.Validate(); err != nil {
+		return anthropicRequest{}, err
+	}
 	apiReq := anthropicRequest{
 		Model:       req.Model,
 		MaxTokens:   req.MaxTokens,
@@ -459,6 +463,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			}
 			apiReq.Tools = append(apiReq.Tools, at)
 		}
+		// Anthropic rejects tool_choice without a tools array, so it only rides
+		// along when tools were actually built.
+		apiReq.ToolChoice = toolChoiceWire(req.ToolChoice)
 	}
 
 	// Configure stop sequences
@@ -483,6 +490,27 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	return apiReq, nil
 }
 
+// toolChoiceWire maps the neutral ToolChoice onto Anthropic's shape, which is an
+// object rather than a bare string: {"type":"auto"|"any"|"none"} — note that
+// Anthropic spells "force some tool" as "any", not "required" — or
+// {"type":"tool","name":…} to force one named tool. Auto is the default and is
+// left off the wire.
+func toolChoiceWire(tc *llm.ToolChoice) any {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case llm.ToolChoiceNone:
+		return map[string]any{"type": "none"}
+	case llm.ToolChoiceRequired:
+		return map[string]any{"type": "any"}
+	case llm.ToolChoiceTool:
+		return map[string]any{"type": "tool", "name": tc.Name}
+	default: // ToolChoiceAuto — omit, it is the default
+		return nil
+	}
+}
+
 // normalizeStopReason maps Anthropic stop reasons onto the unified vocabulary
 // (llm.StopEndTurn, …). Anthropic already uses the unified names for the
 // common cases; a configured stop sequence is a normal end of turn. Reasons
@@ -499,6 +527,7 @@ func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 		ID:                  apiResp.ID,
 		Model:               apiResp.Model,
 		StopReason:          normalizeStopReason(apiResp.StopReason),
+		RawStopReason:       apiResp.StopReason,
 		InputTokens:         apiResp.Usage.InputTokens,
 		OutputTokens:        apiResp.Usage.OutputTokens,
 		CacheCreationTokens: apiResp.Usage.CacheCreationTokens,
@@ -673,6 +702,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			yield(llm.StreamEvent{
 				Type:                llm.EventDone,
 				StopReason:          normalizeStopReason(event.Delta.StopReason),
+				RawStopReason:       event.Delta.StopReason,
 				InputTokens:         inputTokens,
 				OutputTokens:        event.Usage.OutputTokens,
 				ThinkingSignature:   thinkingSignature,

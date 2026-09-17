@@ -95,7 +95,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 		return nil, err
 	}
 
-	body, err := json.Marshal(apiReq)
+	body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -138,7 +138,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 			return
 		}
 
-		body, err := json.Marshal(apiReq)
+		body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
 		if err != nil {
 			yield(llm.StreamEvent{}, fmt.Errorf("failed to marshal request: %w", err))
 			return
@@ -185,6 +185,7 @@ type openaiRequest struct {
 	Stream              bool                 `json:"stream,omitempty"`
 	StreamOptions       *openaiStreamOptions `json:"stream_options,omitempty"`
 	Tools               []openaiTool         `json:"tools,omitempty"`
+	ToolChoice          any                  `json:"tool_choice,omitempty"`
 	Stop                []string             `json:"stop,omitempty"`
 	ResponseFormat      any                  `json:"response_format,omitempty"`
 }
@@ -253,6 +254,9 @@ func normalizeStopReason(reason string) string {
 }
 
 func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, error) {
+	if err := req.ToolChoice.Validate(); err != nil {
+		return openaiRequest{}, err
+	}
 	model := req.Model
 	if model == "" {
 		model = c.config.Model
@@ -498,9 +502,37 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 				},
 			})
 		}
+		// tool_choice only travels with a non-empty tools array — sending a
+		// constraint with no tools is a 400 on OpenAI-compatible backends.
+		if len(apiReq.Tools) > 0 {
+			apiReq.ToolChoice = toolChoiceWire(req.ToolChoice)
+		}
 	}
 
 	return apiReq, nil
+}
+
+// toolChoiceWire maps the neutral ToolChoice onto the OpenAI Chat Completions
+// shape: the bare strings "auto"/"none"/"required", or a
+// {"type":"function","function":{"name":…}} object to force one tool.
+// Auto is the provider default, so it is left off the wire entirely.
+func toolChoiceWire(tc *llm.ToolChoice) any {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case llm.ToolChoiceNone:
+		return "none"
+	case llm.ToolChoiceRequired:
+		return "required"
+	case llm.ToolChoiceTool:
+		return map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": tc.Name},
+		}
+	default: // ToolChoiceAuto — omit, it is the default
+		return nil
+	}
 }
 
 func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
@@ -514,6 +546,7 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 	if len(apiResp.Choices) > 0 {
 		choice := apiResp.Choices[0]
 		resp.StopReason = normalizeStopReason(choice.FinishReason)
+		resp.RawStopReason = choice.FinishReason
 
 		// Extract content
 		if content, ok := choice.Message.Content.(string); ok {
@@ -565,6 +598,11 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// a usage chunk (connection dropped, provider doesn't support it), callers
 	// can distinguish "not reported" from "zero tokens" (0).
 	var finishReason string
+	// rawFinishReason keeps the provider's own finish_reason verbatim. It stays
+	// EMPTY when the stop reason is synthesized below (a [DONE] with no
+	// finish_reason), because the provider never sent one — reporting a raw
+	// value we invented would defeat the point of the field.
+	var rawFinishReason string
 	var inputTokens, outputTokens = llm.TokensNotReported, llm.TokensNotReported
 	sawDone := false         // server sent an explicit [DONE]
 	emittedToolCall := false // the turn contained at least one tool call
@@ -679,6 +717,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// Capture finish reason (usage may arrive in next chunk)
 			if choice.FinishReason != "" {
 				finishReason = normalizeStopReason(choice.FinishReason)
+				rawFinishReason = choice.FinishReason
 				if currentToolCall != nil {
 					var input any
 					raw := inputBuffer.String()
@@ -729,10 +768,11 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// Emit EventDone after all chunks processed (finish_reason + usage now combined)
 	if finishReason != "" {
 		if !yield(llm.StreamEvent{
-			Type:         llm.EventDone,
-			StopReason:   finishReason,
-			InputTokens:  inputTokens,
-			OutputTokens: outputTokens,
+			Type:          llm.EventDone,
+			StopReason:    finishReason,
+			RawStopReason: rawFinishReason,
+			InputTokens:   inputTokens,
+			OutputTokens:  outputTokens,
 		}, nil) {
 			return
 		}
