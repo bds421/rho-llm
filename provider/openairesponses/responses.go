@@ -88,7 +88,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 		return nil, err
 	}
 
-	body, err := json.Marshal(apiReq)
+	body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal responses request: %w", err)
 	}
@@ -131,7 +131,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 			return
 		}
 
-		body, err := json.Marshal(apiReq)
+		body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
 		if err != nil {
 			yield(llm.StreamEvent{}, fmt.Errorf("failed to marshal request: %w", err))
 			return
@@ -374,6 +374,7 @@ type responsesRequest struct {
 	MaxOutputTokens int                 `json:"max_output_tokens,omitempty"`
 	Temperature     *float64            `json:"temperature,omitempty"`
 	Tools           []responsesTool     `json:"tools,omitempty"`
+	ToolChoice      any                 `json:"tool_choice,omitempty"`
 	Store           bool                `json:"store"`
 	Stream          bool                `json:"stream,omitempty"`
 }
@@ -460,6 +461,9 @@ type responsesIncomplete struct {
 // =============================================================================
 
 func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, error) {
+	if err := req.ToolChoice.Validate(); err != nil {
+		return responsesRequest{}, err
+	}
 	model := req.Model
 	if model == "" {
 		model = c.config.Model
@@ -559,9 +563,34 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 				},
 			})
 		}
+		// The Responses API, like Chat Completions, rejects a tool_choice with no
+		// tools. Its forced-tool shape is flatter: {"type":"function","name":…}.
+		if len(apiReq.Tools) > 0 {
+			apiReq.ToolChoice = toolChoiceWire(req.ToolChoice)
+		}
 	}
 
 	return apiReq, nil
+}
+
+// toolChoiceWire maps the neutral ToolChoice onto the OpenAI Responses shape:
+// the bare strings "auto"/"none"/"required", or {"type":"function","name":…} to
+// force one tool — note the name is top-level here, unlike Chat Completions
+// where it nests under "function". Auto is the default and is omitted.
+func toolChoiceWire(tc *llm.ToolChoice) any {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case llm.ToolChoiceNone:
+		return "none"
+	case llm.ToolChoiceRequired:
+		return "required"
+	case llm.ToolChoiceTool:
+		return map[string]any{"type": "function", "name": tc.Name}
+	default: // ToolChoiceAuto — omit, it is the default
+		return nil
+	}
 }
 
 // buildUserMessage handles user messages: text, images, and tool results.

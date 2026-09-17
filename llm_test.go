@@ -145,12 +145,12 @@ func TestFactoryDefaultModels(t *testing.T) {
 		provider string
 		expected string
 	}{
-		{"anthropic", "claude-sonnet-4-6"},
-		{"claude", "claude-sonnet-4-6"},
-		{"xai", "grok-4.20-beta"},
-		{"grok", "grok-4.20-beta"},
-		{"gemini", "gemini-3.1-flash-lite-preview"},
-		{"google", "gemini-3.1-flash-lite-preview"},
+		{"anthropic", "claude-opus-5"},
+		{"claude", "claude-opus-5"},
+		{"xai", "grok-4.6"},
+		{"grok", "grok-4.6"},
+		{"gemini", "gemini-3.8-flash"},
+		{"google", "gemini-3.8-flash"},
 	}
 
 	for _, tc := range tests {
@@ -309,16 +309,17 @@ func TestResolveModelAlias(t *testing.T) {
 		alias    string
 		expected string
 	}{
-		{"opus", "claude-opus-4-8"},
-		{"sonnet", "claude-sonnet-4-6"},
-		{"haiku", "claude-haiku-4-5-20251001"},
-		{"grok", "grok-4.20-beta"},
+		{"opus", "claude-opus-5"},
+		{"sonnet", "claude-sonnet-5"},
+		{"haiku", "claude-haiku-4-5"},
+		{"fable", "claude-fable-5-1"},
+		{"grok", "grok-4.6"},
 		{"grok4.3", "grok-4.3"},
 		{"gpt5.5", "gpt-5.5"},
 		{"gemini3.5", "gemini-3.5-flash"},
 		{"grok-code", "grok-code-fast-1"},
 		{"gemini-pro", "gemini-3.1-pro-preview"},
-		{"flash-lite", "gemini-3.1-flash-lite-preview"},
+		{"flash-lite", "gemini-3.5-flash-lite"},
 		// Non-alias should pass through
 		{"claude-opus-4-6", "claude-opus-4-6"},
 		{"unknown-model", "unknown-model"},
@@ -668,6 +669,17 @@ func TestEstimateCost(t *testing.T) {
 		// claude-opus-4-6: $5/1M input, $25/1M output
 		// 10000 input: 0.05, 2000 output: 0.05
 		{"opus basic", llm.CostInput{Model: "claude-opus-4-6", InputTokens: 10000, OutputTokens: 2000}, 0.099, 0.101},
+		// claude-opus-5: $5/1M input, $25/1M output — same as 4.8, 1M context.
+		{"opus5 basic", llm.CostInput{Model: "claude-opus-5", InputTokens: 10000, OutputTokens: 2000}, 0.099, 0.101},
+		// claude-sonnet-5: $2/1M input, $10/1M output (the introductory price became standard;
+		// the scheduled 2026-09-01 rise to $3/$15 was cancelled — platform.claude.com pricing).
+		// 10000 input: 0.02, 2000 output: 0.02
+		{"sonnet5 basic", llm.CostInput{Model: "claude-sonnet-5", InputTokens: 10000, OutputTokens: 2000}, 0.0399, 0.0401},
+		// claude-fable-5-1 cache reads are 0.025x input ($0.25/MTok), NOT the usual 0.1x.
+		// 1M cache-read tokens must cost $0.25, not $1.00 (which 0.1x would give).
+		{"fable5.1 cache read is 0.025x", llm.CostInput{Model: "claude-fable-5-1", CacheReadTokens: 1_000_000}, 0.2499, 0.2501},
+		// claude-fable-5 (the predecessor) keeps the standard 0.1x read: $1.00/MTok.
+		{"fable5 cache read is 0.1x", llm.CostInput{Model: "claude-fable-5", CacheReadTokens: 1_000_000}, 0.9999, 1.0001},
 	}
 
 	for _, tc := range tests {
@@ -2012,10 +2024,11 @@ func TestAuthPoolWithBaseURL(t *testing.T) {
 
 // TestGetDefaultModelUnknown verifies fallback for unknown provider.
 func TestGetDefaultModelUnknown(t *testing.T) {
-	// Unknown providers fall back to claude-sonnet-4-6
+	// Unknown providers fall back to the Anthropic default.
+	want := llm.GetDefaultModel("anthropic")
 	model := llm.GetDefaultModel("nonexistent-provider")
-	if model != "claude-sonnet-4-6" {
-		t.Errorf("GetDefaultModel(unknown) = %q, want claude-sonnet-4-6", model)
+	if model != want {
+		t.Errorf("GetDefaultModel(unknown) = %q, want %q", model, want)
 	}
 }
 
@@ -4777,9 +4790,8 @@ func TestReasoningModelMaxTokensWireFormat(t *testing.T) {
 		// xAI reasoning models → max_completion_tokens
 		{"xai", "grok-3-mini", false, true},
 		// Mistral reasoning models → max_tokens
-		{"mistral", "mistral-small-2603", true, false},
-		{"mistral", "magistral-medium-2509", true, false},
-		{"mistral", "magistral-small-2509", true, false},
+		{"mistral", "mistral-small-4-0-26-03", true, false},
+		{"mistral", "mistral-medium-3-5-26-04", true, false},
 		// Groq reasoning models → max_tokens
 		{"groq", "deepseek-r1-distill-llama-70b", true, false},
 		// Ollama reasoning models → max_tokens
