@@ -875,7 +875,7 @@ if err != nil {
 | Model | string | "claude-sonnet-5" | Model identifier |
 | ModelCapabilities | CapabilitySet | 0 | Exact deployment-scoped reviewed capabilities for Model; overrides global registry metadata |
 | APIKey | string | "" | API key (empty OK for local providers) |
-| MaxTokens | int | 8192 | Max output tokens |
+| MaxTokens | int | 8192 | Max output tokens (zero is floored to the default; see the note below on Gemini thinking models) |
 | Temperature | *float64 | nil | Sampling temperature (nil = provider default, omitted from wire) |
 | ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingLow/ThinkingMedium/ThinkingHigh |
 | Timeout | Duration | 120s | HTTP timeout |
@@ -1046,6 +1046,37 @@ provider := llm.ProviderForModel("gemini-2.5-flash") // -> "gemini"
 // Get the default model for a provider
 model := llm.GetDefaultModel("xai") // -> "grok-4.5"
 ```
+
+**`MaxTokens` on Gemini thinking models.** Gemini 2.5 models reason internally and
+charge that reasoning against `maxOutputTokens`, but they do not accept a
+`thinkingConfig` to bound it. A small `MaxTokens` would therefore be consumed by
+thinking before any visible text is produced, so the Gemini adapter pads
+`maxOutputTokens` by the `ThinkingLow` budget (capped at the model's ceiling) and
+logs a warning naming the original and padded values. The visible answer can
+therefore be longer than the `MaxTokens` you set on such a model; other providers
+and non-thinking Gemini models honour it exactly.
+
+**Retired models.** IDs the provider has sunset are removed from the registry, so a
+request naming one fails at dispatch with an actionable error rather than a generic
+"no reviewed capability metadata" message:
+
+```go
+_, err := client.Complete(ctx, req) // Model: "claude-sonnet-4-20250514"
+// llm: model "claude-sonnet-4-20250514" was retired by its provider; use "claude-sonnet-4-6" instead
+```
+
+Query the mapping directly with `RetiredModelReplacement`, which resolves aliases
+before looking up the replacement:
+
+```go
+if replacement, retired := llm.RetiredModelReplacement(model); retired {
+    log.Printf("%s is retired; switching to %s", model, replacement)
+    model = replacement
+}
+```
+
+If you still need a retired ID (a proxy or a vendor that keeps serving it), re-add it
+with `RegisterModel` — the registry is extensible at runtime, below.
 
 **Extending the registry at runtime.** Unlisted models return a cost estimate of `0`
 and cannot dispatch until they have reviewed capability metadata. Register metadata

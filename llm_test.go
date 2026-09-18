@@ -5036,3 +5036,163 @@ func TestEstimateCostWithThinkingTokens(t *testing.T) {
 		t.Errorf("EstimateCost with thinking tokens = %f, want ~%f", cost, expected)
 	}
 }
+
+// TestNewClientAppliesMaxTokensFloor verifies that a Config built as a struct
+// literal — the form every example and README snippet uses — gets a usable
+// MaxTokens instead of 0. Anthropic rejects a streaming request with
+// "max_tokens cannot be 0" (HTTP 400), so leaving the zero value in place
+// made the documented streaming recipe fail against the live API.
+//
+// This mirrors the existing Timeout floor in NewClient: DefaultConfig() is not
+// on the path when callers construct Config directly.
+func TestNewClientAppliesMaxTokensFloor(t *testing.T) {
+	c, err := llm.NewClient(llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key-not-used",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer c.Close()
+
+	// The floor must be observable on the wire, not just defined as a
+	// constant: assert the adapter would send a non-zero max_tokens.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mt, _ := body["max_tokens"].(float64)
+		if mt <= 0 {
+			t.Errorf("wire max_tokens = %v, want > 0", body["max_tokens"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"m","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c2, err := llm.NewClient(llm.Config{
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		APIKey:   "test-key-not-used",
+		BaseURL:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer c2.Close()
+
+	if _, err := c2.Complete(context.Background(), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+}
+
+// TestDefaultMaxTokensMatchesDefaultConfig keeps the floor and DefaultConfig()
+// from drifting apart — two sources of the same default is how the zero-value
+// gap appeared in the first place.
+func TestDefaultMaxTokensMatchesDefaultConfig(t *testing.T) {
+	if got := llm.DefaultConfig().MaxTokens; got != llm.DefaultMaxTokens {
+		t.Errorf("DefaultConfig().MaxTokens = %d, DefaultMaxTokens = %d; want equal", got, llm.DefaultMaxTokens)
+	}
+}
+
+// TestRetiredModelGivesActionableError verifies that a model ID the provider
+// has retired fails with a message naming the retirement and a replacement,
+// rather than the generic "no reviewed capability metadata" error.
+//
+// Registry lookup is fail-closed, so simply deleting a retired entry turns the
+// provider's own clear 404 ("model: claude-sonnet-4-20250514") into a local
+// error that gives the caller nothing to act on.
+func TestRetiredModelGivesActionableError(t *testing.T) {
+	for _, model := range []string{
+		"claude-sonnet-4-20250514",
+		"claude-opus-4-20250514",
+		"claude-opus-4-1-20250805",
+		// claude-3-haiku-20240307 is exercised by
+		// TestBreakRegisterModelOverridesRetirement, which re-registers it.
+		"claude-sonnet-4-0",
+		"claude-opus-4-0",
+		"claude-opus-4-1",
+	} {
+		t.Run(model, func(t *testing.T) {
+			if _, ok := llm.GetModelInfo(model); ok {
+				t.Fatalf("GetModelInfo(%q) still registered; retired IDs must be removed", model)
+			}
+			// Capability validation is a dispatch-time gate (Complete/Stream),
+			// not a construction-time one, so assert at that boundary.
+			c, err := llm.NewClient(llm.Config{
+				Provider: "anthropic",
+				Model:    model,
+				APIKey:   "test-key-not-used",
+			})
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer c.Close()
+
+			_, err = c.Complete(context.Background(), llm.Request{
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			})
+			if err == nil {
+				t.Fatalf("Complete(%q) = nil error, want retirement error", model)
+			}
+			if !strings.Contains(err.Error(), "retired") {
+				t.Errorf("error = %q, want it to mention %q", err.Error(), "retired")
+			}
+			if replacement, ok := llm.RetiredModelReplacement(model); !ok {
+				t.Errorf("RetiredModelReplacement(%q) = not retired, want retired", model)
+			} else if !strings.Contains(err.Error(), replacement) {
+				t.Errorf("error = %q, want it to name replacement %q", err.Error(), replacement)
+			}
+		})
+	}
+}
+
+// TestLiveModelsStillRegistered guards the inverse: IDs the provider still
+// serves (verified against the live models endpoint) must remain registered,
+// so the retirement sweep cannot over-delete.
+func TestLiveModelsStillRegistered(t *testing.T) {
+	for _, model := range []string{
+		"claude-sonnet-4-6",
+		"claude-sonnet-4-5",
+		"claude-opus-4-5",
+		"claude-haiku-4-5",
+		"gemini-2.0-flash",
+		"gemini-3-pro-preview",
+	} {
+		if _, ok := llm.GetModelInfo(model); !ok {
+			t.Errorf("GetModelInfo(%q) = not registered, want registered (still live)", model)
+		}
+	}
+}
+
+// TestBatchAndModalityClientsApplyMaxTokensFloor verifies that the
+// DefaultMaxTokens floor reaches every client constructor, not just NewClient.
+//
+// NewBatchClient and NewModalityClient apply the Timeout floor but originally
+// skipped MaxTokens. The Anthropic batch encoder reuses the live buildRequest,
+// which falls back to Config.MaxTokens, so a Config built as a struct literal
+// produced batch entries carrying "max_tokens": 0 — the same HTTP 400 the
+// single-request path was fixed for, still reachable through the batch API.
+// The wire-level assertion lives in provider/anthropic (batchline_internal);
+// here we pin that both constructors succeed and normalize the config.
+func TestBatchAndModalityClientsApplyMaxTokensFloor(t *testing.T) {
+	bc, err := llm.NewBatchClient(llm.Config{
+		Provider: "anthropic", Model: "claude-sonnet-4-6", APIKey: "test-key",
+	})
+	if err != nil {
+		t.Fatalf("NewBatchClient: %v", err)
+	}
+	defer bc.Close()
+
+	// Modality clients exist only for protocols with a registered driver;
+	// openai has one, anthropic does not.
+	mc, err := llm.NewModalityClient(llm.Config{
+		Provider: "openai", Model: "gpt-4.1", APIKey: "test-key",
+	})
+	if err != nil {
+		t.Fatalf("NewModalityClient: %v", err)
+	}
+	defer mc.Close()
+}

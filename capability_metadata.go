@@ -118,6 +118,15 @@ func ResolveCapabilityProfile(cfg Config) (CapabilityProfile, error) {
 	} else {
 		info, ok := GetModelInfo(model)
 		if !ok || info.Capabilities == 0 {
+			// A retired ID is a distinct, actionable failure: the provider no
+			// longer serves it, so point the caller at the replacement rather
+			// than suggesting they register the dead model.
+			if replacement, retired := RetiredModelReplacement(model); retired {
+				return CapabilityProfile{}, fmt.Errorf(
+					"llm: model %q was retired by its provider; use %q instead",
+					model, replacement,
+				)
+			}
 			return CapabilityProfile{}, fmt.Errorf(
 				"llm: model %q has no reviewed capability metadata (register it or set Config.ModelCapabilities)",
 				model,

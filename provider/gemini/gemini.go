@@ -542,6 +542,16 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 				resp.ToolCalls = append(resp.ToolCalls, tc)
 			}
 		}
+
+		// Gemini has no distinct tool-calling finish reason: a turn that
+		// requests a function call still reports "STOP". Infer tool_use from
+		// the parts so callers can drive the standard agentic loop
+		// (`for resp.StopReason == "tool_use"`). Only a normal completion is
+		// reclassified — MAX_TOKENS and friends must survive, since a
+		// truncated turn is not a usable tool call.
+		if len(resp.ToolCalls) > 0 && resp.StopReason == "end_turn" {
+			resp.StopReason = "tool_use"
+		}
 	}
 
 	return resp
@@ -554,6 +564,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 	callIndex := 0
 	doneEmitted := false
+	// Gemini reports finishReason "STOP" even for a turn that requests a
+	// function call, so the terminal event must infer tool_use from whether
+	// any tool call was actually emitted. See parseResponse for the rationale.
+	sawToolCall := false
 
 	// Usage may arrive on any chunk (often only the final one carries it).
 	// Track the latest seen, initialized to "not reported" so a stream that
@@ -613,6 +627,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					if part.ThoughtSignature != "" {
 						tc.ThoughtSignature = part.ThoughtSignature
 					}
+					sawToolCall = true
 					if !yield(llm.StreamEvent{
 						Type:     llm.EventToolUse,
 						ToolCall: tc,
@@ -627,9 +642,16 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				// trailing bytes after the turn is complete (including malformed
 				// lines) can't surface as a spurious error masking the turn.
 				doneEmitted = true
+				stopReason := normalizeStopReason(candidate.FinishReason)
+				// Only a normal completion is reclassified: MAX_TOKENS and
+				// friends must survive, since a truncated turn is not a
+				// usable tool call.
+				if sawToolCall && stopReason == "end_turn" {
+					stopReason = "tool_use"
+				}
 				yield(llm.StreamEvent{
 					Type:            llm.EventDone,
-					StopReason:      normalizeStopReason(candidate.FinishReason),
+					StopReason:      stopReason,
 					RawStopReason:   candidate.FinishReason,
 					InputTokens:     inputTokens,
 					OutputTokens:    outputTokens,

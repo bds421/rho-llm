@@ -32,6 +32,28 @@ type ModelInfo struct {
 	Label                string        // Short display name
 }
 
+// retiredModels maps IDs the provider has sunset to the recommended
+// replacement. Registry lookup is fail-closed, so a removed entry would
+// otherwise surface as a generic "no reviewed capability metadata" error and
+// hide the real cause. Verified against each provider's live models endpoint
+// (2026-09-18): every ID here returns HTTP 404 from the provider.
+var retiredModels = map[string]string{
+	"claude-3-haiku-20240307":  "claude-haiku-4-5",
+	"claude-opus-4-0":          "claude-opus-4-5",
+	"claude-opus-4-1":          "claude-opus-4-5",
+	"claude-opus-4-1-20250805": "claude-opus-4-5",
+	"claude-opus-4-20250514":   "claude-opus-4-5",
+	"claude-sonnet-4-0":        "claude-sonnet-4-6",
+	"claude-sonnet-4-20250514": "claude-sonnet-4-6",
+}
+
+// RetiredModelReplacement reports whether model has been retired by its
+// provider and, if so, the registered ID that replaces it.
+func RetiredModelReplacement(model string) (string, bool) {
+	replacement, ok := retiredModels[ResolveModelAlias(model)]
+	return replacement, ok
+}
+
 // modelRegistry maps model ID to its metadata. Built-in entries are written
 // at init; RegisterModel extends/overrides at runtime under registryMu.
 var modelRegistry = map[string]ModelInfo{
@@ -46,18 +68,11 @@ var modelRegistry = map[string]ModelInfo{
 	"claude-opus-4-6":            {ID: "claude-opus-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.6"},
 	"claude-opus-4-5":            {ID: "claude-opus-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5"},
 	"claude-opus-4-5-20251101":   {ID: "claude-opus-4-5-20251101", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5 (Nov)"},
-	"claude-opus-4-1":            {ID: "claude-opus-4-1", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, CacheWritePricePer1M: 18.75, CacheReadPricePer1M: 1.50, SupportsThinking: true, Label: "Opus 4.1"},
-	"claude-opus-4-1-20250805":   {ID: "claude-opus-4-1-20250805", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, CacheWritePricePer1M: 18.75, CacheReadPricePer1M: 1.50, SupportsThinking: true, Label: "Opus 4.1 (Aug)"},
-	"claude-opus-4-0":            {ID: "claude-opus-4-0", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, CacheWritePricePer1M: 18.75, CacheReadPricePer1M: 1.50, SupportsThinking: true, Label: "Opus 4.0"},
-	"claude-opus-4-20250514":     {ID: "claude-opus-4-20250514", Provider: "anthropic", MaxTokens: 32000, ContextWindow: 200000, InputPricePer1M: 15.00, OutputPricePer1M: 75.00, CacheWritePricePer1M: 18.75, CacheReadPricePer1M: 1.50, SupportsThinking: true, Label: "Opus 4.0 (May)"},
 	"claude-sonnet-4-6":          {ID: "claude-sonnet-4-6", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 1000000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.6"},
 	"claude-sonnet-4-5":          {ID: "claude-sonnet-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.5"},
 	"claude-sonnet-4-5-20250929": {ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.5 (Sep)"},
-	"claude-sonnet-4-0":          {ID: "claude-sonnet-4-0", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.0"},
-	"claude-sonnet-4-20250514":   {ID: "claude-sonnet-4-20250514", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.0 (May)"},
 	"claude-haiku-4-5-20251001":  {ID: "claude-haiku-4-5-20251001", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Haiku 4.5"},
 	"claude-haiku-4-5":           {ID: "claude-haiku-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Haiku 4.5"},
-	"claude-3-haiku-20240307":    {ID: "claude-3-haiku-20240307", Provider: "anthropic", MaxTokens: 4096, ContextWindow: 200000, InputPricePer1M: 0.25, OutputPricePer1M: 1.25, CacheWritePricePer1M: 0.3125, CacheReadPricePer1M: 0.025, SupportsThinking: false, Label: "Haiku 3 (legacy)"},
 
 	// xAI / Grok — from docs.x.ai/docs/models (2026-08-06)
 	// Short-context rates; long-context (≥200k prompt) is 2× and not modeled here.
@@ -312,14 +327,10 @@ var availableModels = map[string][]string{
 		"claude-opus-4-7",
 		"claude-opus-4-6",
 		"claude-opus-4-5",
-		"claude-opus-4-1",
-		"claude-opus-4-0",
 		"claude-sonnet-4-6",
 		"claude-sonnet-4-5",
-		"claude-sonnet-4-0",
 		"claude-haiku-4-5",
 		"claude-haiku-4-5-20251001",
-		"claude-3-haiku-20240307",
 	},
 	"xai": {
 		"grok-4.5",

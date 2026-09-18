@@ -125,3 +125,90 @@ func TestBuildRequestDropsThinkingWhenDisabled(t *testing.T) {
 		t.Error("text block missing after dropping thinking")
 	}
 }
+
+// TestThinkingBudgetClampedToRequestMaxTokens verifies that the thinking
+// budget is clamped to the request's effective max_tokens, not merely to the
+// model's registry ceiling.
+//
+// Anthropic requires max_tokens > thinking.budget_tokens. ThinkingHigh
+// resolves to 65536, so a caller asking for MaxTokens 16000 on a model whose
+// registry ceiling is 64000 previously clamped to 64000 — still far above the
+// request's own 16000 — and the API rejected the call with HTTP 400
+// "`max_tokens` must be greater than `thinking.budget_tokens`".
+func TestThinkingBudgetClampedToRequestMaxTokens(t *testing.T) {
+	c := &Client{
+		config:       llm.Config{Model: "claude-sonnet-4-6", MaxTokens: 16000},
+		providerName: "anthropic",
+	}
+
+	apiReq, err := c.buildRequest(llm.Request{
+		Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		ThinkingLevel: llm.ThinkingHigh,
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if apiReq.Thinking == nil {
+		t.Fatal("Thinking = nil, want enabled")
+	}
+	if apiReq.Thinking.BudgetTokens >= apiReq.MaxTokens {
+		t.Errorf("budget_tokens = %d, max_tokens = %d; Anthropic requires budget < max",
+			apiReq.Thinking.BudgetTokens, apiReq.MaxTokens)
+	}
+}
+
+// TestThinkingBudgetRespectsPerRequestMaxTokens covers the same invariant when
+// max_tokens arrives on the Request rather than the Config.
+func TestThinkingBudgetRespectsPerRequestMaxTokens(t *testing.T) {
+	c := &Client{config: llm.Config{Model: "claude-sonnet-4-6"}, providerName: "anthropic"}
+
+	apiReq, err := c.buildRequest(llm.Request{
+		Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		MaxTokens:     8000,
+		ThinkingLevel: llm.ThinkingHigh,
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if apiReq.Thinking.BudgetTokens >= apiReq.MaxTokens {
+		t.Errorf("budget_tokens = %d, max_tokens = %d; want budget < max",
+			apiReq.Thinking.BudgetTokens, apiReq.MaxTokens)
+	}
+}
+
+// TestThinkingBudgetRespectsAnthropicMinimum verifies the other bound:
+// Anthropic rejects budget_tokens below 1024, so clamping down to fit
+// max_tokens must not push the budget under that floor. When max_tokens is too
+// small to carry any valid budget, thinking is disabled instead of sending a
+// request the API would reject from the other direction.
+func TestThinkingBudgetRespectsAnthropicMinimum(t *testing.T) {
+	for _, maxTokens := range []int{512, 1024, 1100, 1400, 2000, 6000, 16000} {
+		c := &Client{
+			config:       llm.Config{Model: "claude-sonnet-4-6", MaxTokens: maxTokens},
+			providerName: "anthropic",
+		}
+		apiReq, err := c.buildRequest(llm.Request{
+			Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			ThinkingLevel: llm.ThinkingHigh,
+		}, false)
+		if err != nil {
+			t.Fatalf("max_tokens=%d: buildRequest: %v", maxTokens, err)
+		}
+		if apiReq.Thinking == nil {
+			// Disabling thinking is the valid outcome only when no budget
+			// could satisfy both bounds at once.
+			if maxTokens > minThinkingBudgetTokens {
+				t.Errorf("max_tokens=%d: thinking disabled, but a valid budget exists", maxTokens)
+			}
+			continue
+		}
+		if apiReq.Thinking.BudgetTokens < minThinkingBudgetTokens {
+			t.Errorf("max_tokens=%d: budget_tokens = %d, want >= %d (Anthropic minimum)",
+				maxTokens, apiReq.Thinking.BudgetTokens, minThinkingBudgetTokens)
+		}
+		if apiReq.Thinking.BudgetTokens >= apiReq.MaxTokens {
+			t.Errorf("max_tokens=%d: budget_tokens = %d, want < max_tokens",
+				maxTokens, apiReq.Thinking.BudgetTokens)
+		}
+	}
+}

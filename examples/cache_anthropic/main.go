@@ -32,7 +32,7 @@ func main() {
 
 	client, err := llm.NewClient(llm.Config{
 		Provider:  "anthropic",
-		Model:     "claude-sonnet-4-20250514",
+		Model:     "claude-sonnet-4-6",
 		APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
 		MaxTokens: 4096,
 		Timeout:   60 * time.Second,

@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-09-18
+
+### Added
+
+- **Mutation-audited test coverage for three previously unpinned invariants.**
+  Flipping each in production code left the entire suite green, so the guarantee
+  was documented but unenforced:
+  - the **TLS 1.2 floor** (`SafeHTTPClient` and `NewSafeHTTPClient`) — lowering it
+    to TLS 1.0 went unnoticed, despite "TLS 1.2+" being an advertised guarantee;
+  - the **redirect hop cap** — raising it from 10 to 1000 went unnoticed, leaving
+    clients walkable through an unbounded redirect chain;
+  - the Gemini **`TokensNotReported` sentinel** — initializing usage counters to
+    `0` instead of `-1` went unnoticed, collapsing "provider omitted usage" into
+    "this turn was free" and under-reporting accumulated spend.
+- Adversarial regression suites for every v0.7.6 fix
+  (`break_v076_test.go`, `provider/gemini/break_stopreason_internal_test.go`,
+  `provider/anthropic/break_thinking_internal_test.go`): hostile Gemini
+  candidates, a 68-case thinking-budget boundary sweep, concurrent retirement
+  lookups under `-race`, and negative/zero config values. Each suite is verified
+  non-vacuous by reverting its fix and confirming the tests go red — an audit
+  that caught the Gemini suite asserting only that `tool_use` is never invented
+  (which passes with the fix removed); it now also asserts that a real function
+  call *is* reported, across single, parallel, text-prefixed and thought-
+  prefixed turns on both the buffered and streaming paths.
+- Documented the Gemini adapter's `maxOutputTokens` padding for native thinking
+  models, which can make a response longer than the `MaxTokens` the caller set.
+- `RetiredModelReplacement` reports whether a model ID has been sunset by its
+  provider and names the registered replacement. Registry lookup is fail-closed,
+  so a retired ID now fails at dispatch with an actionable error
+  (`model %q was retired by its provider; use %q instead`) instead of the generic
+  "no reviewed capability metadata" message.
+
+### Changed
+
+- Removed seven Anthropic model IDs the provider no longer serves, each verified
+  as HTTP 404 against the live models endpoint: `claude-3-haiku-20240307`,
+  `claude-opus-4-0`, `claude-opus-4-1`, `claude-opus-4-1-20250805`,
+  `claude-opus-4-20250514`, `claude-sonnet-4-0`, and `claude-sonnet-4-20250514`.
+  `claude-sonnet-4-5`, `claude-opus-4-5` and `claude-haiku-4-5` remain registered
+  — they are unlisted aliases the API still resolves. Callers that need a retired
+  ID can re-add it with `RegisterModel`.
+
+### Fixed
+
+- **Gemini tool calls were silently dropped.** Gemini reports `finishReason:
+  "STOP"` even for a turn that requests a function call, so the adapter mapped it
+  to `end_turn`. The documented agentic loop (`for resp.StopReason == "tool_use"`)
+  never ran and callers saw an empty response with the tool call discarded. Both
+  the non-streaming (`parseResponse`) and streaming (`parseStream`) paths now
+  infer `tool_use` from the emitted function calls; `MAX_TOKENS` and other
+  terminal reasons are preserved, since a truncated turn is not a usable call.
+- **The `MaxTokens` floor now reaches every constructor.** `NewBatchClient` and
+  `NewModalityClient` applied the `Timeout` floor but skipped `MaxTokens`, and
+  the Anthropic batch encoder reuses the live request builder — so every batch
+  entry went out as `"max_tokens": 0` and was rejected exactly like the
+  single-request path. All three constructors now share one `applyConfigFloors`
+  normalizer, so a floor can no longer be added to one path and forgotten on the
+  others.
+- **`Config.MaxTokens` zero value produced invalid requests.** `MaxTokens: 8192`
+  existed only in `DefaultConfig()`, so a `Config` built as a struct literal — the
+  form the README and every example use — sent `max_tokens: 0` and Anthropic
+  rejected it with HTTP 400 (`max_tokens cannot be 0`). `NewClient` now applies a
+  `DefaultMaxTokens` floor alongside the existing `Timeout` floor, and
+  `DefaultConfig()` sources the same constant so the two cannot drift.
+- **Extended thinking rejected whenever `MaxTokens` was below the model
+  ceiling.** The Anthropic adapter clamped `thinking.budget_tokens` to the
+  model's registry ceiling but not to the request's own `max_tokens`, so
+  `ThinkingHigh` (65536) with `MaxTokens: 16000` sent `budget_tokens: 64000` and
+  the API rejected it with HTTP 400 (``max_tokens` must be greater than
+  `thinking.budget_tokens``). The budget is now also clamped to the effective
+  `max_tokens`, reserving a quarter of it for the visible answer, and respects
+  Anthropic's 1024-token minimum — when `max_tokens` is too small to satisfy
+  both bounds, thinking is disabled with a warning rather than sending a request
+  the API would reject.
+- `examples/cache_anthropic` requested `claude-sonnet-4-20250514`, retired by
+  Anthropic and returning HTTP 404; it now uses `claude-sonnet-4-6`, matching
+  `examples/streaming`.
+
 ## [0.7.5] - 2026-09-17
 
 ### Added

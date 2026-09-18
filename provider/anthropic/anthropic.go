@@ -267,6 +267,10 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 	c.parseStream(resp.Body, yield)
 }
 
+// minThinkingBudgetTokens is Anthropic's documented floor for
+// thinking.budget_tokens; the API rejects anything smaller.
+const minThinkingBudgetTokens = 1024
+
 func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, error) {
 	// Keep live and batch encoding consistent when reasoning is configured on
 	// the client rather than on each individual request.
@@ -502,10 +506,35 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		}
 	} else if req.ThinkingLevel != llm.ThinkingNone {
 		budget := llm.ThinkingBudgetTokens(req.ThinkingLevel, req.ThinkingBudget)
-		// Clamp budget to model's max output tokens — budget_tokens cannot
+		// Clamp budget to the model's max output tokens — budget_tokens cannot
 		// exceed max_tokens, which itself cannot exceed the model's limit.
 		if info, ok := llm.GetModelInfo(apiReq.Model); ok && info.MaxTokens > 0 {
 			budget = llm.ClampThinkingBudget("anthropic", apiReq.Model, budget, info.MaxTokens)
+		}
+		// Then clamp to THIS request's max_tokens. The registry ceiling is the
+		// model's limit, not the caller's budget: asking for ThinkingHigh
+		// (65536) with MaxTokens 16000 otherwise sent budget_tokens 64000 and
+		// Anthropic rejected it ("max_tokens must be greater than
+		// thinking.budget_tokens"). Reserve a slice of the budget for the
+		// visible answer, so enabling thinking never starves the output.
+		if apiReq.MaxTokens > 0 && budget >= apiReq.MaxTokens {
+			budget = llm.ClampThinkingBudget(
+				"anthropic", apiReq.Model, budget, apiReq.MaxTokens-apiReq.MaxTokens/4,
+			)
+		}
+		// Anthropic also enforces a floor: budget_tokens must be >= 1024. A
+		// max_tokens small enough that the reserve drops below it cannot carry
+		// thinking at all, so disable thinking rather than send a request the
+		// API rejects from the other direction.
+		if budget < minThinkingBudgetTokens {
+			if apiReq.MaxTokens > minThinkingBudgetTokens {
+				budget = minThinkingBudgetTokens
+			} else {
+				slog.Warn("disabling thinking: max_tokens too small for the minimum budget",
+					"provider", "anthropic", "model", apiReq.Model,
+					"max_tokens", apiReq.MaxTokens, "min_budget", minThinkingBudgetTokens)
+				return apiReq, nil
+			}
 		}
 		apiReq.Thinking = &anthropicThinking{
 			Type:         "enabled",

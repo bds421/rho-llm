@@ -45,9 +45,7 @@ func NewModalityClient(cfg Config) (ModalityClient, error) {
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("model is required")
 	}
-	if cfg.Timeout <= 0 {
-		cfg.Timeout = DefaultTimeout
-	}
+	cfg = applyConfigFloors(cfg)
 	if _, known := PresetFor(cfg.Provider); !known && cfg.BaseURL == "" {
 		return nil, fmt.Errorf("unknown provider %q: set BaseURL for custom providers", cfg.Provider)
 	}
@@ -118,9 +116,7 @@ func (client *capabilityValidatedModalityClient) TranscribeAudio(
 func NewBatchClient(cfg Config) (BatchClient, error) {
 	cfg.Model = configuredModel(cfg)
 
-	if cfg.Timeout <= 0 {
-		cfg.Timeout = DefaultTimeout
-	}
+	cfg = applyConfigFloors(cfg)
 
 	preset, known := PresetFor(cfg.Provider)
 	if !known {
@@ -144,6 +140,32 @@ func NewBatchClient(cfg Config) (BatchClient, error) {
 }
 
 // newSingleClient creates a single (non-pooled) client based on protocol routing.
+// applyConfigFloors normalizes zero-valued tunables that are not "let the
+// provider decide" signals but invalid requests. Callers routinely build a
+// Config as a struct literal — the form the README and every example use —
+// which never passes through DefaultConfig(), so every constructor must apply
+// these before handing the config to an adapter.
+//
+// Timeout: a zero value means an unbounded HTTP client. This branch is
+// defence in depth — NewSafeHTTPClient floors the timeout again, and every
+// adapter builds its transport through it, so mutating this branch alone
+// cannot be observed by a test. It is kept so cfg.Timeout is truthful to
+// anything that reads the config itself rather than the resulting client.
+// MaxTokens: several providers reject max_tokens 0 outright (Anthropic returns
+// HTTP 400 "max_tokens cannot be 0"), including through the batch API, whose
+// encoder reuses the live request builder. Unlike Timeout, nothing downstream
+// re-applies this one — it is load-bearing, and pinned by
+// TestNewClientAppliesMaxTokensFloor.
+func applyConfigFloors(cfg Config) Config {
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultTimeout
+	}
+	if cfg.MaxTokens == 0 {
+		cfg.MaxTokens = DefaultMaxTokens
+	}
+	return cfg
+}
+
 func newSingleClient(cfg Config) (Client, error) {
 	// Resolve model alias to its full identifier
 	cfg.Model = configuredModel(cfg)
@@ -158,11 +180,7 @@ func newSingleClient(cfg Config) (Client, error) {
 		return nil, fmt.Errorf("Temperature must be >= 0, got %f", *cfg.Temperature)
 	}
 
-	// Apply timeout floor — prevents unbounded HTTP clients when callers
-	// construct Config manually without calling DefaultConfig().
-	if cfg.Timeout <= 0 {
-		cfg.Timeout = DefaultTimeout
-	}
+	cfg = applyConfigFloors(cfg)
 
 	// Unknown providers must specify a BaseURL for custom endpoints.
 	if _, known := PresetFor(cfg.Provider); !known && cfg.BaseURL == "" {

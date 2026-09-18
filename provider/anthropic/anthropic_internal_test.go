@@ -15,8 +15,11 @@ func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
 		providerName: "anthropic",
 	}
 
+	// max_tokens must leave room for the clamped budget: Anthropic requires
+	// budget_tokens < max_tokens, so a small max_tokens would (correctly)
+	// clamp the budget further and mask what this test is checking.
 	req := llm.Request{
-		MaxTokens:     8192,
+		MaxTokens:     128000,
 		ThinkingLevel: llm.ThinkingXHigh,
 		Messages: []llm.Message{
 			llm.NewTextMessage(llm.RoleUser, "think hard"),
@@ -55,8 +58,9 @@ func TestBuildRequestThinkingBudgetNotClampedWhenWithinLimit(t *testing.T) {
 		providerName: "anthropic",
 	}
 
+	// max_tokens above the budget, so only the model-ceiling rule is in play.
 	req := llm.Request{
-		MaxTokens:     8192,
+		MaxTokens:     128001,
 		ThinkingLevel: llm.ThinkingXHigh,
 		Messages: []llm.Message{
 			llm.NewTextMessage(llm.RoleUser, "think hard"),

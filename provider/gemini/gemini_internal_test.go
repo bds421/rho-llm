@@ -535,3 +535,141 @@ func TestBuildRequestCustomThinkingBudget(t *testing.T) {
 		t.Errorf("ThinkingLevel = %q, want empty (custom budget overrides)", tc.ThinkingLevel)
 	}
 }
+
+// TestParseResponseFunctionCallReportsToolUseStopReason verifies that a
+// candidate carrying a functionCall part is reported as StopReason
+// "tool_use", even though Gemini's wire finishReason is the generic "STOP".
+//
+// Gemini does not emit a distinct tool-calling finish reason the way OpenAI
+// ("tool_calls") and Anthropic ("tool_use") do — a turn that requests a
+// function call still finishes with "STOP". Mapping that verbatim stranded
+// the documented agentic loop (`for resp.StopReason == "tool_use"`), which
+// never ran: callers saw an empty Content and silently dropped the tool call.
+func TestParseResponseFunctionCallReportsToolUseStopReason(t *testing.T) {
+	raw := `{
+		"candidates": [{
+			"content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Berlin"}}}]},
+			"finishReason": "STOP"
+		}]
+	}`
+
+	var apiResp geminiResponse
+	if err := json.Unmarshal([]byte(raw), &apiResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	c := &Client{config: llm.Config{Model: "gemini-2.5-flash"}, providerName: "gemini"}
+	resp := c.parseResponse(&apiResp, "gemini-2.5-flash")
+
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.StopReason != "tool_use" {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, "tool_use")
+	}
+	// The untranslated provider value must still be visible for debugging.
+	if resp.RawStopReason != "STOP" {
+		t.Errorf("RawStopReason = %q, want %q", resp.RawStopReason, "STOP")
+	}
+}
+
+// TestParseResponseTextOnlyKeepsEndTurn guards the inverse: a plain text
+// turn must not be reclassified as tool_use by the fix above.
+func TestParseResponseTextOnlyKeepsEndTurn(t *testing.T) {
+	raw := `{
+		"candidates": [{
+			"content": {"parts": [{"text": "It is sunny."}]},
+			"finishReason": "STOP"
+		}]
+	}`
+
+	var apiResp geminiResponse
+	if err := json.Unmarshal([]byte(raw), &apiResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	c := &Client{config: llm.Config{Model: "gemini-2.5-flash"}, providerName: "gemini"}
+	resp := c.parseResponse(&apiResp, "gemini-2.5-flash")
+
+	if resp.StopReason != "end_turn" {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, "end_turn")
+	}
+}
+
+// TestParseResponseMaxTokensNotMaskedByToolCall verifies that a truncated
+// turn keeps max_tokens even when a partial functionCall part is present —
+// the caller must learn the turn was cut off, not loop on it as a tool call.
+func TestParseResponseMaxTokensNotMaskedByToolCall(t *testing.T) {
+	raw := `{
+		"candidates": [{
+			"content": {"parts": [{"functionCall": {"name": "get_weather", "args": {}}}]},
+			"finishReason": "MAX_TOKENS"
+		}]
+	}`
+
+	var apiResp geminiResponse
+	if err := json.Unmarshal([]byte(raw), &apiResp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	c := &Client{config: llm.Config{Model: "gemini-2.5-flash"}, providerName: "gemini"}
+	resp := c.parseResponse(&apiResp, "gemini-2.5-flash")
+
+	if resp.StopReason != "max_tokens" {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, "max_tokens")
+	}
+}
+
+// TestParseStreamFunctionCallReportsToolUseStopReason verifies the streaming
+// counterpart of TestParseResponseFunctionCallReportsToolUseStopReason: the
+// terminal EventDone must report StopReason "tool_use" when the stream
+// carried a functionCall, even though Gemini's finishReason is "STOP".
+func TestParseStreamFunctionCallReportsToolUseStopReason(t *testing.T) {
+	sseData := "data: " + `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"location":"Berlin"}}}]}}]}` + "\n\n" +
+		"data: " + `{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}` + "\n\n"
+
+	c := &Client{providerName: "gemini"}
+	var events []llm.StreamEvent
+	c.parseStream(strings.NewReader(sseData), func(ev llm.StreamEvent, err error) bool {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		events = append(events, ev)
+		return true
+	})
+
+	if len(events) == 0 {
+		t.Fatal("no events emitted")
+	}
+	done := events[len(events)-1]
+	if done.Type != llm.EventDone {
+		t.Fatalf("last event = %v, want EventDone", done.Type)
+	}
+	if done.StopReason != "tool_use" {
+		t.Errorf("EventDone.StopReason = %q, want %q", done.StopReason, "tool_use")
+	}
+	if done.RawStopReason != "STOP" {
+		t.Errorf("EventDone.RawStopReason = %q, want %q", done.RawStopReason, "STOP")
+	}
+}
+
+// TestParseStreamTextOnlyKeepsEndTurn guards the inverse for streaming: a
+// stream with no tool call must still report end_turn.
+func TestParseStreamTextOnlyKeepsEndTurn(t *testing.T) {
+	sseData := "data: " + `{"candidates":[{"content":{"parts":[{"text":"hi"}],"role":"model"},"finishReason":"STOP"}]}` + "\n\n"
+
+	c := &Client{providerName: "gemini"}
+	var events []llm.StreamEvent
+	c.parseStream(strings.NewReader(sseData), func(ev llm.StreamEvent, err error) bool {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		events = append(events, ev)
+		return true
+	})
+
+	done := events[len(events)-1]
+	if done.StopReason != "end_turn" {
+		t.Errorf("EventDone.StopReason = %q, want %q", done.StopReason, "end_turn")
+	}
+}

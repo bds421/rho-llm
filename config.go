@@ -287,6 +287,13 @@ type Config struct {
 // calling DefaultConfig().
 const DefaultTimeout = 120 * time.Second
 
+// DefaultMaxTokens is applied when Config.MaxTokens is zero (the int zero value).
+// Several providers reject a request with max_tokens 0 outright (Anthropic
+// returns HTTP 400 "max_tokens cannot be 0"), so callers that build a Config
+// as a struct literal — without calling DefaultConfig() — would otherwise send
+// an unusable request.
+const DefaultMaxTokens = 8192
+
 // DefaultMaxRetries is the default cap on retry/rotation iterations in PooledClient.
 // Prevents pathological retry storms with large key pools.
 const DefaultMaxRetries = 10
@@ -321,7 +328,7 @@ func DefaultConfig() Config {
 		// a literal here silently drifts from defaultModels every time the
 		// flagship moves (it had been left on claude-sonnet-4-6).
 		Model:            GetDefaultModel("anthropic"),
-		MaxTokens:        8192,
+		MaxTokens:        DefaultMaxTokens,
 		ThinkingLevel:    ThinkingNone,
 		Timeout:          DefaultTimeout,
 		AuthHeader:       "Bearer",
