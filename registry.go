@@ -57,9 +57,10 @@ func RetiredModelReplacement(model string) (string, bool) {
 // modelRegistry maps model ID to its metadata. Built-in entries are written
 // at init; RegisterModel extends/overrides at runtime under registryMu.
 var modelRegistry = map[string]ModelInfo{
-	// Anthropic — from platform.claude.com/docs (2026-08-06)
+	// Anthropic — from platform.claude.com/docs (2026-09-19)
 	// Cache pricing: write = 1.25× input, read = 0.1× input (per Anthropic docs)
 	// Claude 5 family (no minor segment in major-version IDs).
+	"claude-fable-5-1":           {ID: "claude-fable-5-1", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheReadPricePer1M: 0.25, SupportsThinking: true, Label: "Fable 5.1"},
 	"claude-fable-5":             {ID: "claude-fable-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheReadPricePer1M: 1.00, SupportsThinking: true, Label: "Fable 5"},
 	"claude-opus-5":              {ID: "claude-opus-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 5"},
 	"claude-sonnet-5":            {ID: "claude-sonnet-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheReadPricePer1M: 0.20, SupportsThinking: true, Label: "Sonnet 5"},
@@ -96,8 +97,10 @@ var modelRegistry = map[string]ModelInfo{
 	"grok-3":                            {ID: "grok-3", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 3"},
 	"grok-3-mini":                       {ID: "grok-3-mini", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 3 Mini"},
 
-	// Gemini — from ai.google.dev/gemini-api/docs/pricing and /latest-model (2026-07-23)
+	// Gemini — from ai.google.dev/gemini-api/docs/pricing and /latest-model (2026-09-19)
 	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
+	"gemini-3.8-flash":       {ID: "gemini-3.8-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.8 Flash"},
+	"gemini-3.7-flash":       {ID: "gemini-3.7-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.7 Flash"},
 	"gemini-3.6-flash":       {ID: "gemini-3.6-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 7.50, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.6 Flash"},
 	"gemini-3.5-flash":       {ID: "gemini-3.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 9.00, CacheReadPricePer1M: 0.15, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.5 Flash"},
 	"gemini-3.5-flash-lite":  {ID: "gemini-3.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.03, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.5 Flash Lite"},
@@ -320,6 +323,7 @@ var defaultModels = map[string]string{
 
 var availableModels = map[string][]string{
 	"anthropic": {
+		"claude-fable-5-1",
 		"claude-fable-5",
 		"claude-opus-5",
 		"claude-sonnet-5",
@@ -353,6 +357,8 @@ var availableModels = map[string][]string{
 		"grok-3-mini",
 	},
 	"gemini": {
+		"gemini-3.8-flash",
+		"gemini-3.7-flash",
 		"gemini-3.6-flash",
 		"gemini-3.5-flash",
 		"gemini-3.5-flash-lite",

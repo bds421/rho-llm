@@ -380,7 +380,22 @@ func supportsSamplingTemperature(info ModelInfo) bool {
 		(info.Thinking || info.ResponsesAPI) {
 		return false
 	}
-	// Google deprecated and ignores sampling controls beginning with these July
-	// 2026 GA models; future generations reject them outright.
-	return info.ID != "gemini-3.6-flash" && info.ID != "gemini-3.5-flash-lite"
+	// Google deprecated and ignores sampling controls beginning with the July
+	// 2026 GA models, and later generations reject them outright. An explicit
+	// list is used rather than a version comparison so a newly registered model
+	// is a deliberate decision: adding a Gemini row without deciding this is a
+	// bug, which is why registryGeminiSamplingDecided pins it.
+	_, denied := geminiWithoutSamplingControls[info.ID]
+	return !denied
+}
+
+// geminiWithoutSamplingControls are the Gemini IDs whose API rejects or ignores
+// temperature/top_p/top_k. Google removed the controls from the July 2026 GA
+// models onward, so every Gemini model registered after gemini-3.5-flash-lite
+// belongs here unless Google documents otherwise.
+var geminiWithoutSamplingControls = map[string]struct{}{
+	"gemini-3.5-flash-lite": {},
+	"gemini-3.6-flash":      {},
+	"gemini-3.7-flash":      {},
+	"gemini-3.8-flash":      {},
 }

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-09-19
+
+Ships the unreleased 0.7.6 work (never tagged publicly) together with a model
+registry refresh. See the 0.7.6 section below for the Gemini tool-call,
+thinking-budget, max_tokens-floor and retired-model changes it contains.
+
+### Added
+
+- **Gemini 3.8 Flash and 3.7 Flash** (`gemini-3.8-flash`, `gemini-3.7-flash`).
+  Both are live on the Gemini API but were missing from the registry, so a
+  request naming one failed with "no reviewed capability metadata". Verified
+  against ai.google.dev/gemini-api/docs/pricing and the API's own
+  `models/{id}` metadata (2026-09-19): 1,048,576-token context, 65,536 max
+  output, thinking supported, $0.75 in / $3.75 out per 1M tokens with context
+  caching at $0.075 (promotional pricing through 2026-12-31; it doubles to
+  $1.50 / $7.50 / $0.15 on 2027-01-01 — revisit then).
+- **Claude Fable 5.1** (`claude-fable-5-1`), Anthropic's most capable widely
+  released model. 1M context, 128K max output, $10 in / $50 out, cache reads at
+  $0.25/MTok. Same tier and per-token price as Fable 5.
+- `geminiWithoutSamplingControls`, replacing a hardcoded two-model comparison
+  in `supportsSamplingTemperature`. Google removed sampling controls from the
+  July 2026 GA models onward, and the old check said so in a comment while
+  only naming `gemini-3.6-flash` and `gemini-3.5-flash-lite` — so 3.7 and 3.8
+  would have advertised a temperature parameter their endpoints reject.
+- Guard tests (`registry_gemini_sampling_internal_test.go`) that fail when a
+  Gemini chat model is registered without a sampling-controls decision, when
+  the deny list names an unregistered ID, or when the list stops driving
+  `supportsSamplingTemperature`. Verified non-vacuous by removing
+  `gemini-3.8-flash` from the list and confirming the suite goes red.
+
+### Changed
+
+- Refreshed the Anthropic and Gemini registry snapshot dates to 2026-09-19.
+
 ## [0.7.6] - 2026-09-18
 
 ### Added
