@@ -292,7 +292,7 @@ func protocolCapabilityEnvelope(protocol string) CapabilitySet {
 		return Capabilities(
 			CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput,
 			CapabilityVision, CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature,
-			CapabilityEmbeddings, CapabilityImageGeneration, CapabilityBatch,
+			CapabilityEmbeddings, CapabilityImageGeneration, CapabilityBatch, CapabilityTranscription,
 		)
 	case "openai_responses":
 		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput, CapabilityVision, CapabilityBatch, CapabilityReasoning)
@@ -350,7 +350,8 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 		set |= Capabilities(CapabilityVision, CapabilityDocumentInput, CapabilityBatch)
 	case "gemini":
 		// Multimodal chat + batch; dedicated embedding/image models set their own bits.
-		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch)
+		// Gemini chat models accept audio natively, so they transcribe via generateContent.
+		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch, CapabilityTranscription)
 	case "openai":
 		// Chat Completions / Responses encode vision + structured output; PDF rides as
 		// an image_url data URI on openai_compat (document capability is model-side).

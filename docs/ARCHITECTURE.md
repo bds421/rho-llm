@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of September 2026 (v0.7.6).
+> **Status:** Reflects the current implementation as of October 2026 (v0.8.0).
 
 ---
 
@@ -285,6 +285,12 @@ NewModalityClient(cfg)
 transcription without placing any OpenAI endpoint or format vocabulary in the
 root package. The OpenAI-compatible driver is registered next to its chat
 driver and implements those operations on the same concrete `openaicompat.Client`.
+The Gemini driver implements embeddings, image generation and transcription;
+transcription sends the audio as `inlineData` to `generateContent` with a
+verbatim-transcript instruction, because Gemini chat models are natively
+audio-capable and Google has no separate transcription endpoint on this API.
+Audio container sniffing (`AudioMediaTypeFromSignature`) lives in the root
+package so every driver applies the same declared-vs-actual media-type check.
 Each constructed modality client retains one `SafeHTTPClient` until `Close`, so
 workers reuse connections instead of constructing a transport per dispatch.
 

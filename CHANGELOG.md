@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-06
+
+### Added
+
+- **Gemini transcription.** `TranscribeAudio` now works on the Gemini protocol:
+  audio is sent inline to `generateContent` with a verbatim-transcript
+  instruction, so any Gemini chat model transcribes with the existing API key.
+  Gemini chat models advertise `CapabilityTranscription` (dedicated embedding and
+  image models do not). Input is validated before dispatch: supported media type
+  (WAV, MP3, AIFF, AAC, OGG, FLAC, WebM, MP4/M4A), declared type must match the
+  byte signature, 14 MiB inline cap under Gemini's 20 MB request limit, and a
+  `de`/`de-AT` style language tag (anything else is rejected rather than
+  interpolated into the instruction). Thought parts are dropped; a non-`STOP`
+  finish with no text is an error, while silence returns an empty transcript.
+  Verified live against `gemini-3.5-flash-lite` (German audio, 1.1–1.5 s).
+- **`TranscriptionRequest.Prompt`**: an optional vocabulary/context hint, bounded
+  to `MaxTranscriptionPromptRunes` (1000) runes and valid UTF-8 for every
+  provider. Gemini places it after a guard sentence in the instruction;
+  OpenAI-compatible providers forward it as Whisper's `prompt` field. Live, the
+  hint fixed dialect words a bare transcription got wrong ("dünne" heard as
+  "Döner").
+- **`AudioMediaTypeFromSignature`** in the root package, shared by the Gemini and
+  OpenAI-compatible drivers. It now also recognizes ADTS AAC (previously
+  misclassified as MP3) and AIFF/AIFC.
+
 ## [0.7.7] - 2026-09-19
 
 Ships the unreleased 0.7.6 work (never tagged publicly) together with a model

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // ModalityClient is the provider-neutral synchronous interface for non-chat
@@ -98,6 +99,10 @@ type TranscriptionRequest struct {
 	Audio     []byte
 	MediaType string
 	Language  string
+	// Prompt optionally primes the transcriber with context or vocabulary
+	// (names, dialect words, domain terms) to improve spelling. It is a hint,
+	// never content to transcribe; at most MaxTranscriptionPromptRunes runes.
+	Prompt string
 }
 
 // ValidateEmbeddingRequest proves that req is supported by reviewed capability
@@ -164,6 +169,12 @@ func ValidateSpeechRequest(cfg Config, req SpeechRequest) error {
 func ValidateTranscriptionRequest(cfg Config, req TranscriptionRequest) error {
 	if len(req.Audio) == 0 {
 		return fmt.Errorf("llm: transcription requires audio data")
+	}
+	if utf8.RuneCountInString(req.Prompt) > MaxTranscriptionPromptRunes {
+		return fmt.Errorf("llm: transcription prompt exceeds %d runes", MaxTranscriptionPromptRunes)
+	}
+	if !utf8.ValidString(req.Prompt) {
+		return fmt.Errorf("llm: transcription prompt is not valid UTF-8")
 	}
 	if err := RequireCapabilitiesForModel(cfg, req.Model, CapabilityTranscription); err != nil {
 		return err

@@ -702,8 +702,8 @@ sess := llm.NewSession(mock)                 // drive Sessions/handoff in tests,
 
 Non-chat operations use the same registered-adapter pattern as chat.
 **OpenAI-compatible** drivers cover embeddings, image generation, speech, and
-transcription; **Gemini** covers embeddings and image generation (speech and
-transcription are unsupported). Construct one `ModalityClient` for an exact
+transcription; **Gemini** covers embeddings, image generation and transcription
+(speech synthesis is unsupported). Construct one `ModalityClient` for an exact
 deployment and reuse it for the worker lifetime; its safe HTTP transport,
 connection pool, retry policy, proxy policy, bounded reads, caller cancellation,
 and classified errors are shared across operations:
@@ -738,7 +738,25 @@ defer transcriptionClient.Close()
 text, _ := transcriptionClient.TranscribeAudio(ctx, llm.TranscriptionRequest{
     Model: "whisper-1", Audio: bytes, MediaType: "audio/mpeg",
 })
+
+// Gemini chat models are natively audio-capable: transcription runs through
+// generateContent with the same API key, no separate speech service.
+geminiCfg := llm.Config{Provider: "gemini", Model: "gemini-3.5-flash-lite", APIKey: key}
+geminiSTT, _ := llm.NewModalityClient(geminiCfg)
+defer geminiSTT.Close()
+transcript, _ := geminiSTT.TranscribeAudio(ctx, llm.TranscriptionRequest{
+    Audio: webm, MediaType: "audio/webm", Language: "de-AT",
+    // Optional vocabulary/context hint (Whisper `prompt` on OpenAI-compatible).
+    Prompt: "Faschierter Braten, Weckerl, Kraut",
+})
 ```
+
+`TranscriptionRequest.Prompt` is a spelling hint of at most
+`MaxTranscriptionPromptRunes` runes, never content to transcribe. Gemini accepts
+WAV, MP3, AIFF, AAC, OGG, FLAC, WebM and MP4/M4A inline up to 14 MiB (its 20 MB
+request ceiling after base64); the declared media type must match the bytes'
+signature (`llm.AudioMediaTypeFromSignature`), and `Language` must be a tag such
+as `de` or `de-AT`.
 
 Exact image count, geometry, output media type, speech voice, and transcription
 language are application choices. Rho neither selects preferred values nor
