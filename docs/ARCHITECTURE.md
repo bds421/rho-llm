@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of October 2026 (v0.8.0).
+> **Status:** Reflects the current implementation as of October 2026 (v0.9.0).
 
 ---
 
@@ -291,6 +291,11 @@ verbatim-transcript instruction, because Gemini chat models are natively
 audio-capable and Google has no separate transcription endpoint on this API.
 Audio container sniffing (`AudioMediaTypeFromSignature`) lives in the root
 package so every driver applies the same declared-vs-actual media-type check.
+Dedicated Gemini transcription models (`gemini-3.5-transcribe`) take audio only;
+the driver detects them from registry capabilities (transcription without chat)
+and moves language and `Vocabulary` into `audioTranscriptionConfig`. On the
+OpenAI-compatible adapter, xAI is special-cased to its `/stt` endpoint with
+`keyterm` fields.
 Each constructed modality client retains one `SafeHTTPClient` until `Close`, so
 workers reuse connections instead of constructing a transport per dispatch.
 

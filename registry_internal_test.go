@@ -60,7 +60,8 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 		// participate in chat thinking controls.
 		isGeminiModalityOnly := info.Capabilities != 0 &&
 			!info.Capabilities.Supports(CapabilityChat) &&
-			(info.Capabilities.Supports(CapabilityEmbeddings) || info.Capabilities.Supports(CapabilityImageGeneration))
+			(info.Capabilities.Supports(CapabilityEmbeddings) || info.Capabilities.Supports(CapabilityImageGeneration) ||
+				info.Capabilities.Supports(CapabilityTranscription))
 
 		// 5. Gemini 2.5 chat models think intrinsically (Thinking=true, not SupportsThinking)
 		if strings.HasPrefix(id, "gemini-2.5") && !isGeminiModalityOnly {
@@ -101,7 +102,8 @@ func TestThoughtSignatureFlags(t *testing.T) {
 	for id, info := range modelRegistry {
 		isGeminiModalityOnly := info.Capabilities != 0 &&
 			!info.Capabilities.Supports(CapabilityChat) &&
-			(info.Capabilities.Supports(CapabilityEmbeddings) || info.Capabilities.Supports(CapabilityImageGeneration))
+			(info.Capabilities.Supports(CapabilityEmbeddings) || info.Capabilities.Supports(CapabilityImageGeneration) ||
+				info.Capabilities.Supports(CapabilityTranscription))
 		isGemini3Chat := strings.HasPrefix(id, "gemini-3") && !isGeminiModalityOnly
 		if isGemini3Chat && !info.ThoughtSignature {
 			t.Errorf("Model %s (Gemini 3.x chat) should have ThoughtSignature=true", id)

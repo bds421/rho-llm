@@ -38,9 +38,12 @@ func (modalityDriver) ValidateSpeechRequest(llm.Config, llm.SpeechRequest) error
 	return fmt.Errorf("gemini: speech synthesis is not supported")
 }
 
-func (modalityDriver) ValidateTranscriptionRequest(_ llm.Config, req llm.TranscriptionRequest) error {
+func (modalityDriver) ValidateTranscriptionRequest(cfg llm.Config, req llm.TranscriptionRequest) error {
 	if _, err := geminiAudioMimeType(req.MediaType); err != nil {
 		return err
+	}
+	if isDedicatedTranscriptionModel(transcriptionModel(cfg, req)) && strings.TrimSpace(req.Prompt) != "" {
+		return fmt.Errorf("gemini: dedicated transcription models take no free-text prompt; use Vocabulary")
 	}
 	if len(req.Audio) > maxInlineTranscriptionBytes {
 		return fmt.Errorf("gemini: transcription audio is %d bytes; inline limit is %d", len(req.Audio), maxInlineTranscriptionBytes)
@@ -255,24 +258,34 @@ func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionReque
 	if err != nil {
 		return "", err
 	}
-	model := req.Model
-	if strings.TrimSpace(model) == "" {
-		model = c.config.Model
-	}
-	model = llm.ResolveModelAlias(strings.TrimSpace(model))
+	model := transcriptionModel(c.config, req)
 	endpoint := fmt.Sprintf("%s/%s:generateContent", c.baseURL, url.PathEscape(model))
-	body, err := json.Marshal(map[string]any{
-		"contents": []map[string]any{{
-			"role": "user",
-			"parts": []map[string]any{
-				{"text": transcriptionInstruction(req.Language, req.Prompt)},
-				{"inlineData": map[string]any{
-					"mimeType": mimeType,
-					"data":     base64.StdEncoding.EncodeToString(req.Audio),
-				}},
-			},
-		}},
-	})
+	audioPart := map[string]any{"inlineData": map[string]any{
+		"mimeType": mimeType,
+		"data":     base64.StdEncoding.EncodeToString(req.Audio),
+	}}
+	payload := map[string]any{}
+	if isDedicatedTranscriptionModel(model) {
+		// Dedicated transcription models accept audio only; hints travel in
+		// audioTranscriptionConfig instead of an instruction.
+		payload["contents"] = []map[string]any{{"role": "user", "parts": []map[string]any{audioPart}}}
+		config := map[string]any{}
+		if req.Language != "" {
+			config["languageCodes"] = []string{req.Language}
+		}
+		if vocabulary := trimmedTerms(req.Vocabulary); len(vocabulary) > 0 {
+			config["customVocabulary"] = vocabulary
+		}
+		if len(config) > 0 {
+			payload["generationConfig"] = map[string]any{"audioTranscriptionConfig": config}
+		}
+	} else {
+		payload["contents"] = []map[string]any{{"role": "user", "parts": []map[string]any{
+			{"text": transcriptionInstruction(req.Language, req.Prompt, req.Vocabulary)},
+			audioPart,
+		}}}
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
@@ -294,16 +307,54 @@ func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionReque
 		if part.Thought {
 			continue
 		}
+		if part.AudioTranscription != nil {
+			if transcript.Len() > 0 && part.AudioTranscription.Text != "" {
+				transcript.WriteString(" ")
+			}
+			transcript.WriteString(part.AudioTranscription.Text)
+			continue
+		}
 		transcript.WriteString(part.Text)
 	}
-	text := strings.TrimSpace(transcript.String())
-	if text == "" && candidate.FinishReason != "" && candidate.FinishReason != "STOP" {
+	// Any finish other than a normal stop means the transcript is cut off or
+	// withheld. Returning the partial text would make a truncated transcript
+	// indistinguishable from a complete one.
+	if candidate.FinishReason != "" && candidate.FinishReason != "STOP" {
 		return "", fmt.Errorf("gemini: transcription stopped with %s", candidate.FinishReason)
 	}
-	return text, nil
+	return strings.TrimSpace(transcript.String()), nil
 }
 
-func transcriptionInstruction(language, prompt string) string {
+// transcriptionModel resolves the model a transcription request targets.
+func transcriptionModel(cfg llm.Config, req llm.TranscriptionRequest) string {
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = strings.TrimSpace(cfg.Model)
+	}
+	return llm.ResolveModelAlias(model)
+}
+
+// isDedicatedTranscriptionModel reports a Gemini speech-to-text model (audio
+// in, transcript out, no free-text prompt) as opposed to a multimodal chat
+// model asked to transcribe.
+func isDedicatedTranscriptionModel(model string) bool {
+	if info, ok := llm.GetModelInfo(model); ok && info.Capabilities != 0 {
+		return info.Capabilities.Supports(llm.CapabilityTranscription) && !info.Capabilities.Supports(llm.CapabilityChat)
+	}
+	return strings.Contains(model, "-transcribe")
+}
+
+func trimmedTerms(terms []string) []string {
+	out := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if term = strings.TrimSpace(term); term != "" {
+			out = append(out, term)
+		}
+	}
+	return out
+}
+
+func transcriptionInstruction(language, prompt string, vocabulary []string) string {
 	var instruction strings.Builder
 	instruction.WriteString("Transcribe the speech in the attached audio verbatim. ")
 	instruction.WriteString("Output only the transcript text: no preamble, labels, timestamps, translation or commentary. ")
@@ -312,6 +363,9 @@ func transcriptionInstruction(language, prompt string) string {
 		instruction.WriteString(" The spoken language is ")
 		instruction.WriteString(language)
 		instruction.WriteString(".")
+	}
+	if terms := llm.TranscriptionVocabularyHint(vocabulary); terms != "" {
+		prompt = strings.TrimSpace(strings.TrimSpace(prompt) + "\nVocabulary: " + terms)
 	}
 	if prompt = strings.TrimSpace(prompt); prompt != "" {
 		instruction.WriteString("\n\nContext and vocabulary that may occur, for spelling only. ")

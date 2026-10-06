@@ -1,11 +1,34 @@
 package llm
 
-import "bytes"
+import (
+	"bytes"
+	"strings"
+)
 
 // MaxTranscriptionPromptRunes bounds TranscriptionRequest.Prompt. A prompt is a
 // short vocabulary/context hint, not a document; providers cap it (Whisper
 // keeps only the final 224 tokens) and an unbounded field invites abuse.
 const MaxTranscriptionPromptRunes = 1000
+
+// MaxTranscriptionVocabularyTerms and MaxTranscriptionVocabularyTermRunes bound
+// TranscriptionRequest.Vocabulary. Gemini Transcribe accepts up to 1,000 terms
+// (best results at 100 or fewer); a term is a word or short phrase.
+const (
+	MaxTranscriptionVocabularyTerms     = 1000
+	MaxTranscriptionVocabularyTermRunes = 100
+)
+
+// TranscriptionVocabularyHint renders vocabulary as one line for adapters that
+// take free text (Whisper prompt, chat-model instruction).
+func TranscriptionVocabularyHint(vocabulary []string) string {
+	terms := make([]string, 0, len(vocabulary))
+	for _, term := range vocabulary {
+		if term = strings.TrimSpace(term); term != "" {
+			terms = append(terms, term)
+		}
+	}
+	return strings.Join(terms, ", ")
+}
 
 // AudioMediaTypeFromSignature sniffs the container of an audio payload from
 // its leading bytes and returns the canonical media type, or "" when the bytes

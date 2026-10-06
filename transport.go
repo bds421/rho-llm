@@ -126,7 +126,11 @@ func ErrorFromResponse(provider string, resp *http.Response, cfg Config) error {
 	if readErr != nil {
 		slog.Warn("failed to read error response body", "provider", provider, "error", readErr)
 	}
-	return NewAPIErrorFromStatusWithLimit(provider, resp.StatusCode, string(body), cfg.EffectiveMaxErrorMessageLen())
+	// A provider may echo the request credential in its error body; scrub the
+	// deployment's own key and BaseURL secrets before the text becomes an error
+	// that callers log or show.
+	message := redactProfileSecrets(string(body), cfg.APIKey, cfg.BaseURL)
+	return NewAPIErrorFromStatusWithLimit(provider, resp.StatusCode, message, cfg.EffectiveMaxErrorMessageLen())
 }
 
 // DecodeJSONResponse decodes a 2xx JSON response body into out, bounded by cfg's

@@ -204,12 +204,19 @@ type geminiContent struct {
 }
 
 type geminiPart struct {
-	Text             string                  `json:"text,omitempty"`
-	Thought          bool                    `json:"thought,omitempty"`
-	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
-	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
-	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
-	ThoughtSignature string                  `json:"thoughtSignature,omitempty"` // Gemini 3: part-level thought signature
+	Text    string `json:"text,omitempty"`
+	Thought bool   `json:"thought,omitempty"`
+	// AudioTranscription carries the transcript from dedicated transcription
+	// models (gemini-3.5-transcribe), which do not use the text field.
+	AudioTranscription *geminiAudioTranscription `json:"audioTranscription,omitempty"`
+	InlineData         *geminiInlineData         `json:"inlineData,omitempty"`
+	FunctionCall       *geminiFunctionCall       `json:"functionCall,omitempty"`
+	FunctionResponse   *geminiFunctionResponse   `json:"functionResponse,omitempty"`
+	ThoughtSignature   string                    `json:"thoughtSignature,omitempty"` // Gemini 3: part-level thought signature
+}
+
+type geminiAudioTranscription struct {
+	Text string `json:"text"`
 }
 
 type geminiInlineData struct {

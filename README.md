@@ -751,6 +751,19 @@ transcript, _ := geminiSTT.TranscribeAudio(ctx, llm.TranscriptionRequest{
 })
 ```
 
+For dedicated speech-to-text, `gemini-3.5-transcribe` takes no prompt; bias it
+with `Vocabulary` instead, which every adapter supports (Gemini Transcribe:
+`customVocabulary`; Gemini chat models: instruction; OpenAI: Whisper `prompt`;
+xAI `grok-voice-transcribe-2.0`: `keyterm`):
+
+```go
+stt, _ := llm.NewModalityClient(llm.Config{Provider: "gemini", Model: "gemini-3.5-transcribe", APIKey: key})
+text, _ := stt.TranscribeAudio(ctx, llm.TranscriptionRequest{
+    Audio: webm, MediaType: "audio/webm", Language: "de-AT",
+    Vocabulary: []string{"Weckerl", "faschierter Braten", "Meal Prep"},
+})
+```
+
 `TranscriptionRequest.Prompt` is a spelling hint of at most
 `MaxTranscriptionPromptRunes` runes, never content to transcribe. Gemini accepts
 WAV, MP3, AIFF, AAC, OGG, FLAC, WebM and MP4/M4A inline up to 14 MiB (its 20 MB

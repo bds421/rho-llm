@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -102,7 +103,15 @@ type TranscriptionRequest struct {
 	// Prompt optionally primes the transcriber with context or vocabulary
 	// (names, dialect words, domain terms) to improve spelling. It is a hint,
 	// never content to transcribe; at most MaxTranscriptionPromptRunes runes.
+	// Dedicated transcription models that take no free text reject it; use
+	// Vocabulary, which every transcription adapter supports.
 	Prompt string
+	// Vocabulary lists terms the speaker is likely to say (dialect words,
+	// names, jargon) to bias recognition. Dedicated Gemini transcription
+	// models receive it as customVocabulary; other adapters fold it into
+	// their prompt. At most MaxTranscriptionVocabularyTerms terms of
+	// MaxTranscriptionVocabularyTermRunes runes each.
+	Vocabulary []string
 }
 
 // ValidateEmbeddingRequest proves that req is supported by reviewed capability
@@ -176,6 +185,16 @@ func ValidateTranscriptionRequest(cfg Config, req TranscriptionRequest) error {
 	if !utf8.ValidString(req.Prompt) {
 		return fmt.Errorf("llm: transcription prompt is not valid UTF-8")
 	}
+	if len(req.Vocabulary) > MaxTranscriptionVocabularyTerms {
+		return fmt.Errorf("llm: transcription vocabulary exceeds %d terms", MaxTranscriptionVocabularyTerms)
+	}
+	for _, term := range req.Vocabulary {
+		if strings.TrimSpace(term) == "" || !utf8.ValidString(term) ||
+			utf8.RuneCountInString(term) > MaxTranscriptionVocabularyTermRunes ||
+			strings.IndexFunc(term, isVocabularyBreak) >= 0 {
+			return fmt.Errorf("llm: transcription vocabulary terms must be non-blank single-line UTF-8 of at most %d runes", MaxTranscriptionVocabularyTermRunes)
+		}
+	}
 	if err := RequireCapabilitiesForModel(cfg, req.Model, CapabilityTranscription); err != nil {
 		return err
 	}
@@ -184,6 +203,13 @@ func ValidateTranscriptionRequest(cfg Config, req TranscriptionRequest) error {
 		return err
 	}
 	return driver.ValidateTranscriptionRequest(cfg, req)
+}
+
+// isVocabularyBreak reports a rune that has no place in a spelling hint and
+// could break the field it lands in: every control character (CR, LF, tab,
+// NUL, ESC, DEL, NEL) plus the Unicode line and paragraph separators.
+func isVocabularyBreak(r rune) bool {
+	return unicode.IsControl(r) || r == '\u2028' || r == '\u2029'
 }
 
 func modalityDriverFor(cfg Config) (ModalityDriver, error) {

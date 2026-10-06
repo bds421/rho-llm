@@ -117,6 +117,10 @@ var modelRegistry = map[string]ModelInfo{
 	"gemini-embedding-2":         {ID: "gemini-embedding-2", Provider: "gemini", ContextWindow: 8192, InputPricePer1M: 0.15, Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Gemini Embedding 2"},
 	"gemini-2.5-flash-image":     {ID: "gemini-2.5-flash-image", Provider: "gemini", ContextWindow: 32768, Capabilities: CapabilitySet(CapabilityImageGeneration | CapabilityBatch), Label: "Gemini 2.5 Flash Image"},
 	"gemini-3-pro-image-preview": {ID: "gemini-3-pro-image-preview", Provider: "gemini", ContextWindow: 65536, Capabilities: CapabilitySet(CapabilityImageGeneration | CapabilityBatch), Label: "Gemini 3 Pro Image"},
+	// Dedicated speech-to-text (ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe,
+	// 2026-10-06): audio-only generateContent with audioTranscriptionConfig, 98,304
+	// input / 32,768 output tokens, no Batch API, no thinking. Live-verified.
+	"gemini-3.5-transcribe": {ID: "gemini-3.5-transcribe", Provider: "gemini", MaxTokens: 32768, ContextWindow: 98304, Capabilities: CapabilitySet(CapabilityTranscription), Label: "Gemini 3.5 Transcribe"},
 
 	// OpenAI — GPT-5.x family (2026-08-06)
 	// Reasoning models use ResponsesAPI: true — reasoning effort is controlled via /v1/responses, not Chat Completions.
@@ -276,6 +280,13 @@ var modelRegistry = map[string]ModelInfo{
 	"gpt-image-1":            {ID: "gpt-image-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 1"},
 	"tts-1":                  {ID: "tts-1", Provider: "openai", Capabilities: CapabilitySet(CapabilitySpeechSynthesis), Label: "TTS 1"},
 	"whisper-1":              {ID: "whisper-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "Whisper 1"},
+	// Transcription models from developers.openai.com/api/docs/guides/speech-to-text (2026-10-06).
+	"gpt-transcribe":         {ID: "gpt-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "GPT Transcribe"},
+	"gpt-4o-transcribe":      {ID: "gpt-4o-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "GPT-4o Transcribe"},
+	"gpt-4o-mini-transcribe": {ID: "gpt-4o-mini-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "GPT-4o mini Transcribe"},
+	// xAI speech-to-text (docs.x.ai/developers/model-capabilities/audio/speech-to-text, 2026-10-06):
+	// POST /v1/stt, not OpenAI-compatible; keyterm vocabulary.
+	"grok-voice-transcribe-2.0": {ID: "grok-voice-transcribe-2.0", Provider: "xai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "Grok Voice Transcribe 2.0"},
 }
 
 func init() {

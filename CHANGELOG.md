@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-06
+
+### Added
+
+- **`TranscriptionRequest.Vocabulary`**: provider-neutral recognition biasing.
+  Dedicated Gemini transcription models receive it as `customVocabulary`,
+  Gemini chat models in the instruction, OpenAI-compatible models in Whisper's
+  `prompt`, and xAI as repeated `keyterm` fields. Bounded to 1,000 non-blank,
+  single-line terms of at most 100 runes, validated before dispatch.
+- **Gemini 3.5 Transcribe** (`gemini-3.5-transcribe`), Google's dedicated
+  speech-to-text model. It takes audio only: language and vocabulary travel in
+  `generationConfig.audioTranscriptionConfig`, the transcript comes back in
+  `audioTranscription` parts, and a free-text `Prompt` is rejected. Live-verified
+  on German speech with an API key; with vocabulary it fixed dialect terms the
+  bare model misheard.
+- **xAI speech-to-text** on the OpenAI-compatible adapter: `POST /v1/stt`
+  (xAI's endpoint is not OpenAI-shaped), vocabulary as `keyterm`, free-text
+  prompt rejected. Registry: `grok-voice-transcribe-2.0`.
+- Registry entries for OpenAI `gpt-transcribe`, `gpt-4o-transcribe` and
+  `gpt-4o-mini-transcribe` (transcription-only capability).
+- `TranscriptionVocabularyHint` helper for adapters that take free text.
+
+### Fixed
+
+- **Truncated Gemini transcripts returned as success.** A candidate that
+  finished with `MAX_TOKENS`, `SAFETY` or `RECITATION` but carried partial text
+  was returned as a complete transcript. Any finish other than `STOP` is now an
+  error and no partial text is returned.
+- **OpenAI-compatible transcription: missing `text` field read as silence.** A
+  200 body without `text` (an error object, a wrong shape, `null`) returned an
+  empty transcript with no error. This predates 0.8.0 (Whisper path). A missing
+  field is now an error; an explicit `""` is still genuine silence.
+- **Control characters in vocabulary terms.** Only CR/LF were rejected; CR-only
+  splits, NUL, tab, ESC, DEL, NEL and U+2028/U+2029 reached provider form fields
+  and instructions. Every Unicode control character and line/paragraph separator
+  is now rejected before dispatch.
+
+### Security
+
+- **API keys echoed in provider error bodies are redacted.** `ErrorFromResponse`,
+  which every adapter uses to turn a non-2xx response into an `APIError` (chat,
+  modality, batch and file calls on Anthropic, Gemini, OpenAI-compatible and
+  Responses), built the error from the raw body. A provider that echoed the
+  request key put it into the returned error, which callers log or display;
+  only errors passing through the pooled client's own scrub were protected. The deployment's `APIKey` and BaseURL secrets are now scrubbed with
+  the existing `redactProfileSecrets` before the error is constructed.
+
+### Tests
+
+- Break-the-system suites for transcription: dispatch-prevention on every
+  malformed input (Gemini, OpenAI, xAI), mid-stream disconnects, response-body
+  cap, error classification (429/401/403/503) with key-echo checks, per-request
+  model overrides validated as the target model, cancellation, concurrent use of
+  one client under `-race`, double `Close`, and two fuzz targets
+  (`FuzzAudioMediaTypeFromSignature`,
+  `FuzzTranscriptionValidationNeverAdmitsBreakingInput`). Each fixed bug's test
+  was confirmed red before the fix.
+
+### Changed
+
+- Registry thinking-flag tests treat transcription-only Gemini models like the
+  other modality-only models (no thinking, no thought signatures).
+
 ## [0.8.0] - 2026-10-06
 
 ### Added

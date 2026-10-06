@@ -38,7 +38,11 @@ func (modalityDriver) ValidateSpeechRequest(_ llm.Config, req llm.SpeechRequest)
 	return err
 }
 
-func (modalityDriver) ValidateTranscriptionRequest(_ llm.Config, req llm.TranscriptionRequest) error {
+func (modalityDriver) ValidateTranscriptionRequest(cfg llm.Config, req llm.TranscriptionRequest) error {
+	if provider := strings.ToLower(strings.TrimSpace(cfg.Provider)); (provider == "xai" || provider == "grok") &&
+		strings.TrimSpace(req.Prompt) != "" {
+		return fmt.Errorf("openaicompat: xAI speech-to-text takes no free-text prompt; use Vocabulary (keyterm)")
+	}
 	if _, err := transcriptionExtension(req.MediaType); err != nil {
 		return err
 	}
@@ -241,9 +245,15 @@ func (c *Client) SynthesizeSpeech(
 }
 
 // TranscribeAudio uploads a protocol-specific multipart request to
-// /audio/transcriptions.
+// /audio/transcriptions. xAI is the exception: its speech-to-text lives at
+// /stt with repeatable keyterm fields instead of a free-text prompt.
 func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionRequest) (string, error) {
 	extension, _ := transcriptionExtension(req.MediaType)
+	xai := c.isXAI()
+	path := "/audio/transcriptions"
+	if xai {
+		path = "/stt"
+	}
 	var payload bytes.Buffer
 	multipartWriter := multipart.NewWriter(&payload)
 	if err := multipartWriter.WriteField("model", c.modalityModel(req.Model)); err != nil {
@@ -254,9 +264,24 @@ func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionReque
 			return "", err
 		}
 	}
-	if req.Prompt != "" {
-		if err := multipartWriter.WriteField("prompt", req.Prompt); err != nil {
-			return "", err
+	if xai {
+		for _, term := range req.Vocabulary {
+			if term = strings.TrimSpace(term); term == "" {
+				continue
+			}
+			if err := multipartWriter.WriteField("keyterm", term); err != nil {
+				return "", err
+			}
+		}
+	} else {
+		prompt := req.Prompt
+		if terms := llm.TranscriptionVocabularyHint(req.Vocabulary); terms != "" {
+			prompt = strings.TrimSpace(prompt + " " + terms)
+		}
+		if prompt != "" {
+			if err := multipartWriter.WriteField("prompt", prompt); err != nil {
+				return "", err
+			}
 		}
 	}
 	fileWriter, err := multipartWriter.CreateFormFile("file", "audio."+extension)
@@ -273,7 +298,7 @@ func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionReque
 	contentType := multipartWriter.FormDataContentType()
 	response, err := c.doModalityRequest(ctx, func(ctx context.Context) (*http.Request, error) {
 		httpRequest, buildErr := http.NewRequestWithContext(
-			ctx, http.MethodPost, c.baseURL+"/audio/transcriptions", bytes.NewReader(data),
+			ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(data),
 		)
 		if buildErr != nil {
 			return nil, buildErr
@@ -286,13 +311,28 @@ func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionReque
 		return "", err
 	}
 	defer response.Body.Close()
+	// Text is a pointer so a body without the field (an error object, a wrong
+	// shape, null) is a failure, while an explicit "" stays genuine silence.
 	var wire struct {
-		Text string `json:"text"`
+		Text *string `json:"text"`
 	}
 	if err := decodeBoundedJSON(response.Body, c.config.EffectiveMaxResponseBodyBytes(), &wire); err != nil {
 		return "", fmt.Errorf("openaicompat: decode transcription response: %w", err)
 	}
-	return wire.Text, nil
+	if wire.Text == nil {
+		return "", fmt.Errorf("openaicompat: transcription response has no text field")
+	}
+	return *wire.Text, nil
+}
+
+// isXAI reports the xAI deployment, whose speech-to-text endpoint differs
+// from OpenAI's.
+func (c *Client) isXAI() bool {
+	switch strings.ToLower(strings.TrimSpace(c.config.Provider)) {
+	case "xai", "grok":
+		return true
+	}
+	return false
 }
 
 func (c *Client) modalityModel(requested string) string {
