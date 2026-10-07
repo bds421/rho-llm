@@ -792,6 +792,12 @@ type CostInput struct {
 // Accepts a CostInput with all token types for accurate cache-aware pricing.
 // Returns 0 if the model is not in the registry or has no pricing data —
 // register unlisted models via RegisterModel to get real estimates.
+//
+// The result is always finite and >= 0, and monotonic in every count (more
+// tokens or seconds never cost less; AudioInputTokens is a share of
+// InputTokens, so raise both together). Negative counts count as 0, a
+// negative/NaN/Inf registered price counts as unknown (0), and a total that
+// would overflow saturates at math.MaxFloat64.
 func EstimateCost(input CostInput) float64 {
 	registryMu.RLock()
 	// Resolve an alias to its target under the same read lock (ResolveModelAlias
@@ -829,18 +835,23 @@ func EstimateCost(input CostInput) float64 {
 		audioSeconds = 0
 	}
 
-	inputCost := float64(inputTok-audioTok) * info.InputPricePer1M / 1_000_000
-	inputCost += float64(audioTok) * info.AudioInputPricePer1M / 1_000_000
-	inputCost += audioSeconds / 60 * info.AudioPricePerMinute
-	outputCost := float64(outputTok+thinkingTok) * info.OutputPricePer1M / 1_000_000
+	// Price each dimension in float64: token counts are converted before any
+	// arithmetic, so no int sum can wrap (OutputTokens+ThinkingTokens at
+	// math.MaxInt used to overflow to a negative cost). Every term is a finite,
+	// non-negative count times a sanitized price, and IEEE rounding is
+	// monotonic, so the total is monotonic in each input.
+	perToken := func(tokens int, pricePer1M float64) float64 {
+		return float64(tokens) * sanitizePrice(pricePer1M) / 1_000_000
+	}
+	inputCost := perToken(inputTok-audioTok, info.InputPricePer1M)
+	inputCost += perToken(audioTok, info.AudioInputPricePer1M)
+	inputCost += audioSeconds / 60 * sanitizePrice(info.AudioPricePerMinute)
+	outputCost := perToken(outputTok, info.OutputPricePer1M) + perToken(thinkingTok, info.OutputPricePer1M)
 
-	var cacheCost float64
-	if info.CacheWritePricePer1M > 0 {
-		cacheCost += float64(cacheCreateTok) * info.CacheWritePricePer1M / 1_000_000
-	}
-	if info.CacheReadPricePer1M > 0 {
-		cacheCost += float64(cacheReadTok) * info.CacheReadPricePer1M / 1_000_000
-	}
+	// A zero cache price means "not applicable"; sanitizePrice already maps
+	// zero, negative and non-finite prices to 0.
+	cacheCost := perToken(cacheCreateTok, info.CacheWritePricePer1M) +
+		perToken(cacheReadTok, info.CacheReadPricePer1M)
 
 	total := inputCost + outputCost + cacheCost
 
@@ -850,5 +861,34 @@ func EstimateCost(input CostInput) float64 {
 		total *= 0.5
 	}
 
-	return total
+	return saturateCost(total)
+}
+
+// sanitizePrice treats a negative, NaN or infinite registered price as unknown
+// (0): RegisterModel accepts any float64, and such a price would otherwise
+// produce a negative, NaN or Inf cost.
+func sanitizePrice(p float64) float64 {
+	if p > 0 && !math.IsInf(p, 1) {
+		return p
+	}
+	return 0
+}
+
+// saturateCost clamps a cost into [0, math.MaxFloat64]: an overflow to +Inf
+// (absurd prices or durations) saturates rather than leaking Inf, and NaN or a
+// negative can never escape.
+func saturateCost(c float64) float64 {
+	switch {
+	case math.IsNaN(c) || c <= 0:
+		return 0
+	case c > math.MaxFloat64:
+		return math.MaxFloat64
+	}
+	return c
+}
+
+// addCost adds two costs, saturating at math.MaxFloat64 instead of reaching
+// +Inf. Used to accumulate running totals.
+func addCost(a, b float64) float64 {
+	return saturateCost(a + b)
 }

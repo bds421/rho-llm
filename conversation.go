@@ -57,12 +57,14 @@ func (u *Usage) add(resp *Response, batch bool) {
 	cacheW := nonNeg(resp.CacheCreationTokens)
 	cacheR := nonNeg(resp.CacheReadTokens)
 
-	u.InputTokens += in
-	u.OutputTokens += out
-	u.ThinkingTokens += think
-	u.CacheCreationTokens += cacheW
-	u.CacheReadTokens += cacheR
-	u.Cost += EstimateCost(CostInput{
+	// Saturate instead of wrapping: a running total near math.MaxInt must not
+	// turn negative, and the running cost stops at math.MaxFloat64, never +Inf.
+	u.InputTokens = saturatingAdd(u.InputTokens, in)
+	u.OutputTokens = saturatingAdd(u.OutputTokens, out)
+	u.ThinkingTokens = saturatingAdd(u.ThinkingTokens, think)
+	u.CacheCreationTokens = saturatingAdd(u.CacheCreationTokens, cacheW)
+	u.CacheReadTokens = saturatingAdd(u.CacheReadTokens, cacheR)
+	u.Cost = addCost(u.Cost, EstimateCost(CostInput{
 		Model:             resp.Model,
 		InputTokens:       in,
 		OutputTokens:      out,
@@ -70,7 +72,7 @@ func (u *Usage) add(resp *Response, batch bool) {
 		CacheCreateTokens: cacheW,
 		CacheReadTokens:   cacheR,
 		Batch:             batch,
-	})
+	}))
 }
 
 // nonNeg clamps a token count to >= 0 (filters the TokensNotReported sentinel and

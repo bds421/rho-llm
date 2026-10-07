@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of October 2026 (v0.9.2).
+> **Status:** Reflects the current implementation as of October 2026 (v0.9.3).
 
 ---
 
@@ -557,7 +557,7 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 | xAI | grok-4.3, grok-4.20-beta, grok-4-1-fast-{reasoning,non-reasoning}, grok-4-fast-{reasoning,non-reasoning}, grok-code-fast-1, grok-3, grok-3-mini |
 | Gemini | gemini-3.6-flash, gemini-3.5-{flash,flash-lite}, gemini-3.1-flash-lite, gemini-3.1-pro-preview, gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
 
-`EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0.
+`EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0. The result is always finite, `>= 0` and monotonic in every input (v0.9.3): counts are converted to `float64` before any arithmetic (no int sum can wrap), a negative/NaN/±Inf registered price counts as 0, and an overflowing total saturates at `math.MaxFloat64`. `Usage` and `ReportModalityUsage` running totals saturate the same way (`math.MaxInt` tokens, `math.MaxFloat64` seconds/cost).
 
 **Runtime extension (v0.4.0):** built-in metadata is curated for 15 providers, but `RegisterModel(ModelInfo)` and `RegisterModelAlias(alias, modelID)` add or override entries at runtime — so unlisted/newly released models get cost estimation, capability flags, and discovery (and stale built-in pricing can be corrected) without a library release. The registry maps were "immutable after init"; they are now guarded by an `RWMutex` taken by every reader (`GetModelInfo`, `EstimateCost`, `ResolveModelAlias`, `Models`, …), so runtime registration is safe for concurrent use.
 

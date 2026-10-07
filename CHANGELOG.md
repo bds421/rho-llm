@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-07
+
+### Fixed
+
+- **`EstimateCost` returned a negative cost for extreme token counts (C4).**
+  `OutputTokens + ThinkingTokens` was summed as `int` before the float
+  conversion, so `math.MaxInt` in both wrapped to -2 and priced at about
+  -3e-05 USD. Every token count is now converted to `float64` before any
+  arithmetic. The result is guaranteed finite, `>= 0` and monotonic in every
+  input: negative counts count as 0 (as before), a negative/NaN/±Inf
+  registered price counts as unknown (0) instead of yielding a negative or NaN
+  cost, and a total that would overflow (e.g. `math.MaxFloat64` audio seconds
+  at a per-minute price above 60) saturates at `math.MaxFloat64` instead of
+  `+Inf`.
+- **`Usage.AddResponse` / `AddBatchResponse`** (and so `Conversation` and
+  `Session` usage): running token totals saturate at `math.MaxInt` instead of
+  wrapping negative, and the running `Cost` saturates at `math.MaxFloat64`
+  (a negative or NaN `Cost` loaded from JSON is reset to 0 on the next add).
+- **`ReportModalityUsage`**: repeated reports for one operation summed
+  `AudioSeconds` to `+Inf`, which `EstimateCost` reads as "non-finite = 0",
+  pricing more audio at $0 in `UsageEvent.CostUSD`. The sum now saturates at
+  `math.MaxFloat64`.
+- **Gemini modality usage**: candidates + thinking tokens (and the AUDIO
+  prompt share) that would overflow now saturate at `math.MaxInt` instead of
+  silently dropping the thinking tokens.
+
+### Tests
+
+- `cost_overflow_break_test.go`: `TestEstimateCostMaxIntInEachField`,
+  `TestEstimateCostSummedFieldsDoNotWrap`,
+  `TestEstimateCostNegativeInputsClampToZero`,
+  `TestEstimateCostAudioSecondsHostile`, `TestEstimateCostHostilePrices`,
+  `TestEstimateCostZeroPriceAndUnknownModel`, `TestUsageAccumulationSaturates`,
+  `TestSessionUsageSaturatesAcrossTurns`, `TestUsageHookGeminiThoughtsSaturate`,
+  and the fuzz target `FuzzEstimateCostMonotonic` (cost finite, `>= 0`, and
+  non-decreasing when any single input is raised).
+- `usage_overflow_internal_test.go`: `TestReportModalityUsageSaturatesSums`.
+
 ## [0.9.2] - 2026-10-07
 
 ### Added

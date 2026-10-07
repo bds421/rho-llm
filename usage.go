@@ -95,7 +95,14 @@ func ReportModalityUsage(ctx context.Context, usage ModalityUsage) {
 	recorder.usage.InputTokens = saturatingAdd(recorder.usage.InputTokens, usage.InputTokens)
 	recorder.usage.OutputTokens = saturatingAdd(recorder.usage.OutputTokens, usage.OutputTokens)
 	recorder.usage.AudioInputTokens = saturatingAdd(recorder.usage.AudioInputTokens, usage.AudioInputTokens)
-	recorder.usage.AudioSeconds += usage.AudioSeconds
+	recorder.usage.AudioSeconds = saturatingAddSeconds(recorder.usage.AudioSeconds, usage.AudioSeconds)
+}
+
+// saturatingAddSeconds sums two non-negative finite durations, saturating at
+// math.MaxFloat64: a +Inf sum would read as "non-finite = 0" in EstimateCost,
+// pricing more audio at $0.
+func saturatingAddSeconds(a, b float64) float64 {
+	return math.Min(a+b, math.MaxFloat64)
 }
 
 func sanitizeModalityUsage(usage ModalityUsage) ModalityUsage {

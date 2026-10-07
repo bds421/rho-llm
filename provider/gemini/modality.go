@@ -362,12 +362,14 @@ func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
 	if usage.CandidatesTokenCount > 0 {
 		out.OutputTokens = usage.CandidatesTokenCount
 	}
-	if usage.ThoughtsTokenCount > 0 && out.OutputTokens <= math.MaxInt-usage.ThoughtsTokenCount {
-		out.OutputTokens += usage.ThoughtsTokenCount
+	// Saturate rather than drop on overflow, so a larger report never yields
+	// a smaller count.
+	if usage.ThoughtsTokenCount > 0 {
+		out.OutputTokens = saturatingAdd(out.OutputTokens, usage.ThoughtsTokenCount)
 	}
 	for _, detail := range usage.PromptTokensDetails {
-		if detail.Modality == "AUDIO" && detail.TokenCount > 0 && out.AudioInputTokens <= math.MaxInt-detail.TokenCount {
-			out.AudioInputTokens += detail.TokenCount
+		if detail.Modality == "AUDIO" && detail.TokenCount > 0 {
+			out.AudioInputTokens = saturatingAdd(out.AudioInputTokens, detail.TokenCount)
 		}
 	}
 	return out
@@ -470,4 +472,12 @@ func verifyImageB64(b64, mediaType string) error {
 		}
 	}
 	return nil
+}
+
+// saturatingAdd adds a positive b to a non-negative a, capping at math.MaxInt.
+func saturatingAdd(a, b int) int {
+	if a > math.MaxInt-b {
+		return math.MaxInt
+	}
+	return a + b
 }
