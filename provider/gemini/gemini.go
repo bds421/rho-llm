@@ -276,6 +276,20 @@ type geminiUsageMetadata struct {
 	CachedContentTokenCount int `json:"cachedContentTokenCount,omitempty"`
 }
 
+// splitPrompt maps Gemini's usage onto the library's cache-token contract
+// (see llm.Response): promptTokenCount is the TOTAL effective prompt and
+// already includes cachedContentTokenCount ("When cachedContent is set, this
+// is still the total effective prompt size meaning this includes the number of
+// tokens in the cached content" — ai.google.dev/api/generate-content), so the
+// cached share is subtracted to get the uncached InputTokens. Negative wire
+// values count as 0, and a cached count above the prompt total is clamped to
+// it, so InputTokens is never negative and the two never sum past the prompt.
+func (u *geminiUsageMetadata) splitPrompt() (input, cacheRead int) {
+	prompt, cached := max(u.PromptTokenCount, 0), max(u.CachedContentTokenCount, 0)
+	cached = min(cached, prompt)
+	return prompt - cached, cached
+}
+
 func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	if err := req.ToolChoice.Validate(); err != nil {
 		return geminiRequest{}, err
@@ -515,10 +529,9 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 		OutputTokens: llm.TokensNotReported,
 	}
 	if u := apiResp.UsageMetadata; u != nil {
-		resp.InputTokens = u.PromptTokenCount
+		resp.InputTokens, resp.CacheReadTokens = u.splitPrompt()
 		resp.OutputTokens = u.CandidatesTokenCount
 		resp.ThinkingTokens = u.ThoughtsTokenCount
-		resp.CacheReadTokens = u.CachedContentTokenCount
 	}
 
 	if len(apiResp.Candidates) > 0 {
@@ -597,10 +610,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}
 
 		if u := event.UsageMetadata; u != nil {
-			inputTokens = u.PromptTokenCount
+			inputTokens, cacheReadTokens = u.splitPrompt()
 			outputTokens = u.CandidatesTokenCount
 			thinkingTokens = u.ThoughtsTokenCount
-			cacheReadTokens = u.CachedContentTokenCount
 		}
 
 		if len(event.Candidates) > 0 {

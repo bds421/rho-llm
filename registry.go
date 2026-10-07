@@ -22,8 +22,8 @@ type ModelInfo struct {
 	ContextWindow        int           // Max input tokens (0 = unknown)
 	InputPricePer1M      float64       // USD per 1M input tokens (0 = unknown/free)
 	OutputPricePer1M     float64       // USD per 1M output tokens (0 = unknown/free)
-	CacheWritePricePer1M float64       // Anthropic: price per 1M cache creation tokens (0 = not applicable)
-	CacheReadPricePer1M  float64       // Anthropic/Gemini: price per 1M cached input tokens (0 = not applicable)
+	CacheWritePricePer1M float64       // Anthropic: price per 1M cache creation tokens (0 = not applicable: cache writes cost nothing extra)
+	CacheReadPricePer1M  float64       // price per 1M cache-read input tokens (0 = unknown: cache reads are billed at InputPricePer1M)
 	AudioInputPricePer1M float64       // USD per 1M audio input tokens (0 = unknown: audio tokens are not priced)
 	AudioPricePerMinute  float64       // USD per minute of input audio for duration-billed speech-to-text (0 = unknown/not duration-billed)
 	SupportsThinking     bool          // Adapter/model supports explicit thinking-level control
@@ -771,13 +771,23 @@ func ProviderForModel(model string) string {
 }
 
 // CostInput holds all token counts needed for accurate cost estimation.
+//
+// Cache-token contract (the same for every provider, matching llm.Response):
+// InputTokens, CacheReadTokens and CacheCreateTokens are DISJOINT. InputTokens
+// is the uncached input only; the full prompt is
+// InputTokens + CacheReadTokens + CacheCreateTokens. Each token is therefore
+// priced exactly once: InputTokens at InputPricePer1M, CacheReadTokens at
+// CacheReadPricePer1M and CacheCreateTokens at CacheWritePricePer1M. Do NOT
+// pass a provider's raw total prompt count (Gemini promptTokenCount, OpenAI
+// prompt_tokens / input_tokens — all of which include cached tokens) as
+// InputTokens alongside CacheReadTokens: that charges the cached tokens twice.
 type CostInput struct {
 	Model             string
-	InputTokens       int
+	InputTokens       int // uncached input tokens only (excludes CacheReadTokens and CacheCreateTokens)
 	OutputTokens      int
 	ThinkingTokens    int  // Gemini: separate from output; Anthropic: 0 (bundled in OutputTokens)
-	CacheCreateTokens int  // Anthropic: tokens written to cache
-	CacheReadTokens   int  // Anthropic/Gemini: tokens read from cache
+	CacheCreateTokens int  // tokens written to cache (Anthropic); disjoint from InputTokens
+	CacheReadTokens   int  // tokens read from cache (Anthropic/Gemini/OpenAI-style); disjoint from InputTokens
 	Batch             bool // request was processed via the Batch API (billed at 50% of the sync rate)
 	// AudioInputTokens is the audio share of InputTokens. It is priced at
 	// AudioInputPricePer1M (0 when unknown — never at the text rate) and the
@@ -848,10 +858,18 @@ func EstimateCost(input CostInput) float64 {
 	inputCost += audioSeconds / 60 * sanitizePrice(info.AudioPricePerMinute)
 	outputCost := perToken(outputTok, info.OutputPricePer1M) + perToken(thinkingTok, info.OutputPricePer1M)
 
-	// A zero cache price means "not applicable"; sanitizePrice already maps
-	// zero, negative and non-finite prices to 0.
+	// A zero cache-write price means "not applicable" (no write surcharge);
+	// sanitizePrice already maps zero, negative and non-finite prices to 0.
+	// A zero cache-read price means "unknown": CacheReadTokens are excluded
+	// from InputTokens by contract, so pricing them at 0 would make cached
+	// input free — bill them at the plain input rate instead (what the provider
+	// charges when there is no cache discount, and never more than that).
+	cacheReadPrice := sanitizePrice(info.CacheReadPricePer1M)
+	if cacheReadPrice == 0 {
+		cacheReadPrice = info.InputPricePer1M
+	}
 	cacheCost := perToken(cacheCreateTok, info.CacheWritePricePer1M) +
-		perToken(cacheReadTok, info.CacheReadPricePer1M)
+		perToken(cacheReadTok, cacheReadPrice)
 
 	total := inputCost + outputCost + cacheCost
 

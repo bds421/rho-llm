@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-10-07
+
+### Fixed
+
+- **Gemini cached tokens were charged twice (C5).** Gemini's
+  `usageMetadata.promptTokenCount` already includes `cachedContentTokenCount`
+  ("this includes the number of tokens in the cached content" —
+  ai.google.dev/api/generate-content), but the adapter passed the full prompt
+  count as `InputTokens` *and* the cached count as `CacheReadTokens`, so
+  `EstimateCost` billed the cached tokens at the input price and again at the
+  cache-read price (1,000 uncached + 9,000 cached on a $10/$1 model: $0.109
+  instead of $0.019). `InputTokens` is now `promptTokenCount −
+  cachedContentTokenCount` (Complete, Stream and Gemini Batch results).
+- **OpenAI-style adapters ignored cached tokens.** `openai_compat`
+  (`prompt_tokens_details.cached_tokens`) and `openai_responses`
+  (`input_tokens_details.cached_tokens`) now report the cached share in
+  `CacheReadTokens` and subtract it from `InputTokens`, so the registry's
+  OpenAI/xAI/Z.ai/MiniMax/Moonshot/Meta cache-read prices actually apply
+  instead of billing cached input at the full input price.
+- Hostile usage is clamped: a negative wire count reads as 0 and a cached
+  count above the reported prompt total is clamped to it, so `InputTokens` is
+  never negative and the buckets never exceed the prompt.
+
+### Changed
+
+- **Documented one cache-token contract for every adapter** (on
+  `Response`, `StreamEvent`, `Usage`, `CostInput`): `InputTokens`,
+  `CacheReadTokens` and `CacheCreationTokens` are disjoint — `InputTokens` is
+  the uncached input only and total prompt = their sum (Anthropic's native
+  shape). Callers that read `Response.InputTokens` as the *total* prompt size
+  for Gemini/OpenAI must now add `CacheReadTokens`.
+- `EstimateCost`: a model with no registered `CacheReadPricePer1M` now bills
+  cache-read tokens at `InputPricePer1M` instead of $0, so moving cached tokens
+  out of `InputTokens` is cost-neutral for models without a cache discount
+  (most Gemini/OpenAI/DeepSeek entries) and cached input is never free. A zero
+  `CacheWritePricePer1M` still means no write surcharge.
+
 ## [0.9.3] - 2026-10-07
 
 ### Fixed

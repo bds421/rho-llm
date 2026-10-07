@@ -139,7 +139,7 @@ func main() {
 func printResponse(label string, resp *llm.Response) {
 	fmt.Printf("\n[%s]\n", label)
 	fmt.Printf("  Response: %.100s...\n", resp.Content)
-	fmt.Printf("  Input tokens:      %d\n", resp.InputTokens)
+	fmt.Printf("  Input tokens:      %d (uncached; total prompt = input + cache read)\n", resp.InputTokens)
 	fmt.Printf("  Output tokens:     %d\n", resp.OutputTokens)
 	fmt.Printf("  Cache read tokens: %d\n", resp.CacheReadTokens)
 }

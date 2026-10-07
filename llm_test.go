@@ -4447,7 +4447,7 @@ func TestGeminiCachedContentField(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
-			"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2, "cachedContentTokenCount": 500}
+			"usageMetadata": {"promptTokenCount": 510, "candidatesTokenCount": 2, "cachedContentTokenCount": 500}
 		}`))
 	}))
 	defer srv.Close()
@@ -4484,15 +4484,17 @@ func TestGeminiCachedContentField(t *testing.T) {
 	}
 
 	// Verify cache read tokens from response
-	if resp.CacheReadTokens != 500 {
-		t.Errorf("CacheReadTokens = %d, want 500", resp.CacheReadTokens)
+	// promptTokenCount (510) includes the 500 cached tokens; InputTokens is the
+	// uncached remainder (disjoint cache-token contract).
+	if resp.CacheReadTokens != 500 || resp.InputTokens != 10 {
+		t.Errorf("InputTokens/CacheReadTokens = %d/%d, want 10/500", resp.InputTokens, resp.CacheReadTokens)
 	}
 }
 
 // TestGeminiCachedContentStream verifies cache token parsing in Gemini stream.
 func TestGeminiCachedContentStream(t *testing.T) {
 	ssePayload := strings.Join([]string{
-		`data: {"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"cachedContentTokenCount":500}}`,
+		`data: {"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":510,"candidatesTokenCount":2,"cachedContentTokenCount":500}}`,
 		"",
 	}, "\n")
 
@@ -4526,8 +4528,8 @@ func TestGeminiCachedContentStream(t *testing.T) {
 		}
 	}
 
-	if doneEvent.CacheReadTokens != 500 {
-		t.Errorf("CacheReadTokens = %d, want 500", doneEvent.CacheReadTokens)
+	if doneEvent.CacheReadTokens != 500 || doneEvent.InputTokens != 10 {
+		t.Errorf("InputTokens/CacheReadTokens = %d/%d, want 10/500", doneEvent.InputTokens, doneEvent.CacheReadTokens)
 	}
 }
 

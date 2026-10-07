@@ -617,13 +617,20 @@ type Response struct {
 	ThinkingRedacted  bool       `json:"thinking_redacted,omitempty"`  // Anthropic: thinking block is redacted (encrypted)
 	StopReason        string     `json:"stop_reason"`                  // end_turn, tool_use, max_tokens
 	RawStopReason     string     `json:"raw_stop_reason,omitempty"`    // the provider's own stop reason before normalization (e.g. "STOP", "length", "stop_sequence")
-	InputTokens       int        `json:"input_tokens"`
-	OutputTokens      int        `json:"output_tokens"`
-	ThinkingTokens    int        `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
+	// InputTokens is the UNCACHED input only. Cache-token contract (identical
+	// for every adapter): InputTokens, CacheReadTokens and CacheCreationTokens
+	// are disjoint, and the full prompt is their sum. Anthropic reports them
+	// that way natively; the Gemini adapter subtracts cachedContentTokenCount
+	// from promptTokenCount, and the OpenAI-style adapters subtract
+	// cached_tokens from prompt_tokens / input_tokens (both totals include the
+	// cached share). EstimateCost relies on this to price each token once.
+	InputTokens    int `json:"input_tokens"`
+	OutputTokens   int `json:"output_tokens"`
+	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
 
-	// Cache token usage (Anthropic)
-	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache
-	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`     // tokens read from cache
+	// Cache token usage — disjoint from InputTokens (see above).
+	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache (Anthropic)
+	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`     // tokens read from cache (Anthropic, Gemini, OpenAI-style)
 }
 
 // =============================================================================
@@ -648,7 +655,8 @@ type StreamEvent struct {
 	ThinkingSignature string `json:"thinking_signature,omitempty"`
 	ThinkingRedacted  bool   `json:"thinking_redacted,omitempty"`
 
-	// Usage event
+	// Usage event. InputTokens is the uncached input only — same disjoint
+	// cache-token contract as Response.InputTokens.
 	InputTokens    int `json:"input_tokens,omitempty"`
 	OutputTokens   int `json:"output_tokens,omitempty"`
 	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking
@@ -657,7 +665,8 @@ type StreamEvent struct {
 	StopReason    string `json:"stop_reason,omitempty"`
 	RawStopReason string `json:"raw_stop_reason,omitempty"` // the provider's own stop reason before normalization
 
-	// Cache token usage (reported in EventDone, Anthropic only)
+	// Cache token usage (reported in EventDone), disjoint from InputTokens.
+	// CacheReadTokens: Anthropic, Gemini, OpenAI-style; CacheCreationTokens: Anthropic.
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
 

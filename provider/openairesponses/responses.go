@@ -309,13 +309,15 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// trailing bytes after the turn is complete (including malformed
 			// lines) can't surface as a spurious error masking the completed turn.
 			completed = true
+			inputTokens, cacheReadTokens := ev.Response.Usage.splitInput()
 			yield(llm.StreamEvent{
-				Type:           llm.EventDone,
-				StopReason:     stopReason,
-				RawStopReason:  rawStopReason,
-				InputTokens:    ev.Response.Usage.InputTokens,
-				OutputTokens:   ev.Response.Usage.OutputTokens,
-				ThinkingTokens: ev.Response.Usage.ReasoningTokens,
+				Type:            llm.EventDone,
+				StopReason:      stopReason,
+				RawStopReason:   rawStopReason,
+				InputTokens:     inputTokens,
+				OutputTokens:    ev.Response.Usage.OutputTokens,
+				ThinkingTokens:  ev.Response.Usage.ReasoningTokens,
+				CacheReadTokens: cacheReadTokens,
 			}, nil)
 			return
 
@@ -446,9 +448,27 @@ type responsesContentBlock struct {
 }
 
 type responsesUsage struct {
-	InputTokens     int `json:"input_tokens"`
-	OutputTokens    int `json:"output_tokens"`
-	ReasoningTokens int `json:"reasoning_tokens"`
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	ReasoningTokens    int `json:"reasoning_tokens"`
+	InputTokensDetails struct {
+		// CachedTokens is a SUBSET of input_tokens (OpenAI's prompt-caching
+		// guide computes ordinary input as input_tokens - cached_tokens - …).
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+}
+
+// splitInput maps a Responses API usage onto the library's cache-token
+// contract (see llm.Response): input_tokens already includes
+// input_tokens_details.cached_tokens, so the cached share is subtracted to get
+// the uncached InputTokens. Negative wire values count as 0 and a cached count
+// above the input total is clamped to it, so InputTokens is never negative and
+// the two never sum past the reported input. A missing details object decodes
+// as 0 cached tokens.
+func (u *responsesUsage) splitInput() (input, cacheRead int) {
+	total, cached := max(u.InputTokens, 0), max(u.InputTokensDetails.CachedTokens, 0)
+	cached = min(cached, total)
+	return total - cached, cached
 }
 
 type responsesIncomplete struct {
@@ -750,9 +770,9 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 	resp := &llm.Response{
 		ID:           apiResp.ID,
 		Model:        apiResp.Model,
-		InputTokens:  apiResp.Usage.InputTokens,
 		OutputTokens: apiResp.Usage.OutputTokens,
 	}
+	resp.InputTokens, resp.CacheReadTokens = apiResp.Usage.splitInput()
 
 	// Map reasoning_tokens to ThinkingTokens for cost tracking
 	if apiResp.Usage.ReasoningTokens > 0 {

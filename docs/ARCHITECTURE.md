@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of October 2026 (v0.9.3).
+> **Status:** Reflects the current implementation as of October 2026 (v0.9.4).
 
 ---
 
@@ -189,14 +189,14 @@ type StreamEvent struct {
     ToolCall *ToolCall  // tool_use
     Thinking string     // thinking (Anthropic extended thinking)
 
-    InputTokens    int    // usage / done (-1 = not reported)
+    InputTokens    int    // usage / done: UNCACHED input only (-1 = not reported)
     OutputTokens   int    // usage / done (-1 = not reported)
     ThinkingTokens int    // Gemini: tokens consumed by thinking (0 for other providers)
     StopReason     string // done: "end_turn" | "tool_use" | "max_tokens"
     RawStopReason  string // provider's original reason, when available
 
-    CacheCreationTokens int // Anthropic: tokens written to cache (EventDone)
-    CacheReadTokens     int // Anthropic/Gemini: tokens read from cache (EventDone)
+    CacheCreationTokens int // Anthropic: tokens written to cache (EventDone); disjoint from InputTokens
+    CacheReadTokens     int // Anthropic/Gemini/OpenAI-style: tokens read from cache (EventDone); disjoint from InputTokens
 
     Error        string // error
 }
@@ -525,8 +525,8 @@ type ModelInfo struct {
     ContextWindow        int     // Max input tokens
     InputPricePer1M      float64 // USD pricing
     OutputPricePer1M     float64
-    CacheWritePricePer1M float64 // Anthropic: per 1M cache creation tokens
-    CacheReadPricePer1M  float64 // Anthropic/Gemini: per 1M cached input tokens
+    CacheWritePricePer1M float64 // Anthropic: per 1M cache creation tokens (0 = no write surcharge)
+    CacheReadPricePer1M  float64 // per 1M cache-read input tokens (0 = unknown: billed at InputPricePer1M)
     SupportsThinking     bool    // API-controlled thinking budgets (Anthropic)
     ThoughtSignature     bool    // Gemini 3: must echo thought_signature in tool results
     Thinking             bool    // Intrinsic reasoning models (DeepSeek, Grok)
@@ -557,7 +557,7 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 | xAI | grok-4.3, grok-4.20-beta, grok-4-1-fast-{reasoning,non-reasoning}, grok-4-fast-{reasoning,non-reasoning}, grok-code-fast-1, grok-3, grok-3-mini |
 | Gemini | gemini-3.6-flash, gemini-3.5-{flash,flash-lite}, gemini-3.1-flash-lite, gemini-3.1-pro-preview, gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
 
-`EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0. The result is always finite, `>= 0` and monotonic in every input (v0.9.3): counts are converted to `float64` before any arithmetic (no int sum can wrap), a negative/NaN/±Inf registered price counts as 0, and an overflowing total saturates at `math.MaxFloat64`. `Usage` and `ReportModalityUsage` running totals saturate the same way (`math.MaxInt` tokens, `math.MaxFloat64` seconds/cost).
+`EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0. **Cache-token contract (v0.9.4):** `InputTokens`, `CacheReadTokens` and `CacheCreateTokens` are disjoint — `InputTokens` is the uncached input only and the full prompt is their sum — so each token is priced exactly once (uncached × `InputPricePer1M` + cache reads × `CacheReadPricePer1M` + cache writes × `CacheWritePricePer1M`). Every adapter reports `Response`/`EventDone` usage in that shape (see Context Caching below). A model with no registered cache-read price bills cache reads at `InputPricePer1M` (never free). The result is always finite, `>= 0` and monotonic in every input (v0.9.3): counts are converted to `float64` before any arithmetic (no int sum can wrap), a negative/NaN/±Inf registered price counts as 0, and an overflowing total saturates at `math.MaxFloat64`. `Usage` and `ReportModalityUsage` running totals saturate the same way (`math.MaxInt` tokens, `math.MaxFloat64` seconds/cost).
 
 **Runtime extension (v0.4.0):** built-in metadata is curated for 15 providers, but `RegisterModel(ModelInfo)` and `RegisterModelAlias(alias, modelID)` add or override entries at runtime — so unlisted/newly released models get cost estimation, capability flags, and discovery (and stale built-in pricing can be corrected) without a library release. The registry maps were "immutable after init"; they are now guarded by an `RWMutex` taken by every reader (`GetModelInfo`, `EstimateCost`, `ResolveModelAlias`, `Models`, …), so runtime registration is safe for concurrent use.
 
@@ -623,7 +623,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - `ThoughtSignature`: when a model has `ThoughtSignature: true` in the registry, function call responses include a `thought_signature` field that must be preserved and echoed in subsequent `tool_result` parts
 - Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is exposed as `resp.ThinkingTokens` / `event.ThinkingTokens`, separate from `OutputTokens` (which maps to `candidatesTokenCount` only). Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` is 0.
 - System prompt: mapped to `systemInstruction.parts[0].text`
-- Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`.
+- Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`, and — because `promptTokenCount` already includes it — subtracted from `promptTokenCount` to give `InputTokens` (v0.9.4; clamped so neither goes negative).
 
 ### OpenAI-Compatible (`provider/openaicompat/`)
 
@@ -863,6 +863,17 @@ Anthropic and Gemini offer context caching with fundamentally different models:
 **Gemini (reference only):**
 - `Request.CachedContent` sets `cachedContent` in the wire request, referencing a pre-created cache by name
 - Cache lifecycle management (create/list/delete) is out of scope — callers manage it externally
-- `Response.CacheReadTokens` is populated from `usageMetadata.cachedContentTokenCount`
+- `Response.CacheReadTokens` is populated from `usageMetadata.cachedContentTokenCount` (implicit cache hits too)
 
-**OpenAI-compatible:** All cache fields are silently ignored (no API support).
+**OpenAI-compatible / Responses:** request cache fields are silently ignored (caching is automatic). `prompt_tokens_details.cached_tokens` (Chat Completions) / `input_tokens_details.cached_tokens` (Responses) are mapped to `CacheReadTokens` (v0.9.4). `cache_write_tokens` is not split out (no OpenAI write price in the registry) and stays in `InputTokens`.
+
+**Cache-token contract (all adapters, v0.9.4).** `InputTokens`, `CacheReadTokens` and `CacheCreationTokens` are disjoint; total prompt = their sum.
+
+| Provider wire | Total prompt field | Cached field | `InputTokens` |
+|---|---|---|---|
+| Anthropic | `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` | `cache_read_input_tokens` | `input_tokens` (already uncached) |
+| Gemini | `promptTokenCount` (includes cached) | `cachedContentTokenCount` | `promptTokenCount − cached` |
+| OpenAI Chat | `prompt_tokens` (includes cached) | `prompt_tokens_details.cached_tokens` | `prompt_tokens − cached` |
+| OpenAI Responses | `input_tokens` (includes cached) | `input_tokens_details.cached_tokens` | `input_tokens − cached` |
+
+For the inclusive-total providers a negative wire count reads as 0 and a cached count above the total is clamped to the total, so `InputTokens` is never negative and the buckets never sum past the reported prompt.

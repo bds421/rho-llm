@@ -428,6 +428,12 @@ if err != nil {
 fmt.Printf("Cached tokens: %d\n", resp.CacheReadTokens)
 ```
 
+`resp.InputTokens` is always the **uncached** input: for Gemini (and the
+OpenAI-style adapters, from `cached_tokens`) the cached share is subtracted from
+the provider's total prompt count, matching Anthropic's disjoint
+`input_tokens` / `cache_read_input_tokens`. Total prompt tokens =
+`InputTokens + CacheReadTokens + CacheCreationTokens` for every provider.
+
 ### OpenAI-compatible
 
 Cache fields are silently ignored — no error, no effect.
@@ -558,6 +564,9 @@ cost := llm.EstimateCost(llm.CostInput{
     CacheReadTokens:   resp.CacheReadTokens,
 })
 fmt.Printf("Cost: $%.6f\n", cost)
+// InputTokens/CacheReadTokens/CacheCreationTokens are disjoint for every
+// provider, so each token is priced once. A model without a cache-read price
+// bills cache reads at its input price.
 
 // Audio-billed models: audio tokens use AudioInputPricePer1M, duration-billed
 // speech-to-text uses AudioPricePerMinute; an unknown rate prices at 0.

@@ -232,10 +232,31 @@ type openaiResponse struct {
 		FinishReason string        `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
+		PromptTokens        int                 `json:"prompt_tokens"`
+		CompletionTokens    int                 `json:"completion_tokens"`
+		TotalTokens         int                 `json:"total_tokens"`
+		PromptTokensDetails promptTokensDetails `json:"prompt_tokens_details"`
 	} `json:"usage"`
+}
+
+// promptTokensDetails is the prompt breakdown of an OpenAI-style usage
+// object. cached_tokens is "Cached tokens present in the prompt" — a SUBSET of
+// prompt_tokens, not an addition to it.
+type promptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+// splitPrompt maps an OpenAI-style usage onto the library's cache-token
+// contract (see llm.Response): prompt_tokens already includes
+// prompt_tokens_details.cached_tokens, so the cached share is subtracted to
+// get the uncached InputTokens. Negative wire values count as 0, and a cached
+// count above the prompt total is clamped to it, so InputTokens is never
+// negative and the two never sum past the prompt. A missing details object
+// decodes as 0 cached tokens (all input uncached).
+func splitPrompt(promptTokens, cachedTokens int) (input, cacheRead int) {
+	prompt, cached := max(promptTokens, 0), max(cachedTokens, 0)
+	cached = min(cached, prompt)
+	return prompt - cached, cached
 }
 
 // normalizeStopReason maps OpenAI finish reasons to the unified set
@@ -539,9 +560,10 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 	resp := &llm.Response{
 		ID:           apiResp.ID,
 		Model:        apiResp.Model,
-		InputTokens:  apiResp.Usage.PromptTokens,
 		OutputTokens: apiResp.Usage.CompletionTokens,
 	}
+	resp.InputTokens, resp.CacheReadTokens = splitPrompt(
+		apiResp.Usage.PromptTokens, apiResp.Usage.PromptTokensDetails.CachedTokens)
 
 	if len(apiResp.Choices) > 0 {
 		choice := apiResp.Choices[0]
@@ -604,6 +626,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// value we invented would defeat the point of the field.
 	var rawFinishReason string
 	var inputTokens, outputTokens = llm.TokensNotReported, llm.TokensNotReported
+	var cacheReadTokens int
 	sawDone := false         // server sent an explicit [DONE]
 	emittedToolCall := false // the turn contained at least one tool call
 
@@ -630,8 +653,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
+				PromptTokens        int                 `json:"prompt_tokens"`
+				CompletionTokens    int                 `json:"completion_tokens"`
+				PromptTokensDetails promptTokensDetails `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 
@@ -655,7 +679,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		// Capture usage if present (may arrive in a separate chunk with empty choices).
 		// Usage is a pointer so we can distinguish "field absent" (nil) from "zero tokens".
 		if event.Usage != nil {
-			inputTokens = event.Usage.PromptTokens
+			inputTokens, cacheReadTokens = splitPrompt(
+				event.Usage.PromptTokens, event.Usage.PromptTokensDetails.CachedTokens)
 			outputTokens = event.Usage.CompletionTokens
 		}
 
@@ -768,11 +793,12 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// Emit EventDone after all chunks processed (finish_reason + usage now combined)
 	if finishReason != "" {
 		if !yield(llm.StreamEvent{
-			Type:          llm.EventDone,
-			StopReason:    finishReason,
-			RawStopReason: rawFinishReason,
-			InputTokens:   inputTokens,
-			OutputTokens:  outputTokens,
+			Type:            llm.EventDone,
+			StopReason:      finishReason,
+			RawStopReason:   rawFinishReason,
+			InputTokens:     inputTokens,
+			OutputTokens:    outputTokens,
+			CacheReadTokens: cacheReadTokens,
 		}, nil) {
 			return
 		}

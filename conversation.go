@@ -18,6 +18,10 @@ const ConversationSchemaVersion = 1
 // Cost is summed per response using each response's own model, so the total stays
 // correct even when a conversation is handed off between providers mid-session
 // (different models have different pricing).
+//
+// InputTokens, CacheReadTokens and CacheCreationTokens follow the disjoint
+// cache-token contract of Response: InputTokens counts uncached input only, so
+// total prompt tokens = InputTokens + CacheReadTokens + CacheCreationTokens.
 type Usage struct {
 	InputTokens         int     `json:"input_tokens"`
 	OutputTokens        int     `json:"output_tokens"`
