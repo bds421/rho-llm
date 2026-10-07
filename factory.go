@@ -63,6 +63,10 @@ func NewModalityClient(cfg Config) (ModalityClient, error) {
 	return &capabilityValidatedModalityClient{ModalityClient: client, cfg: cfg}, nil
 }
 
+// capabilityValidatedModalityClient validates every request before dispatch
+// and, after validation, reports each provider attempt to cfg.UsageHook.
+// Requests rejected by validation never reach the provider and are not
+// reported.
 type capabilityValidatedModalityClient struct {
 	ModalityClient
 	cfg Config
@@ -74,7 +78,9 @@ func (client *capabilityValidatedModalityClient) GenerateEmbeddings(
 	if err := ValidateEmbeddingRequest(client.cfg, req); err != nil {
 		return nil, err
 	}
-	return client.ModalityClient.GenerateEmbeddings(ctx, req)
+	return observeModality(ctx, client.cfg, OperationEmbeddings, req.Model, func(ctx context.Context) (*EmbeddingResponse, error) {
+		return client.ModalityClient.GenerateEmbeddings(ctx, req)
+	})
 }
 
 func (client *capabilityValidatedModalityClient) GenerateImages(
@@ -83,7 +89,9 @@ func (client *capabilityValidatedModalityClient) GenerateImages(
 	if err := ValidateImageRequest(client.cfg, req); err != nil {
 		return nil, err
 	}
-	return client.ModalityClient.GenerateImages(ctx, req)
+	return observeModality(ctx, client.cfg, OperationImageGeneration, req.Model, func(ctx context.Context) (*ImageResponse, error) {
+		return client.ModalityClient.GenerateImages(ctx, req)
+	})
 }
 
 func (client *capabilityValidatedModalityClient) SynthesizeSpeech(
@@ -92,7 +100,9 @@ func (client *capabilityValidatedModalityClient) SynthesizeSpeech(
 	if err := ValidateSpeechRequest(client.cfg, req); err != nil {
 		return nil, err
 	}
-	return client.ModalityClient.SynthesizeSpeech(ctx, req)
+	return observeModality(ctx, client.cfg, OperationSpeechSynthesis, req.Model, func(ctx context.Context) (*SpeechResponse, error) {
+		return client.ModalityClient.SynthesizeSpeech(ctx, req)
+	})
 }
 
 func (client *capabilityValidatedModalityClient) TranscribeAudio(
@@ -101,7 +111,9 @@ func (client *capabilityValidatedModalityClient) TranscribeAudio(
 	if err := ValidateTranscriptionRequest(client.cfg, req); err != nil {
 		return "", err
 	}
-	return client.ModalityClient.TranscribeAudio(ctx, req)
+	return observeModality(ctx, client.cfg, OperationTranscription, req.Model, func(ctx context.Context) (string, error) {
+		return client.ModalityClient.TranscribeAudio(ctx, req)
+	})
 }
 
 // NewBatchClient creates an asynchronous batch client for bulk request processing.

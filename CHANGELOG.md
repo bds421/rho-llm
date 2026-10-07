@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-07
+
+### Added
+
+- **`Config.UsageHook`** (`func(UsageEvent)`, not serialized): one
+  `UsageEvent` per provider attempt of every modality operation
+  (transcription, embeddings, image generation, speech) on clients from
+  `NewModalityClient` / `NewFallbackModalityClient`, failed attempts included
+  with `Err` set. Fields: `Operation`, `Provider`, `Model`, `InputTokens`,
+  `OutputTokens`, `AudioInputTokens`, `AudioSeconds`, `CostUSD`, `Latency`,
+  `Err`, `Attempt`, `Fallback`. `CostUSD` is estimated from registry list
+  prices and is 0 when a price is unknown. A panicking hook is recovered and
+  never changes the call's result. Requests rejected by validation before
+  dispatch are not reported. Lets applications show a live cost display and
+  the cost of each task.
+- **Failover is visible**: `NewFallbackModalityClient` reports each attempt
+  with its chain position (`Attempt` 0-based, `Fallback` true for every
+  deployment but the primary), so a failover is two events. Each deployment
+  reports to its own `UsageHook`; a fallback without one uses the primary's.
+  Closes the v0.9.1 gap that failovers were neither logged nor counted.
+- **Usage capture**: Gemini transcription and image generation read
+  `usageMetadata` (prompt, candidates + thinking, `promptTokensDetails` AUDIO
+  share), which the transcription path previously discarded. OpenAI-compatible
+  transcription reads `usage` (`type: "tokens"` with `input_token_details.
+  audio_tokens`, or `type: "duration"` with `seconds`); xAI `/v1/stt` reads
+  `duration`; OpenAI-compatible embeddings report `prompt_tokens`. Malformed,
+  negative or overflowing usage yields zero tokens and never fails the call.
+- `ReportModalityUsage(ctx, ModalityUsage)` for adapters (including custom
+  `ModalityDriver`s) to report provider usage; `ModalityOperation` constants.
+- **Audio pricing**: `ModelInfo.AudioInputPricePer1M`,
+  `ModelInfo.AudioPricePerMinute`, and `CostInput.AudioInputTokens` /
+  `CostInput.AudioSeconds` in `EstimateCost` (audio tokens are never billed at
+  the text rate when the audio rate is unknown). Prices set from the providers'
+  pricing pages, fetched 2026-10-07: Gemini (ai.google.dev/gemini-api/docs/pricing)
+  `gemini-3.5-transcribe` $2.00/1M audio in + $12.00/1M out,
+  `gemini-3.5-flash-lite` $0.30, `gemini-3.5-flash` $1.50,
+  `gemini-3.1-flash-lite` $0.50, `gemini-3-flash-preview` $1.00,
+  `gemini-2.5-flash` $1.00, `gemini-2.5-flash-lite` $0.30 per 1M audio tokens;
+  OpenAI (developers.openai.com/api/docs/models, /pricing) `gpt-4o-transcribe`
+  $2.50/$10.00, `gpt-4o-mini-transcribe` $1.25/$5.00 per 1M,
+  `gpt-transcribe` $0.0045/min, `whisper-1` $0.006/min; xAI
+  (docs.x.ai/developers/models) `grok-voice-transcribe-2.0` $0.10/hour.
+
+### Tests
+
+- `usage_hook_break_test.go`: hook panic leaves result and error unchanged;
+  nil hook; failed attempt reported with `Err` and zero cost; billed failure
+  (MAX_TOKENS) keeps its cost; failover emits Attempt 0/1, Fallback
+  false/true; per-deployment hooks; hostile Gemini `usageMetadata` (absent,
+  null, wrong types, 1e300, negative, audio > input, MaxInt); hostile OpenAI /
+  xAI usage shapes; unknown price → 0 and NaN/Inf/negative seconds; pinned
+  registry audio prices; embeddings usage; no event for validation errors;
+  40 concurrent failing-over calls under `-race` with no cross-call usage
+  bleed; `Config` JSON round trip drops the hook. Mutation-checked: each of
+  24 guards, when removed, turns its test red.
+
 ## [0.9.1] - 2026-10-07
 
 ### Added

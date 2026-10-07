@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of October 2026 (v0.9.1).
+> **Status:** Reflects the current implementation as of October 2026 (v0.9.2).
 
 ---
 
@@ -293,6 +293,19 @@ audio-capable and Google has no separate transcription endpoint on this API.
 fails over only on provider failures (APIError or transport error), forces
 `DisableRetries` on every deployment but the last so failover is immediate, and
 wraps the last attempt's error so classification reflects the final outcome.
+**Usage reporting (v0.9.2, `usage.go`):** after validation passes,
+`capabilityValidatedModalityClient` runs each provider call through
+`observeModality`, which puts a per-call recorder in the context, measures
+latency and, when `Config.UsageHook` is set, delivers one `UsageEvent` per
+attempt (failed ones included). Adapters push provider-reported counts with
+`ReportModalityUsage(ctx, ModalityUsage)`; they parse usage fields leniently
+(raw JSON, malformed → zero) so accounting can never fail a transcript, and the
+recorder drops negatives and caps the audio share at the input total. Cost comes
+from `EstimateCost`, extended with `AudioInputTokens`/`AudioSeconds` priced at
+`ModelInfo.AudioInputPricePer1M`/`AudioPricePerMinute` (0 = unknown, never the
+text rate). The fallback client tags each attempt's context with its chain
+position (`Attempt`, `Fallback`) and gives fallbacks without a hook the
+primary's. Hook panics are recovered and logged without the event payload.
 Audio container sniffing (`AudioMediaTypeFromSignature`) lives in the root
 package so every driver applies the same declared-vs-actual media-type check.
 Dedicated Gemini transcription models (`gemini-3.5-transcribe`) take audio only;

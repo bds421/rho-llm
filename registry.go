@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -23,6 +24,8 @@ type ModelInfo struct {
 	OutputPricePer1M     float64       // USD per 1M output tokens (0 = unknown/free)
 	CacheWritePricePer1M float64       // Anthropic: price per 1M cache creation tokens (0 = not applicable)
 	CacheReadPricePer1M  float64       // Anthropic/Gemini: price per 1M cached input tokens (0 = not applicable)
+	AudioInputPricePer1M float64       // USD per 1M audio input tokens (0 = unknown: audio tokens are not priced)
+	AudioPricePerMinute  float64       // USD per minute of input audio for duration-billed speech-to-text (0 = unknown/not duration-billed)
 	SupportsThinking     bool          // Adapter/model supports explicit thinking-level control
 	ThoughtSignature     bool          // Gemini 3 models require thought_signature in function call responses
 	Thinking             bool          // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
@@ -99,28 +102,33 @@ var modelRegistry = map[string]ModelInfo{
 
 	// Gemini — from ai.google.dev/gemini-api/docs/pricing and /latest-model (2026-09-19)
 	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
+	// AudioInputPricePer1M from ai.google.dev/gemini-api/docs/pricing (fetched 2026-10-07,
+	// page "last updated 2026-10-07"): set only where the page lists the audio rate
+	// (an explicit "(audio)" price, or one price for all input modalities).
 	"gemini-3.8-flash":       {ID: "gemini-3.8-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.8 Flash"},
 	"gemini-3.7-flash":       {ID: "gemini-3.7-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.7 Flash"},
 	"gemini-3.6-flash":       {ID: "gemini-3.6-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 7.50, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.6 Flash"},
-	"gemini-3.5-flash":       {ID: "gemini-3.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 9.00, CacheReadPricePer1M: 0.15, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.5 Flash"},
-	"gemini-3.5-flash-lite":  {ID: "gemini-3.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.03, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.5 Flash Lite"},
+	"gemini-3.5-flash":       {ID: "gemini-3.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 9.00, CacheReadPricePer1M: 0.15, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 1.50, Label: "Gemini 3.5 Flash"},
+	"gemini-3.5-flash-lite":  {ID: "gemini-3.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.03, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 0.30, Label: "Gemini 3.5 Flash Lite"},
 	"gemini-3.1-pro-preview": {ID: "gemini-3.1-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.1 Pro"},
-	"gemini-3.1-flash-lite":  {ID: "gemini-3.1-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.1 Flash Lite"},
+	"gemini-3.1-flash-lite":  {ID: "gemini-3.1-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 0.50, Label: "Gemini 3.1 Flash Lite"},
 	"gemini-3-pro-preview":   {ID: "gemini-3-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3 Pro"},
-	"gemini-3-flash-preview": {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3 Flash"},
+	"gemini-3-flash-preview": {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 1.00, Label: "Gemini 3 Flash"},
 	"gemini-2.5-pro":         {ID: "gemini-2.5-pro", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "Gemini 2.5 Pro"},
-	"gemini-2.5-flash":       {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, Thinking: true, Label: "Gemini 2.5 Flash"},
-	"gemini-2.5-flash-lite":  {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Thinking: true, Label: "Flash Lite"},
+	"gemini-2.5-flash":       {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, Thinking: true, AudioInputPricePer1M: 1.00, Label: "Gemini 2.5 Flash"},
+	"gemini-2.5-flash-lite":  {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Thinking: true, AudioInputPricePer1M: 0.30, Label: "Flash Lite"},
 	"gemini-2.0-flash":       {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
 	// Gemini non-chat modality models (explicit capabilities; not chat defaults).
 	"gemini-embedding-001":       {ID: "gemini-embedding-001", Provider: "gemini", ContextWindow: 2048, InputPricePer1M: 0.15, Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Gemini Embedding"},
 	"gemini-embedding-2":         {ID: "gemini-embedding-2", Provider: "gemini", ContextWindow: 8192, InputPricePer1M: 0.15, Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Gemini Embedding 2"},
 	"gemini-2.5-flash-image":     {ID: "gemini-2.5-flash-image", Provider: "gemini", ContextWindow: 32768, Capabilities: CapabilitySet(CapabilityImageGeneration | CapabilityBatch), Label: "Gemini 2.5 Flash Image"},
 	"gemini-3-pro-image-preview": {ID: "gemini-3-pro-image-preview", Provider: "gemini", ContextWindow: 65536, Capabilities: CapabilitySet(CapabilityImageGeneration | CapabilityBatch), Label: "Gemini 3 Pro Image"},
+	// Pricing (ai.google.dev/gemini-api/docs/pricing, 2026-10-07): $2.00/1M audio input,
+	// $12.00/1M text output. Audio-only input, so no text input price.
 	// Dedicated speech-to-text (ai.google.dev/gemini-api/docs/models/gemini-3.5-transcribe,
 	// 2026-10-06): audio-only generateContent with audioTranscriptionConfig, 98,304
 	// input / 32,768 output tokens, no Batch API, no thinking. Live-verified.
-	"gemini-3.5-transcribe": {ID: "gemini-3.5-transcribe", Provider: "gemini", MaxTokens: 32768, ContextWindow: 98304, Capabilities: CapabilitySet(CapabilityTranscription), Label: "Gemini 3.5 Transcribe"},
+	"gemini-3.5-transcribe": {ID: "gemini-3.5-transcribe", Provider: "gemini", MaxTokens: 32768, ContextWindow: 98304, Capabilities: CapabilitySet(CapabilityTranscription), OutputPricePer1M: 12.00, AudioInputPricePer1M: 2.00, Label: "Gemini 3.5 Transcribe"},
 
 	// OpenAI — GPT-5.x family (2026-08-06)
 	// Reasoning models use ResponsesAPI: true — reasoning effort is controlled via /v1/responses, not Chat Completions.
@@ -279,14 +287,21 @@ var modelRegistry = map[string]ModelInfo{
 	"gpt-image-2":            {ID: "gpt-image-2", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 2"},
 	"gpt-image-1":            {ID: "gpt-image-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 1"},
 	"tts-1":                  {ID: "tts-1", Provider: "openai", Capabilities: CapabilitySet(CapabilitySpeechSynthesis), Label: "TTS 1"},
-	"whisper-1":              {ID: "whisper-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "Whisper 1"},
+	"whisper-1":              {ID: "whisper-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), AudioPricePerMinute: 0.006, Label: "Whisper 1"},
 	// Transcription models from developers.openai.com/api/docs/guides/speech-to-text (2026-10-06).
-	"gpt-transcribe":         {ID: "gpt-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "GPT Transcribe"},
-	"gpt-4o-transcribe":      {ID: "gpt-4o-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "GPT-4o Transcribe"},
-	"gpt-4o-mini-transcribe": {ID: "gpt-4o-mini-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "GPT-4o mini Transcribe"},
+	// Pricing (fetched 2026-10-07): developers.openai.com/api/docs/models/<id> lists
+	// gpt-4o-transcribe "Audio tokens" $2.50 in / $10.00 out and gpt-4o-mini-transcribe
+	// $1.25 / $5.00 per 1M; gpt-transcribe "Transcription audio duration" $0.0045/min;
+	// developers.openai.com/api/docs/pricing lists Whisper at $0.006/min. Text prompt
+	// tokens have no listed price for these models, so InputPricePer1M stays 0.
+	"gpt-transcribe":         {ID: "gpt-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), AudioPricePerMinute: 0.0045, Label: "GPT Transcribe"},
+	"gpt-4o-transcribe":      {ID: "gpt-4o-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), OutputPricePer1M: 10.00, AudioInputPricePer1M: 2.50, Label: "GPT-4o Transcribe"},
+	"gpt-4o-mini-transcribe": {ID: "gpt-4o-mini-transcribe", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), OutputPricePer1M: 5.00, AudioInputPricePer1M: 1.25, Label: "GPT-4o mini Transcribe"},
 	// xAI speech-to-text (docs.x.ai/developers/model-capabilities/audio/speech-to-text, 2026-10-06):
 	// POST /v1/stt, not OpenAI-compatible; keyterm vocabulary.
-	"grok-voice-transcribe-2.0": {ID: "grok-voice-transcribe-2.0", Provider: "xai", Capabilities: CapabilitySet(CapabilityTranscription), Label: "Grok Voice Transcribe 2.0"},
+	// Pricing: docs.x.ai/developers/models (fetched 2026-10-07) "STT (Batch) $0.10 / hour";
+	// /v1/stt is the batch endpoint and returns the billed "duration" in seconds.
+	"grok-voice-transcribe-2.0": {ID: "grok-voice-transcribe-2.0", Provider: "xai", Capabilities: CapabilitySet(CapabilityTranscription), AudioPricePerMinute: 0.10 / 60, Label: "Grok Voice Transcribe 2.0"},
 }
 
 func init() {
@@ -764,6 +779,13 @@ type CostInput struct {
 	CacheCreateTokens int  // Anthropic: tokens written to cache
 	CacheReadTokens   int  // Anthropic/Gemini: tokens read from cache
 	Batch             bool // request was processed via the Batch API (billed at 50% of the sync rate)
+	// AudioInputTokens is the audio share of InputTokens. It is priced at
+	// AudioInputPricePer1M (0 when unknown — never at the text rate) and the
+	// rest of InputTokens at InputPricePer1M.
+	AudioInputTokens int
+	// AudioSeconds is input audio duration for duration-billed speech-to-text,
+	// priced at AudioPricePerMinute. Negative or non-finite values count as 0.
+	AudioSeconds float64
 }
 
 // EstimateCost returns the estimated cost in USD for a request/response.
@@ -798,7 +820,18 @@ func EstimateCost(input CostInput) float64 {
 	cacheCreateTok := clamp(input.CacheCreateTokens)
 	cacheReadTok := clamp(input.CacheReadTokens)
 
-	inputCost := float64(inputTok) * info.InputPricePer1M / 1_000_000
+	audioTok := clamp(input.AudioInputTokens)
+	if audioTok > inputTok {
+		audioTok = inputTok
+	}
+	audioSeconds := input.AudioSeconds
+	if math.IsNaN(audioSeconds) || math.IsInf(audioSeconds, 0) || audioSeconds < 0 {
+		audioSeconds = 0
+	}
+
+	inputCost := float64(inputTok-audioTok) * info.InputPricePer1M / 1_000_000
+	inputCost += float64(audioTok) * info.AudioInputPricePer1M / 1_000_000
+	inputCost += audioSeconds / 60 * info.AudioPricePerMinute
 	outputCost := float64(outputTok+thinkingTok) * info.OutputPricePer1M / 1_000_000
 
 	var cacheCost float64

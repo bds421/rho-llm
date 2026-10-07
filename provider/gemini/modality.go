@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -211,12 +212,13 @@ func (c *Client) GenerateImages(ctx context.Context, req llm.ImageRequest) (*llm
 		if err != nil {
 			return nil, err
 		}
-		var wire geminiResponse
+		var wire geminiModalityResponse
 		if err := llm.DecodeJSONResponse(resp, c.config, &wire); err != nil {
 			_ = resp.Body.Close()
 			return nil, fmt.Errorf("gemini: decode image response: %w", err)
 		}
 		_ = resp.Body.Close()
+		llm.ReportModalityUsage(ctx, modalityUsage(wire.UsageMetadata))
 		found := false
 		for _, cand := range wire.Candidates {
 			for _, part := range cand.Content.Parts {
@@ -294,10 +296,13 @@ func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionReque
 		return "", err
 	}
 	defer resp.Body.Close()
-	var wire geminiResponse
+	var wire geminiModalityResponse
 	if err := llm.DecodeJSONResponse(resp, c.config, &wire); err != nil {
 		return "", fmt.Errorf("gemini: decode transcription response: %w", err)
 	}
+	// Reported before the candidate checks: a response that is billed but
+	// unusable (no candidates, a non-STOP finish) still costs its tokens.
+	llm.ReportModalityUsage(ctx, modalityUsage(wire.UsageMetadata))
 	if len(wire.Candidates) == 0 {
 		return "", fmt.Errorf("gemini: transcription response contained no candidates")
 	}
@@ -323,6 +328,49 @@ func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionReque
 		return "", fmt.Errorf("gemini: transcription stopped with %s", candidate.FinishReason)
 	}
 	return strings.TrimSpace(transcript.String()), nil
+}
+
+// geminiModalityResponse is a generateContent response whose usageMetadata is
+// kept raw: the outer field shadows geminiResponse.UsageMetadata, so a
+// malformed usage block cannot fail a transcription or image call — usage is
+// best-effort accounting, the transcript is the result.
+type geminiModalityResponse struct {
+	geminiResponse
+	UsageMetadata json.RawMessage `json:"usageMetadata"`
+}
+
+// modalityUsage reads generateContent usageMetadata leniently. Anything that
+// does not decode as documented — absent, null, wrong types, out-of-range
+// numbers — reports zero usage; negative counts are dropped by
+// llm.ReportModalityUsage. Output includes thinking tokens, which Gemini bills
+// at the output rate. AudioInputTokens sums promptTokensDetails entries whose
+// modality is AUDIO.
+func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
+	var usage struct {
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		ThoughtsTokenCount   int `json:"thoughtsTokenCount"`
+		PromptTokensDetails  []struct {
+			Modality   string `json:"modality"`
+			TokenCount int    `json:"tokenCount"`
+		} `json:"promptTokensDetails"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &usage) != nil {
+		return llm.ModalityUsage{}
+	}
+	out := llm.ModalityUsage{InputTokens: usage.PromptTokenCount}
+	if usage.CandidatesTokenCount > 0 {
+		out.OutputTokens = usage.CandidatesTokenCount
+	}
+	if usage.ThoughtsTokenCount > 0 && out.OutputTokens <= math.MaxInt-usage.ThoughtsTokenCount {
+		out.OutputTokens += usage.ThoughtsTokenCount
+	}
+	for _, detail := range usage.PromptTokensDetails {
+		if detail.Modality == "AUDIO" && detail.TokenCount > 0 && out.AudioInputTokens <= math.MaxInt-detail.TokenCount {
+			out.AudioInputTokens += detail.TokenCount
+		}
+	}
+	return out
 }
 
 // transcriptionModel resolves the model a transcription request targets.

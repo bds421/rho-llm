@@ -559,6 +559,14 @@ cost := llm.EstimateCost(llm.CostInput{
 })
 fmt.Printf("Cost: $%.6f\n", cost)
 
+// Audio-billed models: audio tokens use AudioInputPricePer1M, duration-billed
+// speech-to-text uses AudioPricePerMinute; an unknown rate prices at 0.
+sttCost := llm.EstimateCost(llm.CostInput{
+    Model: "gemini-3.5-transcribe", InputTokens: 1500, AudioInputTokens: 1500, OutputTokens: 60,
+})
+whisperCost := llm.EstimateCost(llm.CostInput{Model: "whisper-1", AudioSeconds: 90})
+fmt.Printf("STT: $%.6f / $%.6f\n", sttCost, whisperCost)
+
 // Access pricing data directly
 info, _ := llm.GetModelInfo("claude-opus-4-6")
 fmt.Printf("Context: %d tokens, Input: $%.2f/1M\n", info.ContextWindow, info.InputPricePer1M)
@@ -777,6 +785,34 @@ stt, _ := llm.NewFallbackModalityClient(
 Failover happens only on provider failures (an `APIError` or a transport
 error), never on validation errors or cancellation, and without backing off on
 the earlier deployments. The final error classifies as the last attempt.
+
+To show what each call costs, set `Config.UsageHook`. It receives one
+`UsageEvent` per provider attempt — failed attempts included, with `Err` set —
+carrying the operation, provider, model, provider-reported tokens (with the
+audio share in `AudioInputTokens`), billed audio seconds for duration-billed
+speech-to-text, latency, and `CostUSD` estimated from registry list prices
+(0 when a price is unknown; never guessed). In a fallback chain `Attempt` is
+the deployment's position and `Fallback` is true for every deployment but the
+primary, so a failover is two events. A fallback without its own hook uses the
+primary's.
+
+```go
+cfg := llm.Config{Provider: "gemini", Model: "gemini-3.5-transcribe", APIKey: key,
+    UsageHook: func(e llm.UsageEvent) {
+        log.Printf("%s %s/%s attempt=%d fallback=%v $%.6f %v err=%v",
+            e.Operation, e.Provider, e.Model, e.Attempt, e.Fallback, e.CostUSD, e.Latency, e.Err)
+    }}
+stt, _ := llm.NewFallbackModalityClient(cfg,
+    llm.Config{Provider: "gemini", Model: "gemini-3.5-flash-lite", APIKey: key})
+```
+
+The hook runs synchronously after each attempt (keep it fast), a panic in it is
+recovered, and it never changes the call's result. Requests rejected by
+validation before dispatch are not reported. Usage sources: Gemini
+`usageMetadata` (transcription, image generation), OpenAI transcription `usage`
+(tokens or duration), xAI `/v1/stt` `duration`, and OpenAI-compatible embedding
+`prompt_tokens`. Gemini embeddings, image generation on OpenAI-compatible
+endpoints and speech synthesis report no usage (tokens and cost 0).
 
 `TranscriptionRequest.Prompt` is a spelling hint of at most
 `MaxTranscriptionPromptRunes` runes, never content to transcribe. Gemini accepts

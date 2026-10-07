@@ -24,6 +24,14 @@ import (
 // Each request's Model is rewritten to the deployment being tried. Provider()
 // and Model() report the primary. Close closes every deployment.
 //
+// Usage reporting: each deployment reports its own attempt to its own
+// Config.UsageHook, with UsageEvent.Attempt set to its position in the chain
+// and Fallback true for every deployment but the primary, so a failover shows
+// up as two events (the failed primary with Err set, then the fallback). A
+// fallback whose UsageHook is nil inherits the primary's, so one hook on the
+// primary sees the whole chain; give a fallback its own hook to route it
+// elsewhere.
+//
 // Motivation: dedicated preview models can break without notice — on
 // 2026-10-07 gemini-3.5-transcribe began rejecting every request with HTTP 400
 // while gemini-3.5-flash-lite kept working.
@@ -33,6 +41,9 @@ func NewFallbackModalityClient(primary Config, fallbacks ...Config) (ModalityCli
 	for i, cfg := range configs {
 		if i < len(configs)-1 {
 			cfg.DisableRetries = true
+		}
+		if cfg.UsageHook == nil {
+			cfg.UsageHook = primary.UsageHook
 		}
 		client, err := NewModalityClient(cfg)
 		if err != nil {
@@ -67,11 +78,11 @@ func isProviderFailure(ctx context.Context, err error) bool {
 // not the provider's. The returned error wraps the LAST attempt's error, so
 // IsRateLimited/IsAuthError/errors.As classify the final outcome (what the
 // caller should act on); earlier attempts are kept as text.
-func tryEach[T any](ctx context.Context, clients []ModalityClient, call func(ModalityClient) (T, error)) (T, error) {
+func tryEach[T any](ctx context.Context, clients []ModalityClient, call func(context.Context, ModalityClient) (T, error)) (T, error) {
 	var zero T
 	var errs []error
 	for i, client := range clients {
-		result, err := call(client)
+		result, err := call(withModalityAttempt(ctx, i), client)
 		if err == nil {
 			return result, nil
 		}
@@ -92,28 +103,28 @@ func tryEach[T any](ctx context.Context, clients []ModalityClient, call func(Mod
 }
 
 func (c *fallbackModalityClient) GenerateEmbeddings(ctx context.Context, req EmbeddingRequest) (*EmbeddingResponse, error) {
-	return tryEach(ctx, c.clients, func(client ModalityClient) (*EmbeddingResponse, error) {
+	return tryEach(ctx, c.clients, func(ctx context.Context, client ModalityClient) (*EmbeddingResponse, error) {
 		req.Model = client.Model()
 		return client.GenerateEmbeddings(ctx, req)
 	})
 }
 
 func (c *fallbackModalityClient) GenerateImages(ctx context.Context, req ImageRequest) (*ImageResponse, error) {
-	return tryEach(ctx, c.clients, func(client ModalityClient) (*ImageResponse, error) {
+	return tryEach(ctx, c.clients, func(ctx context.Context, client ModalityClient) (*ImageResponse, error) {
 		req.Model = client.Model()
 		return client.GenerateImages(ctx, req)
 	})
 }
 
 func (c *fallbackModalityClient) SynthesizeSpeech(ctx context.Context, req SpeechRequest) (*SpeechResponse, error) {
-	return tryEach(ctx, c.clients, func(client ModalityClient) (*SpeechResponse, error) {
+	return tryEach(ctx, c.clients, func(ctx context.Context, client ModalityClient) (*SpeechResponse, error) {
 		req.Model = client.Model()
 		return client.SynthesizeSpeech(ctx, req)
 	})
 }
 
 func (c *fallbackModalityClient) TranscribeAudio(ctx context.Context, req TranscriptionRequest) (string, error) {
-	return tryEach(ctx, c.clients, func(client ModalityClient) (string, error) {
+	return tryEach(ctx, c.clients, func(ctx context.Context, client ModalityClient) (string, error) {
 		req.Model = client.Model()
 		return client.TranscribeAudio(ctx, req)
 	})

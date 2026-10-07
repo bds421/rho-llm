@@ -137,7 +137,12 @@ func (c *Client) GenerateEmbeddings(
 	if err := decodeBoundedJSON(response.Body, c.config.EffectiveMaxResponseBodyBytes(), &wire); err != nil {
 		return nil, fmt.Errorf("openaicompat: decode embeddings response: %w", err)
 	}
-	return wire.toResponse(len(req.Input))
+	result, err := wire.toResponse(len(req.Input))
+	if wire.Usage.PromptTokens > 0 {
+		// Billed even when the vectors fail validation below.
+		llm.ReportModalityUsage(ctx, llm.ModalityUsage{InputTokens: wire.Usage.PromptTokens})
+	}
+	return result, err
 }
 
 type imageAPIResponse struct {
@@ -313,16 +318,60 @@ func (c *Client) TranscribeAudio(ctx context.Context, req llm.TranscriptionReque
 	defer response.Body.Close()
 	// Text is a pointer so a body without the field (an error object, a wrong
 	// shape, null) is a failure, while an explicit "" stays genuine silence.
+	// Usage and duration stay raw so a malformed accounting field can never
+	// fail an otherwise valid transcript.
 	var wire struct {
-		Text *string `json:"text"`
+		Text     *string         `json:"text"`
+		Usage    json.RawMessage `json:"usage"`
+		Duration json.RawMessage `json:"duration"`
 	}
 	if err := decodeBoundedJSON(response.Body, c.config.EffectiveMaxResponseBodyBytes(), &wire); err != nil {
 		return "", fmt.Errorf("openaicompat: decode transcription response: %w", err)
 	}
+	llm.ReportModalityUsage(ctx, transcriptionUsage(wire.Usage, wire.Duration, xai))
 	if wire.Text == nil {
 		return "", fmt.Errorf("openaicompat: transcription response has no text field")
 	}
 	return *wire.Text, nil
+}
+
+// transcriptionUsage reads the billing fields of a transcription response
+// leniently; anything that does not decode as documented reports nothing.
+// OpenAI (developers.openai.com/api/reference, audio/transcriptions/create)
+// returns usage as {"type":"tokens","input_tokens","output_tokens",
+// "input_token_details":{"audio_tokens","text_tokens"}} for token-billed models
+// or {"type":"duration","seconds"} for duration-billed ones (whisper-1). xAI
+// /v1/stt returns a top-level "duration" in seconds, which is what it bills.
+func transcriptionUsage(rawUsage, rawDuration json.RawMessage, xai bool) llm.ModalityUsage {
+	var out llm.ModalityUsage
+	if len(rawUsage) > 0 {
+		var usage struct {
+			Type              string  `json:"type"`
+			InputTokens       int     `json:"input_tokens"`
+			OutputTokens      int     `json:"output_tokens"`
+			Seconds           float64 `json:"seconds"`
+			InputTokenDetails struct {
+				AudioTokens int `json:"audio_tokens"`
+			} `json:"input_token_details"`
+		}
+		if json.Unmarshal(rawUsage, &usage) == nil {
+			switch usage.Type {
+			case "tokens":
+				out.InputTokens = usage.InputTokens
+				out.OutputTokens = usage.OutputTokens
+				out.AudioInputTokens = usage.InputTokenDetails.AudioTokens
+			case "duration":
+				out.AudioSeconds = usage.Seconds
+			}
+		}
+	}
+	if xai && len(rawDuration) > 0 && out.AudioSeconds == 0 {
+		var seconds float64
+		if json.Unmarshal(rawDuration, &seconds) == nil {
+			out.AudioSeconds = seconds
+		}
+	}
+	return out
 }
 
 // isXAI reports the xAI deployment, whose speech-to-text endpoint differs

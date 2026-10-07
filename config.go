@@ -252,6 +252,15 @@ type Config struct {
 	// RetryHook receives retry lifecycle events for observability. Not serialized.
 	RetryHook RetryHook `json:"-"`
 
+	// UsageHook, when set, receives one UsageEvent per provider attempt of a
+	// modality operation (TranscribeAudio, GenerateEmbeddings, GenerateImages,
+	// SynthesizeSpeech) on clients built by NewModalityClient or
+	// NewFallbackModalityClient — failed attempts included, requests rejected
+	// by validation before dispatch excluded. Panics are recovered; the hook
+	// never changes a call's result. Chat calls report usage on Response
+	// instead. Not serialized.
+	UsageHook UsageHook `json:"-"`
+
 	// MaxRetries caps the number of retry/rotation iterations. Zero uses the
 	// default (DefaultMaxRetries). Minimum effective value is 3 (for single-key
 	// resilience against transient errors).
