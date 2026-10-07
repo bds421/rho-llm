@@ -764,6 +764,20 @@ text, _ := stt.TranscribeAudio(ctx, llm.TranscriptionRequest{
 })
 ```
 
+Dedicated or preview models can break without notice. Chain a fallback so a
+provider failure on one deployment is answered by the next:
+
+```go
+stt, _ := llm.NewFallbackModalityClient(
+    llm.Config{Provider: "gemini", Model: "gemini-3.5-transcribe", APIKey: key},
+    llm.Config{Provider: "gemini", Model: "gemini-3.5-flash-lite", APIKey: key},
+)
+```
+
+Failover happens only on provider failures (an `APIError` or a transport
+error), never on validation errors or cancellation, and without backing off on
+the earlier deployments. The final error classifies as the last attempt.
+
 `TranscriptionRequest.Prompt` is a spelling hint of at most
 `MaxTranscriptionPromptRunes` runes, never content to transcribe. Gemini accepts
 WAV, MP3, AIFF, AAC, OGG, FLAC, WebM and MP4/M4A inline up to 14 MiB (its 20 MB

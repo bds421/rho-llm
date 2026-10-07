@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-07
+
+### Added
+
+- **`NewFallbackModalityClient(primary, fallbacks...)`**: model/provider
+  failover for every modality operation (transcription, embeddings, images,
+  speech). A later deployment is tried only when the previous one failed at the
+  provider (an `APIError` of any status, or a transport error). Validation errors
+  and caller cancellation are returned without another call. Every deployment
+  except the last runs with retries disabled, so failover is immediate. Without
+  that, a single 503 kept a request in the default backoff for 2 min 22 s
+  (measured: ten attempts). Each request's `Model` is rewritten to the
+  deployment being tried. When all deployments fail, the error wraps the LAST
+  attempt, so `IsRateLimited`, `IsAuthError` and `errors.As` classify the final
+  outcome; earlier attempts are kept as text.
+  Motivation: on 2026-10-07 `gemini-3.5-transcribe` began rejecting every
+  request with HTTP 400 ("Thinking is not enabled for this model"), even with no
+  generation config, while `gemini-3.5-flash-lite` kept working.
+
+### Tests
+
+- Break tests for the fallback client: the 400 outage, 503/429 failover without
+  backoff, no second call for invalid input or cancellation, three-deep chain
+  order, last-attempt classification, invalid deployments failing construction,
+  and concurrent use with double `Close` under `-race`. Mutation-checked (primary
+  retries, missing model rewrite, first-attempt classification each turn a test
+  red).
+
 ## [0.9.0] - 2026-10-06
 
 ### Added

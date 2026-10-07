@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of October 2026 (v0.9.0).
+> **Status:** Reflects the current implementation as of October 2026 (v0.9.1).
 
 ---
 
@@ -289,6 +289,10 @@ The Gemini driver implements embeddings, image generation and transcription;
 transcription sends the audio as `inlineData` to `generateContent` with a
 verbatim-transcript instruction, because Gemini chat models are natively
 audio-capable and Google has no separate transcription endpoint on this API.
+`NewFallbackModalityClient` chains deployments (`fallback_modality.go`): it
+fails over only on provider failures (APIError or transport error), forces
+`DisableRetries` on every deployment but the last so failover is immediate, and
+wraps the last attempt's error so classification reflects the final outcome.
 Audio container sniffing (`AudioMediaTypeFromSignature`) lives in the root
 package so every driver applies the same declared-vs-actual media-type check.
 Dedicated Gemini transcription models (`gemini-3.5-transcribe`) take audio only;
