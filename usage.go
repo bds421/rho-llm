@@ -28,13 +28,17 @@ type UsageEvent struct {
 	// Model is the model the attempt targeted (the request's Model when set,
 	// otherwise the client's), alias-resolved.
 	Model string
-	// InputTokens is the provider-reported prompt size, audio included;
-	// AudioInputTokens is the audio share of it. OutputTokens includes
-	// thinking tokens. All are 0 when the provider reported no usage — they
-	// are never estimated.
+	// InputTokens is the provider-reported UNCACHED prompt size, audio
+	// included; AudioInputTokens is the audio share of it. CacheReadTokens is
+	// the cached share, disjoint from InputTokens — the same cache-token
+	// contract as Response.InputTokens, so the full prompt is their sum and
+	// EstimateCost prices each token once. OutputTokens includes thinking
+	// tokens. All are 0 when the provider reported no usage — they are never
+	// estimated.
 	InputTokens      int
 	OutputTokens     int
 	AudioInputTokens int
+	CacheReadTokens  int
 	// AudioSeconds is the billed audio duration when the provider reports one
 	// (duration-billed speech-to-text such as whisper-1 or xAI /v1/stt).
 	AudioSeconds float64
@@ -57,13 +61,28 @@ type UsageEvent struct {
 // the hook is recovered and logged; it never changes the call's result.
 type UsageHook func(UsageEvent)
 
+// ContextUsageHook is UsageHook plus the context the modality call was made
+// with, so a hook shared by many concurrent callers can attribute each event
+// to its request (a user or tenant ID carried as a context value) without
+// building a client per caller. ctx is the caller's context: its values are
+// intact, but it may already be cancelled or past its deadline (the event of
+// a timed-out attempt is still delivered) — do not use it for further I/O.
+// Same delivery rules as UsageHook: synchronous, once per attempt, panics
+// recovered.
+type ContextUsageHook func(context.Context, UsageEvent)
+
 // ModalityUsage is what a modality adapter reports about the provider calls it
 // made for one operation. Counts are provider-reported, never estimated.
+//
+// InputTokens is the uncached prompt; CacheReadTokens is the cached share,
+// disjoint from it (see UsageEvent). An adapter whose provider reports a
+// total that includes the cached share subtracts it before reporting.
 type ModalityUsage struct {
 	InputTokens      int
 	OutputTokens     int
 	AudioInputTokens int
 	AudioSeconds     float64
+	CacheReadTokens  int
 }
 
 type usageRecorderKey struct{}
@@ -96,6 +115,7 @@ func ReportModalityUsage(ctx context.Context, usage ModalityUsage) {
 	recorder.usage.OutputTokens = saturatingAdd(recorder.usage.OutputTokens, usage.OutputTokens)
 	recorder.usage.AudioInputTokens = saturatingAdd(recorder.usage.AudioInputTokens, usage.AudioInputTokens)
 	recorder.usage.AudioSeconds = saturatingAddSeconds(recorder.usage.AudioSeconds, usage.AudioSeconds)
+	recorder.usage.CacheReadTokens = saturatingAdd(recorder.usage.CacheReadTokens, usage.CacheReadTokens)
 }
 
 // saturatingAddSeconds sums two non-negative finite durations, saturating at
@@ -114,6 +134,9 @@ func sanitizeModalityUsage(usage ModalityUsage) ModalityUsage {
 	}
 	if usage.AudioInputTokens < 0 {
 		usage.AudioInputTokens = 0
+	}
+	if usage.CacheReadTokens < 0 {
+		usage.CacheReadTokens = 0
 	}
 	if usage.AudioInputTokens > usage.InputTokens {
 		usage.AudioInputTokens = usage.InputTokens
@@ -150,13 +173,14 @@ func modalityAttempt(ctx context.Context) int {
 	return 0
 }
 
-// observeModality runs one provider attempt and, when cfg.UsageHook is set,
-// reports it. The hook never alters the returned values.
+// observeModality runs one provider attempt and, when cfg.UsageHook or
+// cfg.UsageHookCtx is set, reports it to each (UsageHook first). The hooks
+// never alter the returned values.
 func observeModality[T any](
 	ctx context.Context, cfg Config, operation ModalityOperation, requestedModel string,
 	call func(context.Context) (T, error),
 ) (T, error) {
-	if cfg.UsageHook == nil {
+	if cfg.UsageHook == nil && cfg.UsageHookCtx == nil {
 		return call(ctx)
 	}
 	recorder := &usageRecorder{}
@@ -180,23 +204,30 @@ func observeModality[T any](
 		OutputTokens:     usage.OutputTokens,
 		AudioInputTokens: usage.AudioInputTokens,
 		AudioSeconds:     usage.AudioSeconds,
+		CacheReadTokens:  usage.CacheReadTokens,
 		CostUSD: EstimateCost(CostInput{
 			Model:            model,
 			InputTokens:      usage.InputTokens,
 			OutputTokens:     usage.OutputTokens,
 			AudioInputTokens: usage.AudioInputTokens,
 			AudioSeconds:     usage.AudioSeconds,
+			CacheReadTokens:  usage.CacheReadTokens,
 		}),
 		Latency:  latency,
 		Err:      err,
 		Attempt:  attempt,
 		Fallback: attempt > 0,
 	}
-	deliverUsageEvent(cfg.UsageHook, event)
+	if cfg.UsageHook != nil {
+		deliverUsageEvent(event, func() { cfg.UsageHook(event) })
+	}
+	if cfg.UsageHookCtx != nil {
+		deliverUsageEvent(event, func() { cfg.UsageHookCtx(ctx, event) })
+	}
 	return result, err
 }
 
-func deliverUsageEvent(hook UsageHook, event UsageEvent) {
+func deliverUsageEvent(event UsageEvent, call func()) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			slog.Warn("llm: usage hook panicked; event dropped",
@@ -204,5 +235,5 @@ func deliverUsageEvent(hook UsageHook, event UsageEvent) {
 				"provider", event.Provider, "model", event.Model)
 		}
 	}()
-	hook(event)
+	call()
 }

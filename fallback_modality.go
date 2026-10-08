@@ -18,8 +18,14 @@ import (
 //
 // Failover replaces retries: every deployment except the last has
 // DisableRetries forced on, so a 5xx on the primary hands over immediately
-// instead of backing off first (the default retries up to ten times over
-// minutes). The last deployment keeps its own retry settings.
+// instead of backing off first (by default three attempts with exponential
+// backoff, longer with MaxRetries or a Retry-After hint). The last deployment
+// keeps its own retry settings.
+//
+// Which failures hand over is the FailoverPolicy; this constructor uses
+// FailoverAnyProviderError. See NewFallbackModalityClientWithPolicy and
+// FailoverTransientOnly (recommended when re-sending a rejected payload to
+// another vendor is undesirable).
 //
 // Each request's Model is rewritten to the deployment being tried. Provider()
 // and Model() report the primary. Close closes every deployment.
@@ -28,22 +34,76 @@ import (
 // Config.UsageHook, with UsageEvent.Attempt set to its position in the chain
 // and Fallback true for every deployment but the primary, so a failover shows
 // up as two events (the failed primary with Err set, then the fallback). A
-// fallback whose UsageHook is nil inherits the primary's, so one hook on the
-// primary sees the whole chain; give a fallback its own hook to route it
-// elsewhere.
+// fallback whose UsageHook (or UsageHookCtx) is nil inherits the primary's,
+// so one hook on the primary sees the whole chain; give a fallback its own
+// hook to route it elsewhere.
 //
 // Motivation: dedicated preview models can break without notice — on
 // 2026-10-07 gemini-3.5-transcribe began rejecting every request with HTTP 400
 // while gemini-3.5-flash-lite kept working.
 func NewFallbackModalityClient(primary Config, fallbacks ...Config) (ModalityClient, error) {
+	return NewFallbackModalityClientWithPolicy(nil, primary, fallbacks...)
+}
+
+// FailoverPolicy decides whether a failed deployment's error should hand the
+// request to the next deployment in a NewFallbackModalityClientWithPolicy
+// chain. It is consulted only for errors that are not caller cancellation or
+// a context deadline — those always stop the chain.
+type FailoverPolicy func(ctx context.Context, err error) bool
+
+// FailoverAnyProviderError is the default FailoverPolicy (what
+// NewFallbackModalityClient uses): fail over on any *APIError, whatever its
+// status, and on any transport error. It covers a dedicated model that starts
+// rejecting every request with HTTP 400, at the price of re-sending a payload
+// the provider rejected as malformed or oversized (400/413/422) to the next
+// vendor — a second charge and a second data-egress destination.
+func FailoverAnyProviderError(ctx context.Context, err error) bool {
+	return isProviderFailure(ctx, err)
+}
+
+// FailoverTransientOnly is the recommended FailoverPolicy when payload cost
+// or data egress matters: fail over on transport errors and on statuses that
+// say the deployment, not the request, is at fault — 408, 429, 5xx, plus
+// 401/403 (the deployment's credential) and 404 (the deployment's model is
+// gone). A 400/413/415/422 is returned without contacting the next
+// deployment. To also fail over on a 400 from a model known to be broken,
+// wrap it: func(ctx, err) bool { return FailoverTransientOnly(ctx, err) || myCheck(err) }.
+func FailoverTransientOnly(ctx context.Context, err error) bool {
+	if !isProviderFailure(ctx, err) {
+		return false
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return true // transport failure
+	}
+	switch code := apiErr.StatusCode; {
+	case code == 408 || code == 429 || code >= 500:
+		return true
+	case code == 401 || code == 403 || code == 404:
+		return true
+	default:
+		return false
+	}
+}
+
+// NewFallbackModalityClientWithPolicy is NewFallbackModalityClient with an
+// explicit FailoverPolicy; nil means FailoverAnyProviderError (identical to
+// NewFallbackModalityClient). Retry, usage and Close semantics are the same.
+func NewFallbackModalityClientWithPolicy(policy FailoverPolicy, primary Config, fallbacks ...Config) (ModalityClient, error) {
+	if policy == nil {
+		policy = FailoverAnyProviderError
+	}
 	configs := append([]Config{primary}, fallbacks...)
-	chain := &fallbackModalityClient{}
+	chain := &fallbackModalityClient{policy: policy}
 	for i, cfg := range configs {
 		if i < len(configs)-1 {
 			cfg.DisableRetries = true
 		}
 		if cfg.UsageHook == nil {
 			cfg.UsageHook = primary.UsageHook
+		}
+		if cfg.UsageHookCtx == nil {
+			cfg.UsageHookCtx = primary.UsageHookCtx
 		}
 		client, err := NewModalityClient(cfg)
 		if err != nil {
@@ -57,6 +117,7 @@ func NewFallbackModalityClient(primary Config, fallbacks ...Config) (ModalityCli
 
 type fallbackModalityClient struct {
 	clients []ModalityClient
+	policy  FailoverPolicy
 }
 
 // isProviderFailure reports an error the provider or the network caused, for
@@ -78,7 +139,7 @@ func isProviderFailure(ctx context.Context, err error) bool {
 // not the provider's. The returned error wraps the LAST attempt's error, so
 // IsRateLimited/IsAuthError/errors.As classify the final outcome (what the
 // caller should act on); earlier attempts are kept as text.
-func tryEach[T any](ctx context.Context, clients []ModalityClient, call func(context.Context, ModalityClient) (T, error)) (T, error) {
+func tryEach[T any](ctx context.Context, clients []ModalityClient, policy FailoverPolicy, call func(context.Context, ModalityClient) (T, error)) (T, error) {
 	var zero T
 	var errs []error
 	for i, client := range clients {
@@ -87,7 +148,7 @@ func tryEach[T any](ctx context.Context, clients []ModalityClient, call func(con
 			return result, nil
 		}
 		errs = append(errs, fmt.Errorf("%s/%s: %w", client.Provider(), client.Model(), err))
-		if i == len(clients)-1 || !isProviderFailure(ctx, err) {
+		if i == len(clients)-1 || !isProviderFailure(ctx, err) || !policy(ctx, err) {
 			break
 		}
 	}
@@ -103,28 +164,28 @@ func tryEach[T any](ctx context.Context, clients []ModalityClient, call func(con
 }
 
 func (c *fallbackModalityClient) GenerateEmbeddings(ctx context.Context, req EmbeddingRequest) (*EmbeddingResponse, error) {
-	return tryEach(ctx, c.clients, func(ctx context.Context, client ModalityClient) (*EmbeddingResponse, error) {
+	return tryEach(ctx, c.clients, c.policy, func(ctx context.Context, client ModalityClient) (*EmbeddingResponse, error) {
 		req.Model = client.Model()
 		return client.GenerateEmbeddings(ctx, req)
 	})
 }
 
 func (c *fallbackModalityClient) GenerateImages(ctx context.Context, req ImageRequest) (*ImageResponse, error) {
-	return tryEach(ctx, c.clients, func(ctx context.Context, client ModalityClient) (*ImageResponse, error) {
+	return tryEach(ctx, c.clients, c.policy, func(ctx context.Context, client ModalityClient) (*ImageResponse, error) {
 		req.Model = client.Model()
 		return client.GenerateImages(ctx, req)
 	})
 }
 
 func (c *fallbackModalityClient) SynthesizeSpeech(ctx context.Context, req SpeechRequest) (*SpeechResponse, error) {
-	return tryEach(ctx, c.clients, func(ctx context.Context, client ModalityClient) (*SpeechResponse, error) {
+	return tryEach(ctx, c.clients, c.policy, func(ctx context.Context, client ModalityClient) (*SpeechResponse, error) {
 		req.Model = client.Model()
 		return client.SynthesizeSpeech(ctx, req)
 	})
 }
 
 func (c *fallbackModalityClient) TranscribeAudio(ctx context.Context, req TranscriptionRequest) (string, error) {
-	return tryEach(ctx, c.clients, func(ctx context.Context, client ModalityClient) (string, error) {
+	return tryEach(ctx, c.clients, c.policy, func(ctx context.Context, client ModalityClient) (string, error) {
 		req.Model = client.Model()
 		return client.TranscribeAudio(ctx, req)
 	})

@@ -384,6 +384,13 @@ type Config struct {
 	// instead. Not serialized.
 	UsageHook UsageHook `json:"-"`
 
+	// UsageHookCtx is UsageHook with the caller's context, for attributing
+	// events to the request that caused them (e.g. a user ID in a context
+	// value) on a client shared by many callers. Same events, same delivery
+	// rules; when both hooks are set each receives every event, UsageHook
+	// first. Not serialized.
+	UsageHookCtx ContextUsageHook `json:"-"`
+
 	// MaxRetries caps the number of retry/rotation iterations. Zero uses the
 	// default: DefaultMaxRetries as the cap for pooled chat clients (which
 	// make max(healthy keys, 3) attempts, so a single key gets 3), and

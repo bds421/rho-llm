@@ -48,8 +48,10 @@ type Embedding struct {
 
 // EmbeddingResponse holds the embeddings and token usage.
 type EmbeddingResponse struct {
-	Model       string
-	Embeddings  []Embedding
+	Model      string
+	Embeddings []Embedding
+	// InputTokens is the provider-reported input size; 0 when the provider
+	// reports none (Gemini embedContent). Never estimated.
 	InputTokens int
 }
 

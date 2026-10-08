@@ -147,7 +147,6 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, req llm.EmbeddingReques
 		model = c.config.Model
 	}
 	out := &llm.EmbeddingResponse{Model: model, Embeddings: make([]llm.Embedding, 0, len(req.Input))}
-	var inputTokens int
 	for i, text := range req.Input {
 		endpoint := fmt.Sprintf("%s/%s:embedContent", c.baseURL, url.PathEscape(model))
 		body, err := json.Marshal(map[string]any{
@@ -177,9 +176,10 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, req llm.EmbeddingReques
 			return nil, fmt.Errorf("gemini: empty embedding vector")
 		}
 		out.Embeddings = append(out.Embeddings, llm.Embedding{Index: i, Vector: wire.Embedding.Values})
-		inputTokens += len(text) / 4 // best-effort; usage often omitted
 	}
-	out.InputTokens = inputTokens
+	// embedContent reports no token usage. InputTokens stays 0 rather than a
+	// len/4 guess: usage in this library is provider-reported, never
+	// estimated (a fabricated count would be billed by EstimateCost).
 	return out, nil
 }
 
@@ -347,10 +347,11 @@ type geminiModalityResponse struct {
 // modality is AUDIO.
 func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
 	var usage struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		ThoughtsTokenCount   int `json:"thoughtsTokenCount"`
-		PromptTokensDetails  []struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+		PromptTokensDetails     []struct {
 			Modality   string `json:"modality"`
 			TokenCount int    `json:"tokenCount"`
 		} `json:"promptTokensDetails"`
@@ -358,7 +359,13 @@ func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
 	if len(raw) == 0 || json.Unmarshal(raw, &usage) != nil {
 		return llm.ModalityUsage{}
 	}
-	out := llm.ModalityUsage{InputTokens: usage.PromptTokenCount}
+	// promptTokenCount includes cachedContentTokenCount; report the cached
+	// share separately so InputTokens is the uncached prompt (the library's
+	// cache-token contract — see llm.UsageEvent). Same clamping as the chat
+	// adapter's splitPrompt: negatives read as 0, cached never exceeds prompt.
+	meta := geminiUsageMetadata{PromptTokenCount: usage.PromptTokenCount, CachedContentTokenCount: usage.CachedContentTokenCount}
+	input, cached := meta.splitPrompt()
+	out := llm.ModalityUsage{InputTokens: input, CacheReadTokens: cached}
 	if usage.CandidatesTokenCount > 0 {
 		out.OutputTokens = usage.CandidatesTokenCount
 	}
