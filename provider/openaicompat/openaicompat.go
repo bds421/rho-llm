@@ -306,7 +306,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		apiReq.MaxCompletionTokens = maxTok
 		// Omit temperature entirely — these reasoning models only accept default (1).
 		if req.Temperature != nil {
-			slog.Warn("ignoring Temperature for reasoning model (Chat Completions)",
+			slog.Debug("ignoring Temperature for reasoning model (Chat Completions)",
 				"provider", c.providerName, "model", model)
 		}
 	} else {
@@ -428,7 +428,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 				if part.Type == llm.ContentToolUse {
 					inputJSON, err := json.Marshal(part.ToolInput)
 					if err != nil {
-						slog.Warn("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
+						slog.Debug("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
 						inputJSON = []byte("{}")
 					}
 					oaiMsg.ToolCalls = append(oaiMsg.ToolCalls, openaiToolCall{
@@ -589,7 +589,7 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 		for _, tc := range choice.Message.ToolCalls {
 			var input any
 			if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
-				slog.Warn("failed to parse tool input JSON", "provider", c.providerName, "tool", tc.Function.Name, "error", err)
+				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", tc.Function.Name, "error", err)
 				input = tc.Function.Arguments
 			}
 			resp.ToolCalls = append(resp.ToolCalls, llm.ToolCall{
@@ -715,7 +715,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 						var input any
 						raw := inputBuffer.String()
 						if err := json.Unmarshal([]byte(raw), &input); err != nil {
-							slog.Warn("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
+							slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
 							input = raw
 						}
 						currentToolCall.Input = input
@@ -747,7 +747,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					var input any
 					raw := inputBuffer.String()
 					if err := json.Unmarshal([]byte(raw), &input); err != nil {
-						slog.Warn("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
+						slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
 						input = raw
 					}
 					currentToolCall.Input = input
@@ -768,7 +768,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		var input any
 		raw := inputBuffer.String()
 		if err := json.Unmarshal([]byte(raw), &input); err != nil {
-			slog.Warn("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
+			slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
 			input = raw
 		}
 		currentToolCall.Input = input
@@ -782,7 +782,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// some servers (e.g. older local ones). The server DID signal completion,
 	// so synthesize the stop reason instead of erroring.
 	if finishReason == "" && sawDone {
-		slog.Warn("stream sent [DONE] without finish_reason", "provider", c.providerName)
+		slog.Debug("stream sent [DONE] without finish_reason", "provider", c.providerName)
 		if emittedToolCall {
 			finishReason = llm.StopToolUse
 		} else {

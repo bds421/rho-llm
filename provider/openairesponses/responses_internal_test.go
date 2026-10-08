@@ -143,7 +143,9 @@ func TestBuildRequestTemperatureWarning(t *testing.T) {
 	// Capture slog output to verify warning
 	var buf strings.Builder
 	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	// The notice is logged at Debug since v0.9.5 (M8): libraries stay quiet
+	// at the default level.
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(old)
 
 	c := &Client{config: llm.Config{Model: "gpt-5"}, providerName: "openai_responses"}
@@ -162,7 +164,7 @@ func TestBuildRequestTemperatureWarning(t *testing.T) {
 	}
 
 	if !strings.Contains(buf.String(), "ignoring Temperature") {
-		t.Errorf("expected slog.Warn about ignoring Temperature, got: %q", buf.String())
+		t.Errorf("expected a debug log about ignoring Temperature, got: %q", buf.String())
 	}
 }
 

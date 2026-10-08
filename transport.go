@@ -20,12 +20,40 @@ import (
 // fresh because net/http consumes them.
 type HTTPRequestFactory func(context.Context) (*http.Request, error)
 
+// HTTPCallOptions tunes one DoHTTPWithOptions call. The zero value is
+// exactly DoHTTP's behaviour.
+type HTTPCallOptions struct {
+	// NonIdempotent marks a request that creates a durable or billable
+	// resource — a batch job, generated images, synthesized speech. A resend
+	// after the provider already acted on it would duplicate the job or the
+	// charge, so such a request is retried only when the provider certainly
+	// did not act: HTTP 429 or 503 (rejected before processing) or a
+	// connection that was never established (DNS/dial/proxy-connect failure).
+	// 408/500/502/504 and transport errors after the request may have been
+	// sent are returned after the first attempt.
+	NonIdempotent bool
+}
+
 // DoHTTP executes a provider HTTP request with the common retry policy,
 // retry hooks, proxy-aware client, and caller cancellation semantics. The final
 // HTTP response is returned even for non-2xx status so callers can decode its
 // provider error body. Auth rotation and circuit breaking remain properties of
 // NewClientWithKeys; a single Config contains only one credential.
+//
+// Attempts: Config.MaxRetries when set (minimum 3), otherwise
+// DefaultHTTPMaxAttempts. Backoff follows Config.RetryPolicy, stretched to a
+// provider Retry-After hint (capped at MaxRetryAfter). Config.RetryBudget,
+// when positive, stops the sequence before a backoff that would overrun it.
+// DoHTTP treats the request as idempotent; use DoHTTPWithOptions with
+// NonIdempotent for creates.
 func DoHTTP(ctx context.Context, cfg Config, client *http.Client, build HTTPRequestFactory) (*http.Response, error) {
+	return DoHTTPWithOptions(ctx, cfg, client, build, HTTPCallOptions{})
+}
+
+// DoHTTPWithOptions is DoHTTP with per-call options (see HTTPCallOptions).
+func DoHTTPWithOptions(
+	ctx context.Context, cfg Config, client *http.Client, build HTTPRequestFactory, opts HTTPCallOptions,
+) (*http.Response, error) {
 	if client == nil {
 		var err error
 		client, err = NewSafeHTTPClient(cfg)
@@ -37,7 +65,7 @@ func DoHTTP(ctx context.Context, cfg Config, client *http.Client, build HTTPRequ
 	if !cfg.DisableRetries {
 		attempts = cfg.MaxRetries
 		if attempts <= 0 {
-			attempts = DefaultMaxRetries
+			attempts = DefaultHTTPMaxAttempts
 		}
 		if attempts < 3 {
 			attempts = 3
@@ -51,6 +79,12 @@ func DoHTTP(ctx context.Context, cfg Config, client *http.Client, build HTTPRequ
 	if provider == "" {
 		provider = cfg.Provider
 	}
+	budget := newRetryBudget(cfg.RetryBudget)
+	exhausted := func(attempt int, err error) {
+		if cfg.RetryHook != nil {
+			cfg.RetryHook(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: err, Provider: provider})
+		}
+	}
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
 		req, err := build(ctx)
@@ -61,12 +95,21 @@ func DoHTTP(ctx context.Context, cfg Config, client *http.Client, build HTTPRequ
 		if err == nil && !retryableHTTPStatus(resp.StatusCode) {
 			return resp, nil
 		}
+		var delay time.Duration
 		if err == nil {
-			lastErr = NewAPIErrorFromStatus(provider, resp.StatusCode, resp.Status)
-			if attempt+1 == attempts {
-				if cfg.RetryHook != nil {
-					cfg.RetryHook(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: lastErr, Provider: provider})
-				}
+			apiErr := NewAPIErrorFromStatus(provider, resp.StatusCode, resp.Status)
+			if wait, ok := parseRetryAfter(resp.Header, time.Now()); ok {
+				apiErr.RetryAfter = wait
+			}
+			lastErr = apiErr
+			if opts.NonIdempotent && !idempotentSafeStatus(resp.StatusCode) {
+				// The provider may have committed the create: hand the
+				// response back without a resend.
+				return resp, nil
+			}
+			delay = backoffFor(policy, attempt, apiErr.RetryAfter)
+			if attempt+1 == attempts || !budget.allows(delay) {
+				exhausted(attempt, lastErr)
 				return resp, nil
 			}
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
@@ -76,17 +119,24 @@ func DoHTTP(ctx context.Context, cfg Config, client *http.Client, build HTTPRequ
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			if !IsRetryable(err) || attempt+1 == attempts {
-				if IsRetryable(err) && cfg.RetryHook != nil {
-					cfg.RetryHook(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: err, Provider: provider})
-				}
+			retryable := IsRetryable(err)
+			if retryable && opts.NonIdempotent && !isDialError(err) {
+				// The request may have reached the provider before the
+				// transport failed; a resend could duplicate the create.
+				return nil, err
+			}
+			if !retryable {
+				return nil, err
+			}
+			delay = backoffFor(policy, attempt, 0)
+			if attempt+1 == attempts || !budget.allows(delay) {
+				exhausted(attempt, err)
 				return nil, err
 			}
 		}
 		if cfg.RetryHook != nil {
 			cfg.RetryHook(RetryEvent{Type: RetryAttemptFailed, Attempt: attempt, Err: lastErr, Provider: provider})
 		}
-		delay := policy.Delay(attempt)
 		if cfg.RetryHook != nil {
 			cfg.RetryHook(RetryEvent{Type: RetryBackingOff, Attempt: attempt, Err: lastErr, Backoff: delay, Provider: provider})
 		}
@@ -99,6 +149,12 @@ func DoHTTP(ctx context.Context, cfg Config, client *http.Client, build HTTPRequ
 		}
 	}
 	return nil, fmt.Errorf("llm: retry loop exhausted: %w", lastErr)
+}
+
+// idempotentSafeStatus reports a status at which the provider rejected the
+// request before acting on it, so even a create may be resent.
+func idempotentSafeStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
 }
 
 func retryableHTTPStatus(status int) bool {
@@ -124,13 +180,17 @@ func NewJSONRequest(ctx context.Context, url string, body []byte) (*http.Request
 func ErrorFromResponse(provider string, resp *http.Response, cfg Config) error {
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, cfg.EffectiveMaxErrorBodyBytes()))
 	if readErr != nil {
-		slog.Warn("failed to read error response body", "provider", provider, "error", readErr)
+		slog.Debug("failed to read error response body", "provider", provider, "error", readErr)
 	}
 	// A provider may echo the request credential in its error body; scrub the
 	// deployment's own key and BaseURL secrets before the text becomes an error
 	// that callers log or show.
 	message := redactProfileSecrets(string(body), cfg.APIKey, cfg.BaseURL)
-	return NewAPIErrorFromStatusWithLimit(provider, resp.StatusCode, message, cfg.EffectiveMaxErrorMessageLen())
+	apiErr := NewAPIErrorFromStatusWithLimit(provider, resp.StatusCode, message, cfg.EffectiveMaxErrorMessageLen())
+	if wait, ok := parseRetryAfter(resp.Header, time.Now()); ok {
+		apiErr.RetryAfter = wait
+	}
+	return apiErr
 }
 
 // DecodeJSONResponse decodes a 2xx JSON response body into out, bounded by cfg's

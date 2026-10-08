@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // APIError represents a structured error from an LLM provider API.
@@ -19,6 +20,10 @@ type APIError struct {
 	Message    string // Response body or error description
 	Provider   string // Provider that returned the error
 	Retryable  bool   // Whether the request should be retried
+	// RetryAfter is the provider's Retry-After hint (seconds, HTTP-date, or
+	// OpenAI's retry-after-ms), clamped to MaxRetryAfter; 0 when absent. The
+	// built-in retry loops use it as a floor for the next backoff.
+	RetryAfter time.Duration
 }
 
 func (e *APIError) Error() string {

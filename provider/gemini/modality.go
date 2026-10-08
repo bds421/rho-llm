@@ -208,7 +208,7 @@ func (c *Client) GenerateImages(ctx context.Context, req llm.ImageRequest) (*llm
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.doModalityJSON(ctx, endpoint, body)
+		resp, err := c.doModalityJSONWithOptions(ctx, endpoint, body, llm.HTTPCallOptions{NonIdempotent: true})
 		if err != nil {
 			return nil, err
 		}
@@ -426,14 +426,22 @@ func transcriptionInstruction(language, prompt string, vocabulary []string) stri
 }
 
 func (c *Client) doModalityJSON(ctx context.Context, endpoint string, body []byte) (*http.Response, error) {
-	resp, err := llm.DoHTTP(ctx, c.config, c.httpClient, func(ctx context.Context) (*http.Request, error) {
+	return c.doModalityJSONWithOptions(ctx, endpoint, body, llm.HTTPCallOptions{})
+}
+
+// doModalityJSONWithOptions lets image generation mark its call
+// non-idempotent (H5): a resend after a 500 could bill a second image.
+func (c *Client) doModalityJSONWithOptions(
+	ctx context.Context, endpoint string, body []byte, opts llm.HTTPCallOptions,
+) (*http.Response, error) {
+	resp, err := llm.DoHTTPWithOptions(ctx, c.config, c.httpClient, func(ctx context.Context) (*http.Request, error) {
 		req, err := llm.NewJSONRequest(ctx, endpoint, body)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("x-goog-api-key", c.config.APIKey)
 		return req, nil
-	})
+	}, opts)
 	if err != nil {
 		return nil, err
 	}

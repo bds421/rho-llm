@@ -230,10 +230,16 @@ type Config struct {
 	LogRequests bool `json:"log_requests,omitempty"`
 
 	// RetryPolicy configures backoff behavior. Nil uses DefaultRetryPolicy.
+	// It governs DoHTTP and every single-key chat retry. A provider
+	// Retry-After hint (capped at MaxRetryAfter) stretches a backoff that
+	// would be shorter. Multi-key pools that find every key in cooldown wait
+	// for the soonest key instead (CooldownRateLimit/CooldownOverload/...).
 	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
 
 	// CircuitThreshold is the number of consecutive failures before the circuit opens.
-	// Zero (default) disables the circuit breaker.
+	// Zero disables the circuit breaker. DefaultConfig sets
+	// DefaultCircuitThreshold (5); a struct-literal Config leaves it 0, i.e.
+	// no breaker — set it explicitly to get one.
 	CircuitThreshold int `json:"circuit_threshold,omitempty"`
 
 	// CircuitCooldown is how long the circuit stays open before allowing a probe.
@@ -262,9 +268,23 @@ type Config struct {
 	UsageHook UsageHook `json:"-"`
 
 	// MaxRetries caps the number of retry/rotation iterations. Zero uses the
-	// default (DefaultMaxRetries). Minimum effective value is 3 (for single-key
-	// resilience against transient errors).
+	// default: DefaultMaxRetries as the cap for pooled chat clients (which
+	// make max(healthy keys, 3) attempts, so a single key gets 3), and
+	// DefaultHTTPMaxAttempts (3) for the modality/batch transport (DoHTTP).
+	// Minimum effective value is 3 (for single-key resilience against
+	// transient errors).
 	MaxRetries int `json:"max_retries,omitempty"`
+
+	// RetryBudget bounds the total wall-clock time one call may spend across
+	// its retry sequence (attempts plus backoff sleeps). Before each backoff
+	// the client checks whether sleeping and trying again would still fit;
+	// when it would not, the call returns the last error instead of sleeping.
+	// An attempt already in flight is never cut short by the budget — use the
+	// request context for a hard deadline. Zero (the default) or negative
+	// means no budget: the sequence is bounded only by MaxRetries, the
+	// backoff policy and ctx. Applies to pooled chat clients (Complete and
+	// pre-data Stream retries) and to DoHTTP (modality and batch calls).
+	RetryBudget time.Duration `json:"retry_budget,omitempty"`
 
 	// DisableRetries forces exactly one provider transport attempt. It is for
 	// callers whose durable outer execution authority owns retry, idempotency,

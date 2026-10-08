@@ -254,7 +254,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				args = inputBuffer.String()
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				slog.Warn("failed to parse tool input JSON", "provider", c.providerName, "tool", ev.Name, "error", err)
+				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", ev.Name, "error", err)
 				input = args
 			}
 			if !yield(llm.StreamEvent{
@@ -509,7 +509,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 	// custom temperature (they only accept the default). Omit it entirely,
 	// matching the openaicompat adapter's behavior for reasoning models.
 	if req.Temperature != nil {
-		slog.Warn("ignoring Temperature for reasoning model (Responses API)",
+		slog.Debug("ignoring Temperature for reasoning model (Responses API)",
 			"provider", c.providerName, "model", model)
 	}
 
@@ -719,7 +719,7 @@ func (c *Client) buildAssistantMessage(apiReq *responsesRequest, msg llm.Message
 			// Serialize tool input to JSON string
 			inputJSON, err := json.Marshal(part.ToolInput)
 			if err != nil {
-				slog.Warn("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
+				slog.Debug("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
 				inputJSON = []byte("{}")
 			}
 			apiReq.Input = append(apiReq.Input, responsesFunctionCall{
@@ -795,7 +795,7 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 		case "function_call":
 			var input any
 			if err := json.Unmarshal([]byte(item.Arguments), &input); err != nil {
-				slog.Warn("failed to parse tool input JSON", "provider", c.providerName, "tool", item.Name, "error", err)
+				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", item.Name, "error", err)
 				input = item.Arguments
 			}
 			resp.ToolCalls = append(resp.ToolCalls, llm.ToolCall{

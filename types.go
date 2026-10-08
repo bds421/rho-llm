@@ -112,7 +112,7 @@ func ThinkingBudgetTokens(level ThinkingLevel, customBudget int) int {
 // Returns the clamped value and logs a warning if clamping occurred.
 func ClampThinkingBudget(provider, model string, budget, maxTokens int) int {
 	if maxTokens > 0 && budget > maxTokens {
-		slog.Warn("clamping thinking budget to model max_tokens",
+		slog.Debug("clamping thinking budget to model max_tokens",
 			"provider", provider, "model", model,
 			"requested", budget, "max", maxTokens)
 		return maxTokens

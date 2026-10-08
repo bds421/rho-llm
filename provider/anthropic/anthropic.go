@@ -530,7 +530,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			if apiReq.MaxTokens > minThinkingBudgetTokens {
 				budget = minThinkingBudgetTokens
 			} else {
-				slog.Warn("disabling thinking: max_tokens too small for the minimum budget",
+				slog.Debug("disabling thinking: max_tokens too small for the minimum budget",
 					"provider", "anthropic", "model", apiReq.Model,
 					"max_tokens", apiReq.MaxTokens, "min_budget", minThinkingBudgetTokens)
 				return apiReq, nil
@@ -639,7 +639,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		var input any
 		raw := inputBuffer.String()
 		if err := json.Unmarshal([]byte(raw), &input); err != nil {
-			slog.Warn("failed to parse tool input JSON", "provider", "anthropic", "tool", currentToolCall.Name, "error", err)
+			slog.Debug("failed to parse tool input JSON", "provider", "anthropic", "tool", currentToolCall.Name, "error", err)
 			input = raw
 		}
 		currentToolCall.Input = input

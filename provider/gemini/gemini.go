@@ -466,7 +466,7 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 			if info.MaxTokens > 0 && padded > info.MaxTokens {
 				padded = info.MaxTokens
 			}
-			slog.Warn("padding maxOutputTokens for native thinking model",
+			slog.Debug("padding maxOutputTokens for native thinking model",
 				"provider", c.providerName, "model", model,
 				"original", cur, "padded", padded)
 			apiReq.GenerationConfig.MaxOutputTokens = padded
