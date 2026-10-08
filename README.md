@@ -448,7 +448,7 @@ All clients get automatic retry with exponential backoff — including keyless l
 |---|---|---|
 | Attempts (single key, and modality/batch calls) | 3 | `Config.MaxRetries` raises it (min 3). Multi-key pools make one attempt per healthy key, capped at `MaxRetries` (default 10). |
 | Backoff | `RetryPolicy`: 1s → 2s → 4s … capped at 30s, ±25% jitter | A provider `Retry-After` (seconds, HTTP-date, or `retry-after-ms`) stretches a shorter backoff, capped at `llm.MaxRetryAfter` (60s). A multi-key pool whose keys are all cooling down waits for the soonest key instead. No sleep after the final attempt. |
-| Total time | unbounded (attempts × backoff, and `ctx`) | `Config.RetryBudget` stops the sequence before a backoff that would overrun it. In-flight attempts are not cut — use `ctx` for a hard deadline. |
+| Total time | unbounded (attempts × backoff, and `ctx`) | `Config.RetryBudget` stops the sequence before a backoff that would overrun it, and a backoff that would reach the `ctx` deadline is not started either — the last provider error (e.g. a 429 with its `RetryAfter`) is returned at once instead of `context.DeadlineExceeded`. In-flight attempts are not cut — use `ctx` for a hard deadline. |
 | Circuit breaker | **only with `DefaultConfig()`** (opens after 5 consecutive failures, probes after 30s) | A struct-literal `Config` has `CircuitThreshold: 0` = no breaker. Set it explicitly to get one. |
 | Non-idempotent creates (batch create, image generation, speech synthesis) | retried only on 429/503 and connection (dial/DNS) failures | A 500/502/504/408 may come after the provider committed the job — resending would duplicate it and its charge. |
 
@@ -518,7 +518,7 @@ cfg.CooldownDefault   = 5 * time.Second        // other errors (default: 10s)
 
 ### Streaming and `Config.Timeout`
 
-`Config.Timeout` (default 120s) bounds a `Complete` call end to end. A `Stream` is **not** cut off after `Timeout` in total — long thinking turns may run for minutes. For streams, `Timeout` bounds the wait for response headers and each *silent gap* between body bytes (a stalled stream fails with `*llm.StreamIdleTimeoutError`, a `net.Error` timeout). Bound a stream's total duration with the request context. (Before v0.9.5 the whole-body `http.Client.Timeout` killed any stream longer than `Timeout`.)
+`Config.Timeout` (default 120s) bounds a `Complete` call end to end. A `Stream` is **not** cut off after `Timeout` in total — long thinking turns may run for minutes. For streams, `Timeout` bounds the wait for response headers and each *silent gap* between body bytes (a stalled stream fails with `*llm.StreamIdleTimeoutError`, a `net.Error` timeout). The gap is measured in bytes, not tokens: Anthropic sends keep-alive pings during long thinking, but Gemini and the OpenAI Responses API may reason silently for minutes — **raise `Timeout` for silent long reasoning** (e.g. `ThinkingHigh`) and bound the total with `ctx`. Bound a stream's total duration with the request context. (Before v0.9.5 the whole-body `http.Client.Timeout` killed any stream longer than `Timeout`.)
 
 ### Retry Observability
 

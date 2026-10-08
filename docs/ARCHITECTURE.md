@@ -191,7 +191,7 @@ type StreamEvent struct {
 
     InputTokens    int    // usage / done: UNCACHED input only (-1 = not reported)
     OutputTokens   int    // usage / done (-1 = not reported)
-    ThinkingTokens int    // Gemini: tokens consumed by thinking (0 for other providers)
+    ThinkingTokens int    // Gemini + openai_responses (v0.9.5): reasoning tokens, separate from OutputTokens
     StopReason     string // done: "end_turn" | "tool_use" | "max_tokens"
     RawStopReason  string // provider's original reason, when available
 
@@ -333,7 +333,9 @@ modality client represents one exact deployment credential owned by its worker.
 the same count as a single-key chat client. Backoff is `RetryPolicy.Delay`,
 stretched to a parsed `Retry-After`/`retry-after-ms` (clamped to
 `MaxRetryAfter`); `Config.RetryBudget` stops before a sleep that would overrun
-it. `DoHTTPWithOptions(…, HTTPCallOptions{NonIdempotent: true})` marks creates
+it, and so does a sleep that would reach the `ctx` deadline
+(`sleepOutlastsDeadline`) — the last error/response is returned instead of
+`context.DeadlineExceeded`. `DoHTTPWithOptions(…, HTTPCallOptions{NonIdempotent: true})` marks creates
 (Anthropic/Gemini batch submit, image generation, speech synthesis): they are
 resent only after 429/503 or a dial/DNS/proxy-connect failure — never after
 408/500/502/504 or a post-send transport error, which may follow a committed
@@ -346,7 +348,11 @@ whole body and used to kill streams longer than `Config.Timeout` — and an idle
 watchdog that fails a body silent for more than `Timeout` with
 `StreamIdleTimeoutError` (a `net.Error` timeout). `NewSafeHTTPClient`'s
 transport carries dial/TLS-handshake/`ResponseHeaderTimeout` bounds (each
-≤ `Timeout`), so a stream still fails fast when the server never answers.
+≤ `Timeout`; TLS handshake ≤ 10s) and a 90s `IdleConnTimeout`, so a stream
+still fails fast when the server never answers. The watchdog counts bytes:
+Anthropic's `ping` events keep a long thinking turn alive, but Gemini and the
+Responses API can reason silently, so callers raise `Timeout` for silent long
+reasoning.
 
 **Fallback policy (v0.9.5):** `NewFallbackModalityClientWithPolicy` takes a
 `FailoverPolicy func(ctx, err) bool`; nil = `FailoverAnyProviderError` (the
@@ -417,7 +423,8 @@ Complete():
                  backoff = soonest-key cooldown when >1 healthy key (all cooling),
                            else retryPolicy.Delay(attempt) (single key, v0.9.5),
                  stretched to APIError.RetryAfter (≤ MaxRetryAfter = 60s);
-                 if Config.RetryBudget can't fit the backoff → return last error
+                 if Config.RetryBudget can't fit the backoff, or now+backoff
+                 reaches the ctx deadline → return last error
              if rotation succeeds and the budget is already spent → return last error
 
 Stream():
@@ -657,7 +664,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Auth: `x-goog-api-key` header (moved from URL query parameter in v0.1.9 to prevent key leakage)
 - Streaming: SSE with JSON chunks
 - `ThoughtSignature`: when a model has `ThoughtSignature: true` in the registry, function call responses include a `thought_signature` field that must be preserved and echoed in subsequent `tool_result` parts
-- Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is exposed as `resp.ThinkingTokens` / `event.ThinkingTokens`, separate from `OutputTokens` (which maps to `candidatesTokenCount` only). Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` is 0.
+- Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is exposed as `resp.ThinkingTokens` / `event.ThinkingTokens`, separate from `OutputTokens` (which maps to `candidatesTokenCount` only). The openai_responses adapter does the same since v0.9.5 (`output_tokens_details.reasoning_tokens` → `ThinkingTokens`, subtracted from `OutputTokens`), so bill `OutputTokens + ThinkingTokens`. Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` is 0.
 - System prompt: mapped to `systemInstruction.parts[0].text`
 - Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`, and — because `promptTokenCount` already includes it — subtracted from `promptTokenCount` to give `InputTokens` (v0.9.4; clamped so neither goes negative).
 

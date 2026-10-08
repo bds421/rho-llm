@@ -13,6 +13,15 @@ Reliability patch from the 2026-10-07 architecture review (ids H*/M*/L refer to
 it). Backwards compatible: no exported symbol was removed or renamed and no
 exported signature changed; everything new is additive.
 
+> **Consumers must check — openai_responses usage accounting changed.** For the
+> `openai_responses` adapter (GPT-5 family via `Provider: "openai"`),
+> `OutputTokens` now **excludes reasoning tokens**, which are reported in
+> `ThinkingTokens` instead (before, `ThinkingTokens` was always 0 and
+> `OutputTokens` included reasoning). If you bill, meter or budget from the
+> usage fields yourself, charge **`OutputTokens + ThinkingTokens`** as output.
+> `EstimateCost` already prices `ThinkingTokens` at the output rate when you
+> pass both fields; totals are unchanged when both are summed.
+
 ### Added
 
 - **`Config.RetryBudget` (H1).** Total wall-clock bound across one call's retry
@@ -20,6 +29,8 @@ exported signature changed; everything new is additive.
   and `DoHTTP` (modality + batch). Before each backoff the client checks whether
   sleeping and trying again still fits; if not it returns the last error. 0
   (default) = no budget. In-flight attempts are never cut — use `ctx` for that.
+  A backoff that would reach the `ctx` deadline is skipped the same way (see
+  Fixed).
 - **`Retry-After` support (H1).** `APIError.RetryAfter` carries the provider's
   hint (delta-seconds, HTTP-date, or OpenAI's `retry-after-ms`), clamped to the
   new `MaxRetryAfter` (60s). `ErrorFromResponse` fills it, and both retry
@@ -62,10 +73,13 @@ exported signature changed; everything new is additive.
   `ErrCircuitOpen`) for every existing struct-literal consumer and leave no way to
   express "no breaker". README/Config docs now state it, and the README example
   sets it explicitly.
-- **Creates are not retried on 5xx (H5).** Anthropic and Gemini batch submit,
-  OpenAI-compatible image generation and speech synthesis, and Gemini image
-  generation use `NonIdempotent`. (OpenAI batch creates already used a single
-  attempt.)
+- **Creates are not retried on 408/500/502/504 (H5).** Anthropic and Gemini
+  batch submit, OpenAI-compatible image generation and speech synthesis, and
+  Gemini image generation use `NonIdempotent`: they are still retried on 429 and
+  503 (the provider rejected the request before acting on it) and on
+  dial/DNS/proxy-connect failures, but not on 408/500/502/504 or a post-send
+  transport error, where the job may already exist. (OpenAI batch creates
+  already used a single attempt.)
 - **openai_responses usage (M6).** `reasoning_tokens` is read from
   `usage.output_tokens_details` (it was read from a top-level field the API never
   sends, so `ThinkingTokens` was always 0). Because it is a subset of
@@ -80,9 +94,13 @@ exported signature changed; everything new is additive.
   panics.
 - **Gemini embeddings report no usage (M5).** `EmbeddingResponse.InputTokens` is 0
   instead of a fabricated `len(text)/4`; `embedContent` reports no usage.
-- `NewSafeHTTPClient`'s transport sets dial (≤30s), TLS-handshake (≤10s) and
-  `ResponseHeaderTimeout` (= `Timeout`) bounds, each capped by `Timeout`, so
-  non-stream behaviour is unchanged.
+- **`NewSafeHTTPClient` transport bounds (non-stream too).** The transport now
+  sets a dial timeout (≤30s), a **TLS-handshake timeout of 10s** (or `Timeout`
+  if smaller), `ResponseHeaderTimeout` (= `Timeout`) and an **`IdleConnTimeout`
+  of 90s** for pooled keep-alive connections. Non-stream calls are still bounded
+  end to end by `Timeout`, but a TLS handshake slower than 10s now fails (as a
+  retryable timeout) even when `Timeout` is larger, and idle connections are
+  closed after 90s instead of being kept indefinitely.
 - Docs: provider count corrected to 23 providers / 35 preset names (README,
   CLAUDE.md, ARCHITECTURE.md); `tasks/todo.md` header refreshed and the review's
   remaining items (M2, M4, M9, …) recorded as open work.
@@ -95,7 +113,13 @@ exported signature changed; everything new is additive.
   yielded. Streams now use `NewStreamingHTTPClient`: same transport, no
   whole-body timeout, and an idle watchdog that fails a body silent for more than
   `Timeout` with `StreamIdleTimeoutError` (a `net.Error` timeout). Total stream
-  duration is bounded by `ctx`.
+  duration is bounded by `ctx`. **Caveat — silent reasoning:** the watchdog
+  counts bytes, not tokens. Anthropic sends `ping` events during long thinking,
+  which keep the stream alive; Gemini and the OpenAI Responses API can reason
+  for minutes without sending any bytes, and such a turn still fails with
+  `StreamIdleTimeoutError` once the silence exceeds `Timeout`. **Raise
+  `Config.Timeout` for silent long reasoning** (e.g. `ThinkingHigh` on Gemini or
+  GPT-5) and bound the total with `ctx`.
 - **A backoff no longer sleeps past the caller's deadline.** Before every
   backoff (`DoHTTP`, pooled `Complete` and pre-data `Stream` retries) the client
   checks `ctx.Deadline()`: if `now + delay` reaches it, the retry is abandoned

@@ -785,7 +785,7 @@ type CostInput struct {
 	Model             string
 	InputTokens       int // uncached input tokens only (excludes CacheReadTokens and CacheCreateTokens)
 	OutputTokens      int
-	ThinkingTokens    int  // Gemini: separate from output; Anthropic: 0 (bundled in OutputTokens)
+	ThinkingTokens    int  // Gemini, openai_responses: separate from output; Anthropic: 0 (bundled in OutputTokens)
 	CacheCreateTokens int  // tokens written to cache (Anthropic); disjoint from InputTokens
 	CacheReadTokens   int  // tokens read from cache (Anthropic/Gemini/OpenAI-style); disjoint from InputTokens
 	Batch             bool // request was processed via the Batch API (billed at 50% of the sync rate)
