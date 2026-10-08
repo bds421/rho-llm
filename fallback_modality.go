@@ -36,7 +36,11 @@ import (
 // up as two events (the failed primary with Err set, then the fallback). A
 // fallback whose UsageHook (or UsageHookCtx) is nil inherits the primary's,
 // so one hook on the primary sees the whole chain; give a fallback its own
-// hook to route it elsewhere.
+// hook to route it elsewhere. Inheritance is per field: a fallback that sets
+// only UsageHook still inherits the primary's UsageHookCtx (and vice versa),
+// so both of the primary's hooks keep firing for it alongside its own. To stop
+// a fallback reporting to a primary hook, give it its own value for that field
+// (e.g. a no-op func).
 //
 // Motivation: dedicated preview models can break without notice — on
 // 2026-10-07 gemini-3.5-transcribe began rejecting every request with HTTP 400
