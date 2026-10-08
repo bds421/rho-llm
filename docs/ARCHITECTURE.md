@@ -1,12 +1,12 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of October 2026 (v0.9.4).
+> **Status:** Reflects the current implementation as of October 2026 (v0.9.5).
 
 ---
 
 ## 1. Overview
 
-`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-four providers across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
+`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-three providers (35 preset names including aliases and regional endpoints) across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
 
 **Key capabilities:**
 - Single `Client` interface for all providers and protocols
@@ -296,8 +296,11 @@ wraps the last attempt's error so classification reflects the final outcome.
 **Usage reporting (v0.9.2, `usage.go`):** after validation passes,
 `capabilityValidatedModalityClient` runs each provider call through
 `observeModality`, which puts a per-call recorder in the context, measures
-latency and, when `Config.UsageHook` is set, delivers one `UsageEvent` per
-attempt (failed ones included). Adapters push provider-reported counts with
+latency and, when `Config.UsageHook` and/or `Config.UsageHookCtx` (v0.9.5: same
+event plus the caller's ctx, for per-request attribution) is set, delivers one
+`UsageEvent` per attempt (failed ones included). Usage follows the chat
+cache-token contract: `InputTokens` is uncached, `CacheReadTokens` (v0.9.5) the
+disjoint cached share. Adapters push provider-reported counts with
 `ReportModalityUsage(ctx, ModalityUsage)`; they parse usage fields leniently
 (raw JSON, malformed → zero) so accounting can never fail a transcript, and the
 recorder drops negatives and caps the audio share at the input total. Cost comes
@@ -324,6 +327,32 @@ use `DoHTTP`, giving remote and local deployments the same explicit proxy,
 retry-hook, backoff, caller-cancellation, bounded-read, and classified-error
 behavior. Credential rotation/circuit breaking remain chat-pool concerns; a
 modality client represents one exact deployment credential owned by its worker.
+
+**Retry model (v0.9.5, `transport.go` + `retrybudget.go`):** `DoHTTP` makes
+`Config.MaxRetries` attempts (min 3) or `DefaultHTTPMaxAttempts` (3) when unset —
+the same count as a single-key chat client. Backoff is `RetryPolicy.Delay`,
+stretched to a parsed `Retry-After`/`retry-after-ms` (clamped to
+`MaxRetryAfter`); `Config.RetryBudget` stops before a sleep that would overrun
+it. `DoHTTPWithOptions(…, HTTPCallOptions{NonIdempotent: true})` marks creates
+(Anthropic/Gemini batch submit, image generation, speech synthesis): they are
+resent only after 429/503 or a dial/DNS/proxy-connect failure — never after
+408/500/502/504 or a post-send transport error, which may follow a committed
+job. OpenAI batch creates keep `DisableRetries` (single attempt).
+
+**Streaming transport (v0.9.5, `config.go`):** adapters stream through
+`NewStreamingHTTPClient(httpClient, cfg)`: the same transport (pool, proxy, TLS
+floor, redirect stripping) with no `http.Client.Timeout` — which covers the
+whole body and used to kill streams longer than `Config.Timeout` — and an idle
+watchdog that fails a body silent for more than `Timeout` with
+`StreamIdleTimeoutError` (a `net.Error` timeout). `NewSafeHTTPClient`'s
+transport carries dial/TLS-handshake/`ResponseHeaderTimeout` bounds (each
+≤ `Timeout`), so a stream still fails fast when the server never answers.
+
+**Fallback policy (v0.9.5):** `NewFallbackModalityClientWithPolicy` takes a
+`FailoverPolicy func(ctx, err) bool`; nil = `FailoverAnyProviderError` (the
+`NewFallbackModalityClient` behaviour). `FailoverTransientOnly` is the
+recommended policy when a rejected payload must not reach a second vendor.
+Caller cancellation always stops the chain regardless of policy.
 
 Image geometry/count/format, voice, and language are request values authored by
 the application. Rho does not choose preferred values or impose product-level
@@ -370,7 +399,7 @@ Cooldown durations are error-type-dependent (configurable via `Config`):
 
 ```
 Complete():
-    loop (maxRetries = clamp(pool.HealthyCount(), 3, 10)):  // Min 3, capped at 10
+    loop (maxRetries = clamp(pool.HealthyCount(), 3, MaxRetries or 10)):  // Min 3
         0. Circuit breaker gate: if open → return ErrCircuitOpen immediately
         1. Call current client
         2. Success → MarkSuccess(), breaker.RecordSuccess(), return
@@ -383,17 +412,23 @@ Complete():
              rotateClient() → GetAvailable() → create new single client
              if rotation fails:
                - Auth error → return immediately (dead key is dead)
-               - Transient error → retryPolicy.Delay(attempt) → sleep & retry same
+               - Final attempt → stop (no sleep after the last attempt)
+               - Transient error → backoff → sleep & retry same client, where
+                 backoff = soonest-key cooldown when >1 healthy key (all cooling),
+                           else retryPolicy.Delay(attempt) (single key, v0.9.5),
+                 stretched to APIError.RetryAfter (≤ MaxRetryAfter = 60s);
+                 if Config.RetryBudget can't fit the backoff → return last error
+             if rotation succeeds and the budget is already spent → return last error
 
 Stream():
-    loop (maxRetries = min(max(pool.Count(), 3), 10)):
+    loop (maxRetries = clamp(pool.HealthyCount(), 3, MaxRetries or 10)):
         0. Circuit breaker gate: if open → return ErrCircuitOpen immediately
         1. Start streaming from current client
         2. If error BEFORE any event yielded (firstEvent == true):
              a. Non-retryable, non-auth error → return immediately
              b. Auth or retryable error → breaker.RecordFailure(), MarkFailed(err), rotateClient():
                   - rotation fails + auth error → return immediately
-                  - rotation fails + transient → retryPolicy.Delay(attempt) & retry
+                  - rotation fails + transient → same backoff/budget rule as Complete & retry
                   - rotation succeeds → retry with new client
         3. If error AFTER events yielded (firstEvent == false):
              → pass through to caller (no retry — would duplicate content)
@@ -490,6 +525,7 @@ type APIError struct {
     Message    string // Response body
     Provider   string
     Retryable  bool
+    RetryAfter time.Duration // v0.9.5: parsed Retry-After hint (≤ MaxRetryAfter), 0 if absent
 }
 ```
 
@@ -649,7 +685,7 @@ type Config struct {
     MaxTokens        int            // Max output tokens (default: 8192)
     Temperature      *float64       // Sampling temperature (nil = omit from wire, provider default)
     ThinkingLevel    ThinkingLevel  // ThinkingLow | ThinkingMedium | ThinkingHigh (zero = none)
-    Timeout          time.Duration  // HTTP timeout (default: 120s)
+    Timeout          time.Duration  // Non-stream request timeout; stream header wait + max silent gap (default: 120s)
     BaseURL          string         // Override provider endpoint
     AuthHeader       string         // Override auth header ("Bearer", "x-api-key", "")
     ProviderName     string         // Override Client.Provider() return value
@@ -662,12 +698,16 @@ type Config struct {
 
     // Resilience
     RetryPolicy       *RetryPolicy  // Configurable backoff (nil = DefaultRetryPolicy)
-    CircuitThreshold  int           // Consecutive failures to open circuit (default: 5)
+    CircuitThreshold  int           // Consecutive failures to open circuit (DefaultConfig: 5; struct literal: 0 = no breaker)
     CircuitCooldown   time.Duration // Open→half-open cooldown (default: 30s)
     CooldownRateLimit time.Duration // Profile cooldown for 429 errors (default: 60s)
     CooldownOverload  time.Duration // Profile cooldown for 503 errors (default: 30s)
     CooldownDefault   time.Duration // Profile cooldown for other errors (default: 10s)
     RetryHook         RetryHook     // Observability hook for retry events (not serialized)
+    MaxRetries        int           // Attempt cap (DefaultConfig: 10; 0 = 3 for single key / DoHTTP)
+    RetryBudget       time.Duration // v0.9.5: total wall-clock across one call's retries (0 = none)
+    UsageHook         UsageHook        // Per-attempt modality usage (not serialized)
+    UsageHookCtx      ContextUsageHook // v0.9.5: same + caller ctx (not serialized)
 }
 ```
 
