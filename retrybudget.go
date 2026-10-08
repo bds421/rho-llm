@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -108,6 +109,16 @@ func (b retryBudget) allows(delay time.Duration) bool {
 		return true
 	}
 	return time.Since(b.start)+delay < b.budget
+}
+
+// sleepOutlastsDeadline reports whether sleeping for delay would reach or pass
+// ctx's deadline. The retry engines check it before every backoff: the attempt
+// after the sleep could not complete anyway, and sleeping into the deadline
+// would replace the provider's error (e.g. a 429 carrying Retry-After) with a
+// bare context.DeadlineExceeded. A context without a deadline never outlasts.
+func sleepOutlastsDeadline(ctx context.Context, delay time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return ok && !time.Now().Add(delay).Before(deadline)
 }
 
 // isDialError reports a transport failure that happened before the request

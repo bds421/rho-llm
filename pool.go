@@ -536,6 +536,13 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 				pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: i, Err: err})
 				return nil, fmt.Errorf("all retries exhausted (retry budget %v): %w", pc.cfg.RetryBudget, err)
 			}
+			if sleepOutlastsDeadline(ctx, backoff) {
+				// The backoff would sleep into the caller's deadline: return
+				// the provider error (with its Retry-After) now instead of a
+				// bare context.DeadlineExceeded later.
+				pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: i, Err: err})
+				return nil, fmt.Errorf("all retries exhausted (backoff %v exceeds context deadline): %w", backoff, err)
+			}
 			pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: i, Err: rotErr, Backoff: backoff})
 			slog.Debug("rotation failed, backing off", "attempt", i+1, "backoff", backoff, "error", rotErr)
 
@@ -698,6 +705,11 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				if !budget.allows(backoff) {
 					pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: lastErr})
 					yield(StreamEvent{}, fmt.Errorf("stream: all retries exhausted (retry budget %v): %w", pc.cfg.RetryBudget, lastErr))
+					return
+				}
+				if sleepOutlastsDeadline(ctx, backoff) {
+					pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: lastErr})
+					yield(StreamEvent{}, fmt.Errorf("stream: all retries exhausted (backoff %v exceeds context deadline): %w", backoff, lastErr))
 					return
 				}
 				pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: attempt, Err: rotErr, Backoff: backoff})

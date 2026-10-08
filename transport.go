@@ -108,7 +108,7 @@ func DoHTTPWithOptions(
 				return resp, nil
 			}
 			delay = backoffFor(policy, attempt, apiErr.RetryAfter)
-			if attempt+1 == attempts || !budget.allows(delay) {
+			if attempt+1 == attempts || !budget.allows(delay) || sleepOutlastsDeadline(ctx, delay) {
 				exhausted(attempt, lastErr)
 				return resp, nil
 			}
@@ -129,7 +129,7 @@ func DoHTTPWithOptions(
 				return nil, err
 			}
 			delay = backoffFor(policy, attempt, 0)
-			if attempt+1 == attempts || !budget.allows(delay) {
+			if attempt+1 == attempts || !budget.allows(delay) || sleepOutlastsDeadline(ctx, delay) {
 				exhausted(attempt, err)
 				return nil, err
 			}

@@ -96,6 +96,13 @@ exported signature changed; everything new is additive.
   whole-body timeout, and an idle watchdog that fails a body silent for more than
   `Timeout` with `StreamIdleTimeoutError` (a `net.Error` timeout). Total stream
   duration is bounded by `ctx`.
+- **A backoff no longer sleeps past the caller's deadline.** Before every
+  backoff (`DoHTTP`, pooled `Complete` and pre-data `Stream` retries) the client
+  checks `ctx.Deadline()`: if `now + delay` reaches it, the retry is abandoned
+  and the last error/response is returned at once — the same exit as an
+  exhausted `RetryBudget`. A 429 with `Retry-After: 2` under a 500ms deadline
+  now returns the 429 `*APIError` (with `RetryAfter` set) immediately instead of
+  `context.DeadlineExceeded` 500ms later.
 - **Gemini image-generation panic (H4).** An 8–11 byte inline payload labelled
   `image/webp` indexed `raw[8:12]` past the end and crashed the caller.
 - **Gemini modality usage double-counted cached tokens (M5).** `InputTokens` now
