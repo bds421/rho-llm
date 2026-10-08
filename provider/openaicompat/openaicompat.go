@@ -27,8 +27,11 @@ func init() {
 
 // Client implements the OpenAI-compatible chat completions API.
 type Client struct {
-	config       llm.Config
-	httpClient   *http.Client
+	config     llm.Config
+	httpClient *http.Client
+	// streamClient serves Stream: same transport, no whole-body Timeout
+	// (H3). See llm.NewStreamingHTTPClient.
+	streamClient *http.Client
 	baseURL      string // Resolved endpoint (e.g., "https://api.x.ai/v1")
 	authHeader   string // Auth prefix (e.g., "Bearer") or "" for no auth
 	providerName string // What Provider() returns
@@ -65,6 +68,7 @@ func New(cfg llm.Config) (*Client, error) {
 	return &Client{
 		config:       cfg,
 		httpClient:   httpClient,
+		streamClient: llm.NewStreamingHTTPClient(httpClient, cfg),
 		baseURL:      baseURL,
 		authHeader:   authHeader,
 		providerName: providerName,
@@ -86,6 +90,15 @@ func (c *Client) Model() string {
 func (c *Client) Close() error {
 	c.httpClient.CloseIdleConnections()
 	return nil
+}
+
+// streamHTTPClient returns the streaming client, deriving it from httpClient
+// for a Client value built without New (tests).
+func (c *Client) streamHTTPClient() *http.Client {
+	if c.streamClient != nil {
+		return c.streamClient
+	}
+	return llm.NewStreamingHTTPClient(c.httpClient, c.config)
 }
 
 // Complete generates a non-streaming completion.
@@ -156,7 +169,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 			httpReq.Header.Set("Authorization", c.authHeader+" "+c.config.APIKey)
 		}
 
-		resp, err := c.httpClient.Do(httpReq)
+		resp, err := c.streamHTTPClient().Do(httpReq)
 		if err != nil {
 			yield(llm.StreamEvent{}, fmt.Errorf("request failed: %w", err))
 			return
