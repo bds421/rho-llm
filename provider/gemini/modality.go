@@ -467,7 +467,10 @@ func verifyImageB64(b64, mediaType string) error {
 			return fmt.Errorf("gemini: payload is not JPEG")
 		}
 	case "image/webp":
-		if string(raw[0:4]) != "RIFF" || string(raw[8:12]) != "WEBP" {
+		// A RIFF/WEBP header is 12 bytes; the len(raw) < 8 guard above is not
+		// enough, and a hostile or buggy 8–11 byte payload would index past
+		// the end and panic the caller's process.
+		if len(raw) < 12 || string(raw[0:4]) != "RIFF" || string(raw[8:12]) != "WEBP" {
 			return fmt.Errorf("gemini: payload is not WebP")
 		}
 	}
