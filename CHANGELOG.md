@@ -119,9 +119,14 @@ exported signature changed; everything new is additive.
 
 ### Security
 
-- `redactSecret` no longer skips keys shorter than 8 bytes: they are scrubbed
-  where they stand as a whole token (so `Bearer abc1` is redacted without
-  mangling words that merely contain the key).
+- `redactSecret` (and so `ErrorFromResponse`/`RedactSecrets`) no longer skips
+  keys of 4–7 bytes: they are scrubbed where they stand as a whole token (so
+  `Bearer abc1` is redacted without mangling words that merely contain the key).
+  Keys of 8+ bytes keep the v0.9.4 substring scrub. Keys under 4 bytes, and
+  well-known placeholder keys that local servers accept (`none`, `EMPTY`,
+  `ollama`, `dummy`, `test`, … — case-insensitive), are left alone: they are not
+  secrets, and scrubbing them would corrupt ordinary error text ("must be none").
+  A real 5–7 byte key is still redacted.
 - openai_responses in-stream `error` events are redacted (`RedactSecrets`) and
   truncated to `EffectiveMaxErrorMessageLen` like HTTP error bodies.
 - `TestAllProviders` (live, paid calls) now skips in `-short` mode.
