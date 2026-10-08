@@ -13,6 +13,7 @@ import (
 	"iter"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bds421/rho-llm"
@@ -190,9 +191,40 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
 
 	// Per-tool-call accumulation: the Responses API sends argument deltas
-	// followed by a single "done" event with the full arguments, name, and call_id.
-	// We accumulate deltas as a safety net but prefer the done event's values.
-	var inputBuffer strings.Builder
+	// followed by a single "done" event with the full arguments. Parallel
+	// function calls may interleave their deltas, so buffers are keyed per
+	// output item (item_id, else output_index) — one shared buffer would
+	// splice two calls' JSON together (M7). name/call_id come from the done
+	// event, else from the item's response.output_item.added event. We
+	// accumulate deltas as a safety net but prefer the done event's values.
+	type pendingCall struct {
+		name, callID string
+		args         strings.Builder
+	}
+	pending := map[string]*pendingCall{}
+	// pendingBytes caps the arguments buffered across ALL in-flight calls at
+	// maxToolInput, so interleaved calls cannot multiply the memory bound.
+	pendingBytes := 0
+	pendingFor := func(itemID string, outputIndex int) *pendingCall {
+		key := itemID
+		if key == "" {
+			key = "#" + strconv.Itoa(outputIndex)
+		}
+		p := pending[key]
+		if p == nil {
+			p = &pendingCall{}
+			pending[key] = p
+		}
+		return p
+	}
+	releaseCall := func(itemID string, outputIndex int, call *pendingCall) {
+		pendingBytes -= call.args.Len()
+		call.args.Reset()
+		if itemID != "" {
+			delete(pending, itemID)
+		}
+		delete(pending, "#"+strconv.Itoa(outputIndex))
+	}
 	var completed bool
 	var emittedToolCall bool // the stream emitted at least one function call
 
@@ -233,9 +265,31 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 			}
 
+		case "response.output_item.added":
+			var ev struct {
+				OutputIndex int `json:"output_index"`
+				Item        struct {
+					Type   string `json:"type"`
+					ID     string `json:"id"`
+					CallID string `json:"call_id"`
+					Name   string `json:"name"`
+				} `json:"item"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil || ev.Item.Type != "function_call" {
+				continue // metadata only; the done event still carries the call
+			}
+			call := pendingFor(ev.Item.ID, ev.OutputIndex)
+			call.name, call.callID = ev.Item.Name, ev.Item.CallID
+			if ev.Item.ID != "" {
+				// Also reachable by index for servers that omit item_id on deltas.
+				pending["#"+strconv.Itoa(ev.OutputIndex)] = call
+			}
+
 		case "response.function_call_arguments.delta":
 			var ev struct {
-				Delta string `json:"delta"`
+				ItemID      string `json:"item_id"`
+				OutputIndex int    `json:"output_index"`
+				Delta       string `json:"delta"`
 			}
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed function call delta from %s: %w", c.providerName, err)) {
@@ -243,17 +297,21 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				continue
 			}
-			if inputBuffer.Len()+len(ev.Delta) > maxToolInput {
+			call := pendingFor(ev.ItemID, ev.OutputIndex)
+			if pendingBytes+len(ev.Delta) > maxToolInput {
 				yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 				return
 			}
-			inputBuffer.WriteString(ev.Delta)
+			call.args.WriteString(ev.Delta)
+			pendingBytes += len(ev.Delta)
 
 		case "response.function_call_arguments.done":
 			var ev struct {
-				Name      string `json:"name"`
-				CallID    string `json:"call_id"`
-				Arguments string `json:"arguments"`
+				ItemID      string `json:"item_id"`
+				OutputIndex int    `json:"output_index"`
+				Name        string `json:"name"`
+				CallID      string `json:"call_id"`
+				Arguments   string `json:"arguments"`
 			}
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed function call done from %s: %w", c.providerName, err)) {
@@ -261,10 +319,19 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				continue
 			}
+			call := pendingFor(ev.ItemID, ev.OutputIndex)
+			buffered := call.args.String()
+			releaseCall(ev.ItemID, ev.OutputIndex, call)
+			if ev.Name == "" {
+				ev.Name = call.name
+			}
+			if ev.CallID == "" {
+				ev.CallID = call.callID
+			}
 			var input any
 			args := ev.Arguments
 			if args == "" {
-				args = inputBuffer.String()
+				args = buffered
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
 				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", ev.Name, "error", err)
@@ -281,7 +348,6 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				return
 			}
 			emittedToolCall = true
-			inputBuffer.Reset()
 
 		case "response.reasoning_summary_text.delta":
 			var ev struct {
@@ -323,13 +389,14 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// lines) can't surface as a spurious error masking the completed turn.
 			completed = true
 			inputTokens, cacheReadTokens := ev.Response.Usage.splitInput()
+			outputTokens, thinkingTokens := ev.Response.Usage.splitOutput()
 			yield(llm.StreamEvent{
 				Type:            llm.EventDone,
 				StopReason:      stopReason,
 				RawStopReason:   rawStopReason,
 				InputTokens:     inputTokens,
-				OutputTokens:    ev.Response.Usage.OutputTokens,
-				ThinkingTokens:  ev.Response.Usage.ReasoningTokens,
+				OutputTokens:    outputTokens,
+				ThinkingTokens:  thinkingTokens,
 				CacheReadTokens: cacheReadTokens,
 			}, nil)
 			return
@@ -351,6 +418,13 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 			if ev.Error.Code != "" {
 				msg = ev.Error.Code + ": " + msg
+			}
+			// Same hygiene as an HTTP error body: the provider may echo the
+			// request key, and an unbounded message would bloat every log
+			// line that prints the error.
+			msg = llm.RedactSecrets(msg, c.config)
+			if limit := c.config.EffectiveMaxErrorMessageLen(); len(msg) > limit {
+				msg = msg[:limit] + "... [truncated]"
 			}
 			yield(llm.StreamEvent{}, fmt.Errorf("stream error from %s: %s", c.providerName, msg))
 			return
@@ -461,9 +535,13 @@ type responsesContentBlock struct {
 }
 
 type responsesUsage struct {
-	InputTokens        int `json:"input_tokens"`
-	OutputTokens       int `json:"output_tokens"`
-	ReasoningTokens    int `json:"reasoning_tokens"`
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	// OutputTokensDetails.ReasoningTokens is a SUBSET of output_tokens (the
+	// API nests it here; there is no top-level reasoning_tokens).
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
 	InputTokensDetails struct {
 		// CachedTokens is a SUBSET of input_tokens (OpenAI's prompt-caching
 		// guide computes ordinary input as input_tokens - cached_tokens - …).
@@ -478,6 +556,19 @@ type responsesUsage struct {
 // above the input total is clamped to it, so InputTokens is never negative and
 // the two never sum past the reported input. A missing details object decodes
 // as 0 cached tokens.
+// splitOutput maps output_tokens onto the library's thinking contract (see
+// llm.Response.ThinkingTokens, "separate from OutputTokens", as Gemini reports
+// it): output_tokens already includes output_tokens_details.reasoning_tokens,
+// so the reasoning share is moved to ThinkingTokens and subtracted from
+// OutputTokens. EstimateCost bills OutputTokens + ThinkingTokens at the output
+// rate, so the total equals output_tokens — reasoning is billed once.
+// Negative wire values count as 0; reasoning above the total is clamped.
+func (u *responsesUsage) splitOutput() (output, thinking int) {
+	total, reasoning := max(u.OutputTokens, 0), max(u.OutputTokensDetails.ReasoningTokens, 0)
+	reasoning = min(reasoning, total)
+	return total - reasoning, reasoning
+}
+
 func (u *responsesUsage) splitInput() (input, cacheRead int) {
 	total, cached := max(u.InputTokens, 0), max(u.InputTokensDetails.CachedTokens, 0)
 	cached = min(cached, total)
@@ -781,16 +872,12 @@ func responseStopReasons(resp *responsesResponse) (normalized, raw string) {
 
 func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 	resp := &llm.Response{
-		ID:           apiResp.ID,
-		Model:        apiResp.Model,
-		OutputTokens: apiResp.Usage.OutputTokens,
+		ID:    apiResp.ID,
+		Model: apiResp.Model,
 	}
 	resp.InputTokens, resp.CacheReadTokens = apiResp.Usage.splitInput()
-
-	// Map reasoning_tokens to ThinkingTokens for cost tracking
-	if apiResp.Usage.ReasoningTokens > 0 {
-		resp.ThinkingTokens = apiResp.Usage.ReasoningTokens
-	}
+	// Reasoning moves from OutputTokens to ThinkingTokens (billed once).
+	resp.OutputTokens, resp.ThinkingTokens = apiResp.Usage.splitOutput()
 
 	resp.StopReason, resp.RawStopReason = responseStopReasons(apiResp)
 

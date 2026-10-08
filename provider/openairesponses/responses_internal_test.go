@@ -741,7 +741,12 @@ func TestParseResponseReasoning(t *testing.T) {
 				Content: []responsesContentBlock{{Type: "output_text", Text: "42"}},
 			},
 		},
-		Usage: responsesUsage{InputTokens: 15, OutputTokens: 8, ReasoningTokens: 200},
+		Usage: func() responsesUsage {
+			// Real wire shape: reasoning is nested and INCLUDED in output_tokens.
+			u := responsesUsage{InputTokens: 15, OutputTokens: 208}
+			u.OutputTokensDetails.ReasoningTokens = 200
+			return u
+		}(),
 	}
 
 	resp := c.parseResponse(apiResp)
@@ -752,8 +757,8 @@ func TestParseResponseReasoning(t *testing.T) {
 	if resp.Thinking != "Step 1: analyze the problem.\nStep 2: solve it." {
 		t.Errorf("Thinking = %q", resp.Thinking)
 	}
-	if resp.ThinkingTokens != 200 {
-		t.Errorf("ThinkingTokens = %d, want 200", resp.ThinkingTokens)
+	if resp.ThinkingTokens != 200 || resp.OutputTokens != 8 {
+		t.Errorf("ThinkingTokens/OutputTokens = %d/%d, want 200/8 (reasoning split out of output_tokens)", resp.ThinkingTokens, resp.OutputTokens)
 	}
 }
 
@@ -935,7 +940,7 @@ func TestParseStreamToolCallFallbackToBuffer(t *testing.T) {
 func TestParseStreamReasoning(t *testing.T) {
 	sseData := "data: " + `{"type":"response.reasoning_summary_text.delta","delta":"thinking..."}` + "\n\n" +
 		"data: " + `{"type":"response.output_text.delta","delta":"answer"}` + "\n\n" +
-		"data: " + `{"type":"response.completed","response":{"id":"resp_r","status":"completed","usage":{"input_tokens":10,"output_tokens":5,"reasoning_tokens":100}}}` + "\n\n"
+		"data: " + `{"type":"response.completed","response":{"id":"resp_r","status":"completed","usage":{"input_tokens":10,"output_tokens":105,"output_tokens_details":{"reasoning_tokens":100}}}}` + "\n\n"
 
 	c := &Client{providerName: "openai_responses"}
 	var events []llm.StreamEvent
@@ -956,8 +961,8 @@ func TestParseStreamReasoning(t *testing.T) {
 	if events[1].Type != llm.EventContent || events[1].Text != "answer" {
 		t.Errorf("event[1] = %+v, want EventContent", events[1])
 	}
-	if events[2].ThinkingTokens != 100 {
-		t.Errorf("ThinkingTokens = %d, want 100", events[2].ThinkingTokens)
+	if events[2].ThinkingTokens != 100 || events[2].OutputTokens != 5 {
+		t.Errorf("ThinkingTokens/OutputTokens = %d/%d, want 100/5", events[2].ThinkingTokens, events[2].OutputTokens)
 	}
 }
 

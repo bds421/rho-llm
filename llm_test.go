@@ -817,6 +817,11 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 
 // TestAllProviders runs a simple completion test against all configured providers.
 func TestAllProviders(t *testing.T) {
+	// Live, paid calls: never in -short mode (`make test`), even when the
+	// developer's shell exports provider keys.
+	if testing.Short() {
+		t.Skip("integration test: skipped in -short mode")
+	}
 	anthropicKey := envKey("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEYS")
 	xaiKey := envKey("XAI_API_KEY", "XAI_API_KEYS")
 	geminiKey := envKey("GEMINI_API_KEY", "GEMINI_API_KEYS")

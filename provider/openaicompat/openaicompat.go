@@ -226,6 +226,9 @@ type openaiTool struct {
 }
 
 type openaiToolCall struct {
+	// Index identifies a tool call across streaming deltas (stream only;
+	// nil — and omitted — on requests and non-stream responses).
+	Index    *int   `json:"index,omitempty"`
 	ID       string `json:"id"`
 	Type     string `json:"type"`
 	Function struct {
@@ -621,9 +624,6 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
 
-	var currentToolCall *llm.ToolCall
-	var inputBuffer strings.Builder
-
 	// OpenAI sends finish_reason and usage in SEPARATE chunks when stream_options is set:
 	//   Chunk 1: choices[0].finish_reason = "stop", usage = {}
 	//   Chunk 2: choices = [], usage = {prompt_tokens: N, completion_tokens: M}
@@ -642,6 +642,54 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	var cacheReadTokens int
 	sawDone := false         // server sent an explicit [DONE]
 	emittedToolCall := false // the turn contained at least one tool call
+
+	// Streamed tool calls are assembled per delta "index" (M7): parallel
+	// calls may interleave their argument deltas, and only the first delta
+	// of each carries the id, so keying on id spliced one call's arguments
+	// into another's. Servers that omit index fall back to the old rule — a
+	// delta with an id starts a new call, one without continues the latest.
+	// Calls are emitted in first-seen order when the turn finishes.
+	type streamingCall struct {
+		call    *llm.ToolCall
+		args    strings.Builder
+		emitted bool
+	}
+	var calls []*streamingCall
+	byIndex := map[int]*streamingCall{}
+	var latest *streamingCall
+	// pendingBytes caps arguments buffered across ALL unfinished calls.
+	pendingBytes := 0
+	emitCall := func(sc *streamingCall) bool {
+		if sc.emitted {
+			return true
+		}
+		sc.emitted = true
+		raw := sc.args.String()
+		pendingBytes -= len(raw)
+		var input any
+		if err := json.Unmarshal([]byte(raw), &input); err != nil {
+			slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", sc.call.Name, "error", err)
+			input = raw
+		}
+		sc.call.Input = input
+		emittedToolCall = true
+		return yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: sc.call}, nil)
+	}
+	emitAll := func() bool {
+		for _, sc := range calls {
+			if !emitCall(sc) {
+				return false
+			}
+		}
+		calls, latest = nil, nil
+		clear(byIndex)
+		return true
+	}
+	startCall := func(tc openaiToolCall) *streamingCall {
+		sc := &streamingCall{call: &llm.ToolCall{ID: tc.ID, Name: tc.Function.Name}}
+		calls = append(calls, sc)
+		return sc
+	}
 
 	for scanner.Scan() {
 		data, ok := llm.SSEData(scanner.Text())
@@ -721,34 +769,49 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 			// Tool call deltas
 			for _, tc := range choice.Delta.ToolCalls {
-				if tc.ID != "" {
-					// New tool call starting
-					if currentToolCall != nil {
-						// Finish previous one
-						var input any
-						raw := inputBuffer.String()
-						if err := json.Unmarshal([]byte(raw), &input); err != nil {
-							slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
-							input = raw
-						}
-						currentToolCall.Input = input
-						emittedToolCall = true
-						if !yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: currentToolCall}, nil) {
+				var sc *streamingCall
+				switch {
+				case tc.Index != nil:
+					sc = byIndex[*tc.Index]
+					if sc != nil && tc.ID != "" && sc.call.ID != "" && tc.ID != sc.call.ID {
+						// The index was reused for a new call (servers that
+						// number every call 0): the previous one is complete.
+						if !emitCall(sc) {
 							return
 						}
+						sc = nil
 					}
-					currentToolCall = &llm.ToolCall{
-						ID:   tc.ID,
-						Name: tc.Function.Name,
+					if sc == nil {
+						sc = startCall(tc)
+						byIndex[*tc.Index] = sc
 					}
-					inputBuffer.Reset()
+				case tc.ID != "":
+					// Index-less server: a new id starts a new call, and the
+					// previous one is complete (pre-v0.9.5 behaviour).
+					if !emitAll() {
+						return
+					}
+					sc = startCall(tc)
+				default:
+					sc = latest
 				}
+				if sc == nil {
+					continue // continuation delta with no call to continue
+				}
+				if sc.call.ID == "" {
+					sc.call.ID = tc.ID
+				}
+				if sc.call.Name == "" {
+					sc.call.Name = tc.Function.Name
+				}
+				latest = sc
 				if tc.Function.Arguments != "" {
-					if inputBuffer.Len()+len(tc.Function.Arguments) > maxToolInput {
+					if pendingBytes+len(tc.Function.Arguments) > maxToolInput {
 						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 						return // stop parsing — continuing would corrupt the tool call
 					}
-					inputBuffer.WriteString(tc.Function.Arguments)
+					sc.args.WriteString(tc.Function.Arguments)
+					pendingBytes += len(tc.Function.Arguments)
 				}
 			}
 
@@ -756,19 +819,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			if choice.FinishReason != "" {
 				finishReason = normalizeStopReason(choice.FinishReason)
 				rawFinishReason = choice.FinishReason
-				if currentToolCall != nil {
-					var input any
-					raw := inputBuffer.String()
-					if err := json.Unmarshal([]byte(raw), &input); err != nil {
-						slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
-						input = raw
-					}
-					currentToolCall.Input = input
-					emittedToolCall = true
-					if !yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: currentToolCall}, nil) {
-						return
-					}
-					currentToolCall = nil
+				if !emitAll() {
+					return
 				}
 			}
 		}
@@ -777,18 +829,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// Flush any uncommitted tool call. This can happen if the stream ends
 	// without a finish_reason (network drop, spec-violating server like Ollama).
 	// Without this, the accumulated tool call JSON is silently lost.
-	if currentToolCall != nil {
-		var input any
-		raw := inputBuffer.String()
-		if err := json.Unmarshal([]byte(raw), &input); err != nil {
-			slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", currentToolCall.Name, "error", err)
-			input = raw
-		}
-		currentToolCall.Input = input
-		emittedToolCall = true
-		if !yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: currentToolCall}, nil) {
-			return
-		}
+	if !emitAll() {
+		return
 	}
 
 	// An explicit [DONE] without finish_reason is a known spec violation of

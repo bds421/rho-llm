@@ -19,13 +19,46 @@ import (
 // redactSecret removes the literal API key from a free-text message (e.g. a
 // provider error body that echoed the request key) so it can't leak into logs
 // or serialized state. The library knows its own key, so this is an exact,
-// reliable scrub — not heuristic pattern-matching. A short key is left alone to
-// avoid mangling unrelated text (real keys are long); an empty key is a no-op.
+// reliable scrub — not heuristic pattern-matching. A key of 8+ bytes is
+// replaced wherever it occurs. A shorter key (test, local or proxy keys) is
+// replaced only where it stands as a whole token — not adjacent to another
+// letter, digit, '-' or '_' — so it is still scrubbed from "Bearer abc1" or
+// `"key":"abc1"` without mangling words that merely contain it. An empty key
+// is a no-op.
 func redactSecret(msg, key string) string {
-	if len(key) < 8 || msg == "" {
+	if key == "" || msg == "" {
 		return msg
 	}
-	return strings.ReplaceAll(msg, key, "REDACTED")
+	if len(key) >= 8 {
+		return strings.ReplaceAll(msg, key, "REDACTED")
+	}
+	var b strings.Builder
+	pos := 0 // msg[:pos] is already copied to b
+	for from := 0; ; {
+		i := strings.Index(msg[from:], key)
+		if i < 0 {
+			break
+		}
+		i += from
+		end := i + len(key)
+		if (i == 0 || !isTokenByte(msg[i-1])) && (end == len(msg) || !isTokenByte(msg[end])) {
+			b.WriteString(msg[pos:i])
+			b.WriteString("REDACTED")
+			pos = end
+			from = end // never match inside an already-redacted span
+			continue
+		}
+		from = i + 1
+	}
+	if pos == 0 {
+		return msg
+	}
+	b.WriteString(msg[pos:])
+	return b.String()
+}
+
+func isTokenByte(c byte) bool {
+	return c == '-' || c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // =============================================================================

@@ -593,6 +593,14 @@ func redactProfileSecrets(s, apiKey, baseURL string) string {
 	return s
 }
 
+// RedactSecrets scrubs cfg's APIKey and any credential embedded in its
+// BaseURL out of s — the scrub ErrorFromResponse applies to error bodies.
+// Adapters use it for provider text that reaches an error or a log by another
+// path (e.g. an in-stream error event).
+func RedactSecrets(s string, cfg Config) string {
+	return redactProfileSecrets(s, cfg.APIKey, cfg.BaseURL)
+}
+
 func redactURLCredentials(raw string) string {
 	if raw == "" {
 		return raw
