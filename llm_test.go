@@ -817,6 +817,11 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 
 // TestAllProviders runs a simple completion test against all configured providers.
 func TestAllProviders(t *testing.T) {
+	// Live, paid calls: never in -short mode (`make test`), even when the
+	// developer's shell exports provider keys.
+	if testing.Short() {
+		t.Skip("integration test: skipped in -short mode")
+	}
 	anthropicKey := envKey("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEYS")
 	xaiKey := envKey("XAI_API_KEY", "XAI_API_KEYS")
 	geminiKey := envKey("GEMINI_API_KEY", "GEMINI_API_KEYS")
@@ -3685,6 +3690,9 @@ func TestCircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 	cfg.CircuitThreshold = 2 // opens after 2 failures; attempt 0,1 fail → circuit opens → attempt 2 sees it
 	cfg.CircuitCooldown = 50 * time.Millisecond
 	cfg.CooldownOverload = 10 * time.Millisecond
+	// Single-key backoff follows RetryPolicy (v0.9.5): keep it shorter than
+	// the circuit cooldown so the open circuit is observed between attempts.
+	cfg.RetryPolicy = &llm.RetryPolicy{BaseDelay: 5 * time.Millisecond, MaxDelay: 10 * time.Millisecond, Factor: 2.0}
 	cfg.RetryHook = func(evt llm.RetryEvent) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -3740,9 +3748,10 @@ func TestCircuitBreakerRecovery(t *testing.T) {
 	// Short pool cooldowns so the auth pool doesn't block recovery
 	cfg.CooldownOverload = 50 * time.Millisecond
 	cfg.CooldownDefault = 50 * time.Millisecond
-	// Fast retries to keep test snappy
+	// Single-key backoff follows RetryPolicy (v0.9.5): it must outlast the
+	// 50ms circuit cooldown so the next attempt is admitted as the probe.
 	cfg.RetryPolicy = &llm.RetryPolicy{
-		BaseDelay: 10 * time.Millisecond,
+		BaseDelay: 60 * time.Millisecond,
 		MaxDelay:  100 * time.Millisecond,
 		Factor:    2.0,
 		Jitter:    0,
@@ -3831,6 +3840,9 @@ func TestCircuitBreakerStreamIntegration(t *testing.T) {
 	cfg.CircuitThreshold = 2 // opens after 2 failures
 	cfg.CircuitCooldown = 50 * time.Millisecond
 	cfg.CooldownOverload = 10 * time.Millisecond
+	// Single-key backoff follows RetryPolicy (v0.9.5): keep it shorter than
+	// the circuit cooldown so the open circuit is observed between attempts.
+	cfg.RetryPolicy = &llm.RetryPolicy{BaseDelay: 5 * time.Millisecond, MaxDelay: 10 * time.Millisecond, Factor: 2.0}
 
 	pc, err := llm.NewPooledClient(cfg, []string{"key-a"}, func(profile llm.AuthProfile) (llm.Client, error) {
 		return &threadSafeMockClient{

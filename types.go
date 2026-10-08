@@ -19,13 +19,74 @@ import (
 // redactSecret removes the literal API key from a free-text message (e.g. a
 // provider error body that echoed the request key) so it can't leak into logs
 // or serialized state. The library knows its own key, so this is an exact,
-// reliable scrub — not heuristic pattern-matching. A short key is left alone to
-// avoid mangling unrelated text (real keys are long); an empty key is a no-op.
+// reliable scrub — not heuristic pattern-matching. The rules, by key length:
+//
+//   - 8+ bytes: replaced wherever it occurs (substring), as in v0.9.4.
+//   - 4–7 bytes (test, local or proxy keys): replaced only where it stands as
+//     a whole token — not adjacent to another letter, digit, '-' or '_' — so it
+//     is scrubbed from "Bearer abc1" or `"key":"abc1"` without mangling words
+//     that merely contain it. Well-known placeholder values that local servers
+//     accept in place of a key ("none", "EMPTY", "ollama", "dummy", …; see
+//     isPlaceholderKey) are not secrets and are left alone, so "must be none"
+//     is not rewritten to "must be REDACTED".
+//   - 0–3 bytes: left alone. Such a key has no entropy worth protecting and
+//     cannot be told apart from ordinary words ("a", "id", "key").
 func redactSecret(msg, key string) string {
-	if len(key) < 8 || msg == "" {
+	if msg == "" || len(key) < minWholeTokenSecretLen {
 		return msg
 	}
-	return strings.ReplaceAll(msg, key, "REDACTED")
+	if len(key) >= 8 {
+		return strings.ReplaceAll(msg, key, "REDACTED")
+	}
+	if isPlaceholderKey(key) {
+		return msg
+	}
+	var b strings.Builder
+	pos := 0 // msg[:pos] is already copied to b
+	for from := 0; ; {
+		i := strings.Index(msg[from:], key)
+		if i < 0 {
+			break
+		}
+		i += from
+		end := i + len(key)
+		if (i == 0 || !isTokenByte(msg[i-1])) && (end == len(msg) || !isTokenByte(msg[end])) {
+			b.WriteString(msg[pos:i])
+			b.WriteString("REDACTED")
+			pos = end
+			from = end // never match inside an already-redacted span
+			continue
+		}
+		from = i + 1
+	}
+	if pos == 0 {
+		return msg
+	}
+	b.WriteString(msg[pos:])
+	return b.String()
+}
+
+// minWholeTokenSecretLen is the shortest key redactSecret scrubs.
+const minWholeTokenSecretLen = 4
+
+// placeholderKeys are values local/self-hosted servers (Ollama, vLLM, LM
+// Studio, llama.cpp, …) accept in place of a real key. They are compared
+// case-insensitively and only matter below 8 bytes; longer ones (e.g.
+// "sk-no-key-required") keep the v0.9.4 substring scrub, which is harmless.
+var placeholderKeys = map[string]struct{}{
+	"none": {}, "empty": {}, "null": {}, "nil": {}, "ollama": {}, "dummy": {},
+	"test": {}, "unused": {}, "nokey": {}, "no-key": {}, "apikey": {},
+	"api-key": {}, "api_key": {}, "token": {}, "local": {}, "vllm": {},
+	"lmstudio": {}, "sk-none": {}, "sk-xxx": {}, "sk-1234": {}, "changeme": {},
+}
+
+func isPlaceholderKey(key string) bool {
+	_, ok := placeholderKeys[strings.ToLower(key)]
+	return ok
+}
+
+func isTokenByte(c byte) bool {
+	return c == '-' || c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // =============================================================================
@@ -112,7 +173,7 @@ func ThinkingBudgetTokens(level ThinkingLevel, customBudget int) int {
 // Returns the clamped value and logs a warning if clamping occurred.
 func ClampThinkingBudget(provider, model string, budget, maxTokens int) int {
 	if maxTokens > 0 && budget > maxTokens {
-		slog.Warn("clamping thinking budget to model max_tokens",
+		slog.Debug("clamping thinking budget to model max_tokens",
 			"provider", provider, "model", model,
 			"requested", budget, "max", maxTokens)
 		return maxTokens

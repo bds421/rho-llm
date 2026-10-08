@@ -106,7 +106,7 @@ func TestFallbackSurvivesABrokenPrimaryModel(t *testing.T) {
 }
 
 // A 5xx or 429 on the primary must hand over at once, not after rho-llm's
-// default backoff (up to ten attempts over minutes).
+// default backoff (three attempts, or MaxRetries, with exponential backoff).
 func TestFallbackFailsOverWithoutBackingOffOnThePrimary(t *testing.T) {
 	for _, mode := range []string{"overloaded", "ratelimited"} {
 		s := newGeminiStub(t, map[string]string{"gemini-3.5-transcribe": mode})

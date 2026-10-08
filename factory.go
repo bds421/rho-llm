@@ -253,7 +253,7 @@ func (client *capabilityValidatedClient) Stream(ctx context.Context, req Request
 
 // newPooledClient creates a pooled client with auth rotation.
 func newPooledClient(cfg Config, keys []string) (Client, error) {
-	slog.Info("creating pooled client", "profiles", len(keys), "provider", cfg.Provider)
+	slog.Debug("creating pooled client", "profiles", len(keys), "provider", cfg.Provider)
 
 	// Logging is applied once at the pool level, not per-inner-client.
 	// Without this, each rotated inner client gets its own LoggingClient,

@@ -171,7 +171,7 @@ func (c *Client) Submit(ctx context.Context, items []llm.BatchItem, opts llm.Bat
 		path = c.baseURL + "/models/" + model + ":asyncBatchEmbedContent"
 	}
 
-	resp, err := c.doJSON(ctx, http.MethodPost, path, body)
+	resp, err := c.doJSONWithOptions(ctx, http.MethodPost, path, body, llm.HTTPCallOptions{NonIdempotent: true})
 	if err != nil {
 		return nil, err
 	}
@@ -554,7 +554,14 @@ func splitEmbKey(key string, fallback int) (string, int) {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
-	return llm.DoHTTP(ctx, c.cfg, c.httpClient, func(ctx context.Context) (*http.Request, error) {
+	return c.doJSONWithOptions(ctx, method, url, body, llm.HTTPCallOptions{})
+}
+
+// doJSONWithOptions lets batch creation mark its POST non-idempotent (H5):
+// a resend after a 5xx the provider already committed would submit — and
+// bill — a duplicate batch.
+func (c *Client) doJSONWithOptions(ctx context.Context, method, url string, body []byte, opts llm.HTTPCallOptions) (*http.Response, error) {
+	return llm.DoHTTPWithOptions(ctx, c.cfg, c.httpClient, func(ctx context.Context) (*http.Request, error) {
 		var rdr io.Reader
 		if body != nil {
 			rdr = bytes.NewReader(body)
@@ -566,7 +573,7 @@ func (c *Client) doJSON(ctx context.Context, method, url string, body []byte) (*
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-goog-api-key", c.cfg.APIKey)
 		return req, nil
-	})
+	}, opts)
 }
 
 func copyMeta(in map[string]string) map[string]string {

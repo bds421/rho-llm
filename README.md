@@ -38,10 +38,12 @@ go get github.com/bds421/rho-llm
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
-> **Counting:** 24 built-in provider presets across 4 wire protocols — the OpenAI
-> row spans two (`openai_compat` and the auto-selected `openai_responses` for GPT-5
-> reasoning models), and `claude`/`google`/`grok`/`qwen`/`z-ai`/`glm`/`kimi` are aliases
-> of providers already listed. Curated **model metadata** (pricing + capabilities) backs
+> **Counting:** 23 providers across 4 wire protocols, reachable through 35 preset
+> names — the 23 canonical names in the table, `openai_responses` (the OpenAI row
+> spans two protocols: `openai_compat` and the auto-selected `openai_responses` for
+> GPT-5 reasoning models), the aliases `claude`/`google`/`grok`/`qwen`/`z-ai`/`glm`/`kimi`,
+> and the mainland-China endpoints `dashscope-cn`/`qwen-cn`/`moonshot-cn`/`kimi-cn`.
+> Curated **model metadata** (pricing + capabilities) backs
 > cost estimation, discovery, and fail-closed capability checks. Unlisted model IDs
 > need `RegisterModel` (or `Config.ModelCapabilities`) before dispatch — see
 > [Model Registry](#model-registry). Unknown providers work via `Config.BaseURL` once
@@ -49,7 +51,7 @@ go get github.com/bds421/rho-llm
 
 ## Quick Start
 
-This example demonstrates a complete request using Google Gemini, but the code is identical for all 24 providers.
+This example demonstrates a complete request using Google Gemini, but the code is identical for all 23 providers.
 
 ```go
 import _ "github.com/bds421/rho-llm/provider" // required: register adapters
@@ -440,7 +442,17 @@ Cache fields are silently ignored — no error, no effect.
 
 ## Automatic Retry, Circuit Breaker & Auth Pool Rotation
 
-All clients get automatic retry with exponential backoff (1s→2s→4s, capped at 30s) and a circuit breaker (opens after 5 consecutive failures, probes after 30s) — including keyless local providers like Ollama and vLLM. A solo developer hitting a transient 502 or 429 gets the same resilience as an enterprise with 10 keys.
+All clients get automatic retry with exponential backoff — including keyless local providers like Ollama and vLLM. A solo developer hitting a transient 502 or 429 gets the same resilience as an enterprise with 10 keys.
+
+| | Default | Notes |
+|---|---|---|
+| Attempts (single key, and modality/batch calls) | 3 | `Config.MaxRetries` raises it (min 3). Multi-key pools make one attempt per healthy key, capped at `MaxRetries` (default 10). |
+| Backoff | `RetryPolicy`: 1s → 2s → 4s … capped at 30s, ±25% jitter | A provider `Retry-After` (seconds, HTTP-date, or `retry-after-ms`) stretches a shorter backoff, capped at `llm.MaxRetryAfter` (60s). A multi-key pool whose keys are all cooling down waits for the soonest key instead. No sleep after the final attempt. |
+| Total time | unbounded (attempts × backoff, and `ctx`) | `Config.RetryBudget` stops the sequence before a backoff that would overrun it, and a backoff that would reach the `ctx` deadline is not started either — the last provider error (e.g. a 429 with its `RetryAfter`) is returned at once instead of `context.DeadlineExceeded`. In-flight attempts are not cut — use `ctx` for a hard deadline. |
+| Circuit breaker | **only with `DefaultConfig()`** (opens after 5 consecutive failures, probes after 30s) | A struct-literal `Config` has `CircuitThreshold: 0` = no breaker. Set it explicitly to get one. |
+| Non-idempotent creates (batch create, image generation, speech synthesis) | retried only on 429/503 and connection (dial/DNS) failures | A 500/502/504/408 may come after the provider committed the job — resending would duplicate it and its charge. |
+
+Before v0.9.5 a single-key client slept the 30–60s key *cooldown* between attempts (ignoring `RetryPolicy`), modality/batch calls made 10 attempts by default, and this section claimed every client had a breaker.
 
 The rotation engine is thread-safe. During concurrent rate-limit events, rotation is synchronized to prevent redundant HTTP client allocations, ensuring all in-flight requests seamlessly fail over to the next available endpoint.
 
@@ -455,7 +467,11 @@ cfg := llm.Config{
     Timeout:   120 * time.Second,
 }
 
-// Single-key: gets retry/backoff + circuit breaker on transient errors
+// Single-key: gets retry/backoff on transient errors. This struct-literal
+// config has no circuit breaker — add CircuitThreshold (or start from
+// llm.DefaultConfig()) if you want one.
+cfg.CircuitThreshold = 5
+cfg.RetryBudget = 30 * time.Second // optional: cap total time spent retrying
 singleClient, err := llm.NewClient(cfg)
 if err != nil {
     panic(err)
@@ -492,10 +508,17 @@ cfg.RetryPolicy = &llm.RetryPolicy{
     Factor:    2.0,
     Jitter:    0.25,
 }
+cfg.RetryBudget = 20 * time.Second            // stop retrying after ~20s total (0 = no budget)
+// Per-key cooldowns drive multi-key rotation (a cooling key is skipped);
+// a single-key client backs off with RetryPolicy instead.
 cfg.CooldownRateLimit = 30 * time.Second       // 429 cooldown (default: 60s)
 cfg.CooldownOverload  = 15 * time.Second       // 503 cooldown (default: 30s)
 cfg.CooldownDefault   = 5 * time.Second        // other errors (default: 10s)
 ```
+
+### Streaming and `Config.Timeout`
+
+`Config.Timeout` (default 120s) bounds a `Complete` call end to end. A `Stream` is **not** cut off after `Timeout` in total — long thinking turns may run for minutes. For streams, `Timeout` bounds the wait for response headers and each *silent gap* between body bytes (a stalled stream fails with `*llm.StreamIdleTimeoutError`, a `net.Error` timeout). The gap is measured in bytes, not tokens: Anthropic sends keep-alive pings during long thinking, but Gemini and the OpenAI Responses API may reason silently for minutes — **raise `Timeout` for silent long reasoning** (e.g. `ThinkingHigh`) and bound the total with `ctx`. Bound a stream's total duration with the request context. (Before v0.9.5 the whole-body `http.Client.Timeout` killed any stream longer than `Timeout`.)
 
 ### Retry Observability
 
@@ -521,14 +544,14 @@ client, err := llm.NewClientWithKeys(cfg, keys)
 When a key fails, the pool rotates to the next profile — which may use an entirely different endpoint.
 
 **Error handling:**
-- **Transient errors (429, 503, 502):** Backoff and retry, rotating to other keys if available
+- **Transient errors (429, 503, 502, 500, 408, network):** Backoff and retry, rotating to other keys if available
 - **Auth errors (401, 403):** Key is permanently disabled; rotates to other keys or fails immediately if none remain
 - **Bad request (400):** Returns immediately — the request is broken, not the key
 
 ## Structured Errors
 
 All API errors are returned as `*APIError` with HTTP status code, enabling reliable classification. 
-*(Note: If using `NewClientWithKeys` for Auth Pool Rotation, retries happen automatically. These helpers are useful for manual flow control with a single client or application-level retries).*
+*(Note: If using `NewClientWithKeys` for Auth Pool Rotation, retries happen automatically. These helpers are useful for manual flow control with a single client or application-level retries).* `APIError.RetryAfter` carries the provider's `Retry-After` hint (0 when absent, capped at `llm.MaxRetryAfter`).
 
 ```go
 resp, err := client.Complete(ctx, req)
@@ -584,6 +607,11 @@ fmt.Printf("Context: %d tokens, Input: $%.2f/1M\n", info.ContextWindow, info.Inp
 ## Request Logging (Middleware)
 
 Enable metadata-only logging (no message content) via `LogRequests`:
+
+Independently of `LogRequests`, the library's own operational notes (key
+rotation, backoff, ignored parameters) are logged at `slog.LevelDebug` on the
+default logger, so they stay silent unless you enable debug logging. Only a key
+disabled by an auth error and a recovered hook panic log at `Warn`.
 
 ```go
 cfg := llm.Config{
@@ -795,6 +823,24 @@ Failover happens only on provider failures (an `APIError` or a transport
 error), never on validation errors or cancellation, and without backing off on
 the earlier deployments. The final error classifies as the last attempt.
 
+By default *any* `APIError` fails over — including a 400/413/422 for a payload
+the provider rejected as malformed or oversized, which is then sent (and
+billed) again at the next vendor. When that egress or cost matters, pick the
+recommended policy, which fails over only on transport errors, 408/429/5xx and
+401/403/404:
+
+```go
+stt, _ := llm.NewFallbackModalityClientWithPolicy(llm.FailoverTransientOnly,
+    llm.Config{Provider: "gemini", Model: "gemini-3.5-transcribe", APIKey: key},
+    llm.Config{Provider: "openai", Model: "whisper-1", APIKey: openaiKey},
+)
+```
+
+A `FailoverPolicy` is a plain `func(ctx, err) bool`, so it can be extended (for
+example to also fail over on a 400 from a model you know is broken).
+`NewFallbackModalityClient` equals `NewFallbackModalityClientWithPolicy(nil, …)`
+(`FailoverAnyProviderError`).
+
 To show what each call costs, set `Config.UsageHook`. It receives one
 `UsageEvent` per provider attempt — failed attempts included, with `Err` set —
 carrying the operation, provider, model, provider-reported tokens (with the
@@ -803,7 +849,25 @@ speech-to-text, latency, and `CostUSD` estimated from registry list prices
 (0 when a price is unknown; never guessed). In a fallback chain `Attempt` is
 the deployment's position and `Fallback` is true for every deployment but the
 primary, so a failover is two events. A fallback without its own hook uses the
-primary's.
+primary's. `InputTokens` excludes cached prompt tokens, which are reported in
+`CacheReadTokens` and priced at the cache-read rate (same contract as
+`Response`).
+
+To attribute events to the request that caused them on a client shared by many
+callers, set `Config.UsageHookCtx` instead (or as well): it receives the same
+events plus the caller's `ctx`, so a user or tenant ID carried as a context
+value reaches the hook. When both hooks are set, each sees every event
+(`UsageHook` first). The ctx may already be cancelled — read its values, don't
+do I/O with it.
+
+```go
+type tenantKey struct{}
+cfg.UsageHookCtx = func(ctx context.Context, e llm.UsageEvent) {
+    tenant, _ := ctx.Value(tenantKey{}).(string)
+    ledger.Record(tenant, e.Operation, e.CostUSD)
+}
+text, err := stt.TranscribeAudio(context.WithValue(ctx, tenantKey{}, userID), req)
+```
 
 ```go
 cfg := llm.Config{Provider: "gemini", Model: "gemini-3.5-transcribe", APIKey: key,
@@ -821,7 +885,9 @@ validation before dispatch are not reported. Usage sources: Gemini
 `usageMetadata` (transcription, image generation), OpenAI transcription `usage`
 (tokens or duration), xAI `/v1/stt` `duration`, and OpenAI-compatible embedding
 `prompt_tokens`. Gemini embeddings, image generation on OpenAI-compatible
-endpoints and speech synthesis report no usage (tokens and cost 0).
+endpoints and speech synthesis report no usage (tokens and cost 0; before
+v0.9.5 Gemini embeddings returned a `len(text)/4` guess in
+`EmbeddingResponse.InputTokens`).
 
 `TranscriptionRequest.Prompt` is a spelling hint of at most
 `MaxTranscriptionPromptRunes` runes, never content to transcribe. Gemini accepts
@@ -968,7 +1034,7 @@ if err != nil {
 | MaxTokens | int | 8192 | Max output tokens (zero is floored to the default; see the note below on Gemini thinking models) |
 | Temperature | *float64 | nil | Sampling temperature (nil = provider default, omitted from wire) |
 | ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingLow/ThinkingMedium/ThinkingHigh |
-| Timeout | Duration | 120s | HTTP timeout |
+| Timeout | Duration | 120s | Non-stream request timeout; for streams, the header wait and max silent gap between bytes (see [Streaming and `Config.Timeout`](#streaming-and-configtimeout)) |
 | BaseURL | string | "" | Override provider endpoint |
 | ProxyURL | string | "" | Explicit reviewed HTTP(S) forward proxy; overrides ambient proxy variables |
 | DisableProxy | bool | false | Explicitly bypass configured and ambient proxies for local/private endpoints |
@@ -976,13 +1042,17 @@ if err != nil {
 | ProviderName | string | "" | Override Client.Provider() |
 | LogRequests | bool | false | Enable request/response metadata logging |
 | RetryPolicy | *RetryPolicy | nil | Configurable backoff (nil = DefaultRetryPolicy: 1s–30s, 2x, ±25% jitter) |
-| CircuitThreshold | int | 5 | Consecutive failures to open circuit (0 = disabled) |
+| CircuitThreshold | int | 5 (`DefaultConfig`), 0 (struct literal) | Consecutive failures to open circuit (0 = disabled) |
 | CircuitCooldown | Duration | 30s | Open→half-open cooldown |
 | CooldownRateLimit | Duration | 60s | Profile cooldown for 429 errors |
 | CooldownOverload | Duration | 30s | Profile cooldown for 503 errors |
 | CooldownDefault | Duration | 10s | Profile cooldown for other transient errors |
 | RetryHook | RetryHook | nil | Observability hook for retry lifecycle events |
-| MaxRetries | int | 10 | Cap on retry/rotation iterations (min effective: 3) |
+| UsageHook | UsageHook | nil | Per-attempt modality usage + cost events |
+| UsageHookCtx | ContextUsageHook | nil | Same events plus the caller's ctx, for per-request attribution |
+| MaxRetries | int | 10 (`DefaultConfig`), 0 (struct literal) | Cap on retry/rotation iterations (min effective: 3); 0 = 3 attempts for single-key and modality/batch calls |
+| RetryBudget | Duration | 0 | Total wall-clock bound across one call's retries (0 = none) |
+| DisableRetries | bool | false | Exactly one transport attempt (caller owns retry) |
 | BetaFeatures | []string | ["interleaved-thinking-..."] | Provider beta flags (Anthropic: anthropic-beta header) |
 | AnthropicVersion | string | "2023-06-01" | Override Anthropic API version header |
 | MaxErrorBodyBytes | int | 1 MB | Cap on error response body reads |

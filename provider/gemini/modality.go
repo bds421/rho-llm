@@ -147,7 +147,6 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, req llm.EmbeddingReques
 		model = c.config.Model
 	}
 	out := &llm.EmbeddingResponse{Model: model, Embeddings: make([]llm.Embedding, 0, len(req.Input))}
-	var inputTokens int
 	for i, text := range req.Input {
 		endpoint := fmt.Sprintf("%s/%s:embedContent", c.baseURL, url.PathEscape(model))
 		body, err := json.Marshal(map[string]any{
@@ -177,9 +176,10 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, req llm.EmbeddingReques
 			return nil, fmt.Errorf("gemini: empty embedding vector")
 		}
 		out.Embeddings = append(out.Embeddings, llm.Embedding{Index: i, Vector: wire.Embedding.Values})
-		inputTokens += len(text) / 4 // best-effort; usage often omitted
 	}
-	out.InputTokens = inputTokens
+	// embedContent reports no token usage. InputTokens stays 0 rather than a
+	// len/4 guess: usage in this library is provider-reported, never
+	// estimated (a fabricated count would be billed by EstimateCost).
 	return out, nil
 }
 
@@ -208,7 +208,7 @@ func (c *Client) GenerateImages(ctx context.Context, req llm.ImageRequest) (*llm
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.doModalityJSON(ctx, endpoint, body)
+		resp, err := c.doModalityJSONWithOptions(ctx, endpoint, body, llm.HTTPCallOptions{NonIdempotent: true})
 		if err != nil {
 			return nil, err
 		}
@@ -343,22 +343,35 @@ type geminiModalityResponse struct {
 // does not decode as documented — absent, null, wrong types, out-of-range
 // numbers — reports zero usage; negative counts are dropped by
 // llm.ReportModalityUsage. Output includes thinking tokens, which Gemini bills
-// at the output rate. AudioInputTokens sums promptTokensDetails entries whose
-// modality is AUDIO.
+// at the output rate. AudioInputTokens is the uncached audio share of
+// InputTokens: the AUDIO entries of promptTokensDetails minus the AUDIO
+// entries of cacheTokensDetails (cached audio is in CacheReadTokens), floored
+// at 0.
 func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
 	var usage struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		ThoughtsTokenCount   int `json:"thoughtsTokenCount"`
-		PromptTokensDetails  []struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+		PromptTokensDetails     []struct {
 			Modality   string `json:"modality"`
 			TokenCount int    `json:"tokenCount"`
 		} `json:"promptTokensDetails"`
+		CacheTokensDetails []struct {
+			Modality   string `json:"modality"`
+			TokenCount int    `json:"tokenCount"`
+		} `json:"cacheTokensDetails"`
 	}
 	if len(raw) == 0 || json.Unmarshal(raw, &usage) != nil {
 		return llm.ModalityUsage{}
 	}
-	out := llm.ModalityUsage{InputTokens: usage.PromptTokenCount}
+	// promptTokenCount includes cachedContentTokenCount; report the cached
+	// share separately so InputTokens is the uncached prompt (the library's
+	// cache-token contract — see llm.UsageEvent). Same clamping as the chat
+	// adapter's splitPrompt: negatives read as 0, cached never exceeds prompt.
+	meta := geminiUsageMetadata{PromptTokenCount: usage.PromptTokenCount, CachedContentTokenCount: usage.CachedContentTokenCount}
+	input, cached := meta.splitPrompt()
+	out := llm.ModalityUsage{InputTokens: input, CacheReadTokens: cached}
 	if usage.CandidatesTokenCount > 0 {
 		out.OutputTokens = usage.CandidatesTokenCount
 	}
@@ -367,10 +380,19 @@ func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
 	if usage.ThoughtsTokenCount > 0 {
 		out.OutputTokens = saturatingAdd(out.OutputTokens, usage.ThoughtsTokenCount)
 	}
+	audio, cachedAudio := 0, 0
 	for _, detail := range usage.PromptTokensDetails {
 		if detail.Modality == "AUDIO" && detail.TokenCount > 0 {
-			out.AudioInputTokens = saturatingAdd(out.AudioInputTokens, detail.TokenCount)
+			audio = saturatingAdd(audio, detail.TokenCount)
 		}
+	}
+	for _, detail := range usage.CacheTokensDetails {
+		if detail.Modality == "AUDIO" && detail.TokenCount > 0 {
+			cachedAudio = saturatingAdd(cachedAudio, detail.TokenCount)
+		}
+	}
+	if audio > cachedAudio {
+		out.AudioInputTokens = audio - cachedAudio
 	}
 	return out
 }
@@ -426,14 +448,22 @@ func transcriptionInstruction(language, prompt string, vocabulary []string) stri
 }
 
 func (c *Client) doModalityJSON(ctx context.Context, endpoint string, body []byte) (*http.Response, error) {
-	resp, err := llm.DoHTTP(ctx, c.config, c.httpClient, func(ctx context.Context) (*http.Request, error) {
+	return c.doModalityJSONWithOptions(ctx, endpoint, body, llm.HTTPCallOptions{})
+}
+
+// doModalityJSONWithOptions lets image generation mark its call
+// non-idempotent (H5): a resend after a 500 could bill a second image.
+func (c *Client) doModalityJSONWithOptions(
+	ctx context.Context, endpoint string, body []byte, opts llm.HTTPCallOptions,
+) (*http.Response, error) {
+	resp, err := llm.DoHTTPWithOptions(ctx, c.config, c.httpClient, func(ctx context.Context) (*http.Request, error) {
 		req, err := llm.NewJSONRequest(ctx, endpoint, body)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("x-goog-api-key", c.config.APIKey)
 		return req, nil
-	})
+	}, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +497,10 @@ func verifyImageB64(b64, mediaType string) error {
 			return fmt.Errorf("gemini: payload is not JPEG")
 		}
 	case "image/webp":
-		if string(raw[0:4]) != "RIFF" || string(raw[8:12]) != "WEBP" {
+		// A RIFF/WEBP header is 12 bytes; the len(raw) < 8 guard above is not
+		// enough, and a hostile or buggy 8–11 byte payload would index past
+		// the end and panic the caller's process.
+		if len(raw) < 12 || string(raw[0:4]) != "RIFF" || string(raw[8:12]) != "WEBP" {
 			return fmt.Errorf("gemini: payload is not WebP")
 		}
 	}

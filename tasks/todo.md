@@ -9,57 +9,12 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ---
 
-## ⏸️ RESUME HERE — v0.7.6 is committed + tagged locally, NOT pushed
+## Current state (2026-10-08)
 
-**State as of 2026-09-18:** working tree clean, `make ci` green, `v0.7.6` annotated
-tag created on commit `f50cab7`. `origin/main` is still at `v0.7.5` (`35817fe`).
-
-**Verification done (round 2):** every fix was reverted one at a time to confirm its
-tests go red — all pinned. That audit caught the Gemini break-tests being vacuous
-(they passed with the fix removed); they now assert the real property and fail across
-8 sub-cases when reverted. Live re-test: 3 providers x 4 models, buffered + streaming
-tool calls with full round-trips, parallel tool calls, `MaxTokens: 0`, thinking at
-16000 and 2000, retired-model error, and an Anthropic->Gemini handoff — **0 failures**.
-
-**Test-quality audit (round 3):** ran a mutation audit — flip an invariant in
-production code, see whether any test goes red. A surviving mutant = an unpinned line.
-Fixed three survivors (TLS 1.2 floor, redirect hop cap, Gemini `TokensNotReported`
-sentinel); all three now killed, each verified by re-mutating. One survivor was left
-deliberately: the `Timeout` branch in `applyConfigFloors` is redundant with
-`NewSafeHTTPClient`'s own floor, so no test can observe it — documented in the code
-rather than papered over with a fake test.
-
-**Worth continuing:** only ~10 invariants were mutated out of 672 tests. Running a
-real mutation tool (e.g. `go-mutesting`) over the whole package would likely find more
-unpinned lines. The 10 assertion-free tests found by static scan were all checked and
-are legitimate (nil-safety / `-race` tests where a panic is the failure).
-
-### 🔴 Next action: decide whether to push — **S**
-```bash
-cd ~/Work/2026/bds421/rho/rho-llm
-git fetch origin --tags                 # ALWAYS first — others release mid-session
-git ls-remote --tags origin | tail -5   # confirm v0.7.6 is still free
-git push origin main --follow-tags      # GitHub ONLY (GitLab mirror is stale)
-```
-Pre-push gate already passed: secret scan clean, README current, `make ci` green.
-If the push is rejected, **never** `--force` — re-fetch and rebase.
-
-### What v0.7.6 contains (5 bugs, all found by RUNNING code, not reading it)
-1. **Gemini tool calls silently dropped** — Gemini returns `finishReason:"STOP"` even
-   when requesting a function call, so the adapter reported `end_turn`. The documented
-   agentic loop (`for resp.StopReason == "tool_use"`) never ran. Fixed in both
-   `parseResponse` and `parseStream`; `MAX_TOKENS` preserved.
-2. **Anthropic thinking budget > max_tokens → HTTP 400** — budget clamped only to the
-   model's registry ceiling, not the request's `max_tokens`. Now clamped to both, with
-   Anthropic's 1024 minimum respected (thinking disabled when both bounds can't hold).
-3. **`Config.MaxTokens: 0` → HTTP 400** — the 8192 default lived only in
-   `DefaultConfig()`, so struct-literal configs (what the README teaches) sent
-   `max_tokens: 0`. Added `DefaultMaxTokens` floor.
-4. **Same floor missing on batch/modality paths** — `NewBatchClient` emitted
-   `"max_tokens": 0` in every entry. All three constructors now share
-   `applyConfigFloors` (factory.go).
-5. **7 retired Anthropic model IDs** — verified HTTP 404 against the live API.
-   Removed + `RetiredModelReplacement` gives an actionable dispatch error.
+`v0.9.4` is the latest published release. Branch `fix/v0.9.5-reliability` carries the
+v0.9.5 patch (Fable review 2026-10-07 items H1–H5, M1, M3, M5–M8 and the low-severity
+hygiene batch) — see `CHANGELOG.md` `[0.9.5]`. It is reviewed, merged and tagged by the
+coordinator; nothing on that branch is pushed or tagged yet.
 
 ---
 
@@ -90,6 +45,30 @@ Fine for a demo; inconsistent with the docs.
 ### 🟢 `o3-pro` returns 404 for our key — **S**
 Could be tier-gating rather than retirement — a 404 can't distinguish them. Left in the
 registry deliberately. Re-check with a key that has o3 access before removing.
+
+### From the 2026-10-07 Fable review (not in v0.9.5)
+Review: `health-dashboard/docs/reviews/2026-10-07-fable-rho-llm-review.md`.
+- 🟠 **M2 chat parity — M.** Per-attempt usage events for `Complete`/`Stream`
+  (`OperationChat` through an `observeModality`-style wrapper) and a
+  `NewFallbackClient` for chat reusing `tryEach`/`FailoverPolicy`.
+- 🟡 **M4 registry staleness — S.** `ModelInfo.VerifiedAt` + a one-time slog note when
+  pricing/capabilities are older than a threshold; hand lists
+  (`geminiWithoutSamplingControls`, literal `"claude-sonnet-5"`) into registry metadata.
+- 🟡 **M9 structured-output ergonomics — M.** JSON fence stripping, Gemini schema-dialect
+  normalisation for `ResponseFormat`, typed error for a `max_tokens`-truncated structured
+  response, `ErrUnsupportedParameter` instead of error-string sniffing, export the Gemini
+  inline-audio limit, redact `BaseURL` credentials in constructor errors.
+- 🟢 **Collapse the four adapter HTTP/SSE skeletons onto `transport.go` — L.**
+- 🟢 One shared transport per process/BaseURL instead of one per adapter/profile; batch
+  codec constructors allocate transports they never use.
+- 🟢 Move `examples/` to a nested module so `go.mod` is literally stdlib-only (drop godotenv).
+- 🟢 Tighten break tests that accept any error (`security_test.go:380,451,942,999`,
+  `provider/gemini/transcription_break_test.go`); de-flake the `<= 900ms` wall-clock
+  assertion in `fallback_modality_test.go`; HTTP-level 429/401/5xx tests for the Anthropic
+  and Responses adapters; coverage for fallback embeddings/images/speech.
+- 🟢 Anthropic in-stream `error` events are not surfaced as errors (only as a truncated
+  stream); Responses now redacts/truncates them — align Anthropic.
+- 🟢 GitLab mirror is stale.
 
 ### Follow-ups (optional, pre-existing)
 - WebSocket dialer helper for OpenAI Realtime production use (live smoke uses a test-only dialer)

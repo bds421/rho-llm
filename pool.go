@@ -96,7 +96,7 @@ func (p *AuthPool) GetAvailable() (AuthProfile, error) {
 	for {
 		p.current = (p.current + 1) % len(p.profiles)
 		if p.profiles[p.current].IsAvailable() {
-			slog.Info("auth pool rotated", "profile", p.profiles[p.current].Name)
+			slog.Debug("auth pool rotated", "profile", p.profiles[p.current].Name)
 			p.profiles[p.current].MarkUsed()
 			return *p.profiles[p.current], nil
 		}
@@ -162,13 +162,13 @@ func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimi
 	// Cooldown based on error type
 	if IsRateLimited(err) {
 		cooldown = rateLimitCD
-		slog.Warn("profile rate limited", "profile", profile.Name, "cooldown", cooldown)
+		slog.Debug("profile rate limited", "profile", profile.Name, "cooldown", cooldown)
 	} else if IsOverloaded(err) {
 		cooldown = overloadCD
-		slog.Warn("profile overloaded", "profile", profile.Name, "cooldown", cooldown)
+		slog.Debug("profile overloaded", "profile", profile.Name, "cooldown", cooldown)
 	} else {
 		cooldown = defaultCD
-		slog.Warn("profile failed", "profile", profile.Name, "error", redactProfileSecrets(err.Error(), profile.APIKey, profile.BaseURL), "cooldown", cooldown)
+		slog.Debug("profile failed", "profile", profile.Name, "error", redactProfileSecrets(err.Error(), profile.APIKey, profile.BaseURL), "cooldown", cooldown)
 	}
 
 	profile.MarkFailed(err, cooldown)
@@ -366,7 +366,7 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 		return nil, err
 	}
 
-	slog.Info("pooled client created", "profiles", pool.Count(), "provider", cfg.Provider)
+	slog.Debug("pooled client created", "profiles", pool.Count(), "provider", cfg.Provider)
 
 	pc := &PooledClient{
 		pool:       pool,
@@ -393,6 +393,33 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 	return pc, nil
 }
 
+// backoffAfterFailedRotation picks the sleep before retrying on the same
+// client after a retryable failure that could not rotate to another key.
+//
+// A pool with more than one healthy key whose keys are all cooling down
+// waits for the soonest key (the CooldownError wait) — sleeping less would
+// only hit a key that is still cooling. A single-key pool has nothing to
+// rotate to; its cooldown (30–60 s by default) is pool bookkeeping, not a
+// backoff, so it follows Config.RetryPolicy like DoHTTP does. Either way a
+// provider Retry-After hint longer than the chosen delay wins (capped at
+// MaxRetryAfter).
+func (pc *PooledClient) backoffAfterFailedRotation(rp RetryPolicy, attempt int, rotErr, cause error) time.Duration {
+	var backoff time.Duration
+	var cooldownErr *CooldownError
+	if pc.pool.HealthyCount() > 1 && errors.As(rotErr, &cooldownErr) {
+		backoff = cooldownErr.Wait
+		if backoff <= 0 {
+			backoff = time.Second
+		}
+	} else {
+		backoff = rp.Delay(attempt)
+	}
+	if ra := retryAfterOf(cause); ra > backoff {
+		backoff = ra
+	}
+	return backoff
+}
+
 // maxRetries returns the effective retry cap, reading from config.
 func (pc *PooledClient) maxRetries() int {
 	if pc.cfg.DisableRetries {
@@ -417,6 +444,7 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 	maxRetries := pc.maxRetries()
 
 	rp := pc.retryPolicy()
+	budget := newRetryBudget(pc.cfg.RetryBudget)
 
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
@@ -494,33 +522,45 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 			// Rotation failed (all keys in cooldown or single-key pool).
 			// Auth errors are permanent — no point retrying with the same dead key.
 			if IsAuthError(err) {
-				slog.Warn("auth error with no healthy keys, giving up", "error", pc.redactErr(err))
+				slog.Debug("auth error with no healthy keys, giving up", "error", pc.redactErr(err))
 				return nil, err
 			}
 
 			// Transient errors (429, 503) — backoff and retry with same client.
-			var cooldownErr *CooldownError
-			var backoff time.Duration
-			if errors.As(rotErr, &cooldownErr) {
-				backoff = cooldownErr.Wait
-				if backoff <= 0 {
-					backoff = time.Second
-				}
-			} else {
-				backoff = rp.Delay(i)
+			// No sleep after the final attempt: nothing would follow it.
+			if i+1 == maxRetries {
+				break
+			}
+			backoff := pc.backoffAfterFailedRotation(rp, i, rotErr, err)
+			if !budget.allows(backoff) {
+				pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: i, Err: err})
+				return nil, fmt.Errorf("all retries exhausted (retry budget %v): %w", pc.cfg.RetryBudget, err)
+			}
+			if sleepOutlastsDeadline(ctx, backoff) {
+				// The backoff would sleep into the caller's deadline: return
+				// the provider error (with its Retry-After) now instead of a
+				// bare context.DeadlineExceeded later.
+				pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: i, Err: err})
+				return nil, fmt.Errorf("all retries exhausted (backoff %v exceeds context deadline): %w", backoff, err)
 			}
 			pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: i, Err: rotErr, Backoff: backoff})
-			slog.Info("rotation failed, backing off", "attempt", i+1, "backoff", backoff, "error", rotErr)
+			slog.Debug("rotation failed, backing off", "attempt", i+1, "backoff", backoff, "error", rotErr)
 
+			timer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return nil, ctx.Err()
-			case <-time.After(backoff):
+			case <-timer.C:
 				// Continue to next iteration with same client
 			}
 		} else {
+			if !budget.allows(0) {
+				pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: i, Err: err})
+				return nil, fmt.Errorf("all retries exhausted (retry budget %v): %w", pc.cfg.RetryBudget, err)
+			}
 			pc.emitRetryEvent(RetryEvent{Type: RetryRotating, Attempt: i, Err: err})
-			slog.Info("retrying with new profile", "attempt", i+2, "max", maxRetries)
+			slog.Debug("retrying with new profile", "attempt", i+2, "max", maxRetries)
 		}
 	}
 
@@ -539,6 +579,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 		maxRetries := pc.maxRetries()
 
 		rp := pc.retryPolicy()
+		budget := newRetryBudget(pc.cfg.RetryBudget)
 
 		var lastErr error
 		for attempt := 0; attempt < maxRetries; attempt++ {
@@ -650,35 +691,47 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				// Rotation failed (all keys in cooldown or single-key pool).
 				// Auth errors are permanent — no point retrying with the same dead key.
 				if IsAuthError(lastErr) {
-					slog.Warn("stream: auth error with no healthy keys, giving up", "error", pc.redactErr(lastErr))
+					slog.Debug("stream: auth error with no healthy keys, giving up", "error", pc.redactErr(lastErr))
 					yield(StreamEvent{}, lastErr)
 					return
 				}
 
 				// Transient errors (429, 503) — backoff and retry with same client.
-				var cooldownErr *CooldownError
-				var backoff time.Duration
-				if errors.As(rotErr, &cooldownErr) {
-					backoff = cooldownErr.Wait
-					if backoff <= 0 {
-						backoff = time.Second
-					}
-				} else {
-					backoff = rp.Delay(attempt)
+				// No sleep after the final attempt: nothing would follow it.
+				if attempt+1 == maxRetries {
+					break
+				}
+				backoff := pc.backoffAfterFailedRotation(rp, attempt, rotErr, lastErr)
+				if !budget.allows(backoff) {
+					pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: lastErr})
+					yield(StreamEvent{}, fmt.Errorf("stream: all retries exhausted (retry budget %v): %w", pc.cfg.RetryBudget, lastErr))
+					return
+				}
+				if sleepOutlastsDeadline(ctx, backoff) {
+					pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: lastErr})
+					yield(StreamEvent{}, fmt.Errorf("stream: all retries exhausted (backoff %v exceeds context deadline): %w", backoff, lastErr))
+					return
 				}
 				pc.emitRetryEvent(RetryEvent{Type: RetryBackingOff, Attempt: attempt, Err: rotErr, Backoff: backoff})
-				slog.Info("stream: rotation failed, backing off", "attempt", attempt+1, "backoff", backoff, "error", rotErr)
+				slog.Debug("stream: rotation failed, backing off", "attempt", attempt+1, "backoff", backoff, "error", rotErr)
 
+				timer := time.NewTimer(backoff)
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					yield(StreamEvent{}, ctx.Err())
 					return
-				case <-time.After(backoff):
+				case <-timer.C:
 					// Continue to next iteration with same client
 				}
 			} else {
+				if !budget.allows(0) {
+					pc.emitRetryEvent(RetryEvent{Type: RetryExhausted, Attempt: attempt, Err: lastErr})
+					yield(StreamEvent{}, fmt.Errorf("stream: all retries exhausted (retry budget %v): %w", pc.cfg.RetryBudget, lastErr))
+					return
+				}
 				pc.emitRetryEvent(RetryEvent{Type: RetryRotating, Attempt: attempt, Err: lastErr})
-				slog.Info("stream: retrying with new profile", "attempt", attempt+2, "max", maxRetries)
+				slog.Debug("stream: retrying with new profile", "attempt", attempt+2, "max", maxRetries)
 			}
 		}
 

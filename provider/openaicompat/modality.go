@@ -182,7 +182,7 @@ func (c *Client) GenerateImages(
 	if err != nil {
 		return nil, fmt.Errorf("openaicompat: encode image request: %w", err)
 	}
-	response, err := c.doModalityRequest(ctx, func(ctx context.Context) (*http.Request, error) {
+	response, err := c.doCreateRequest(ctx, func(ctx context.Context) (*http.Request, error) {
 		return c.newJSONModalityRequest(ctx, "/images/generations", body)
 	})
 	if err != nil {
@@ -231,7 +231,7 @@ func (c *Client) SynthesizeSpeech(
 	if err != nil {
 		return nil, fmt.Errorf("openaicompat: encode speech request: %w", err)
 	}
-	response, err := c.doModalityRequest(ctx, func(ctx context.Context) (*http.Request, error) {
+	response, err := c.doCreateRequest(ctx, func(ctx context.Context) (*http.Request, error) {
 		return c.newJSONModalityRequest(ctx, "/audio/speech", body)
 	})
 	if err != nil {
@@ -411,7 +411,22 @@ func (c *Client) setModalityAuth(request *http.Request) {
 func (c *Client) doModalityRequest(
 	ctx context.Context, build llm.HTTPRequestFactory,
 ) (*http.Response, error) {
-	response, err := llm.DoHTTP(ctx, c.config, c.httpClient, build)
+	return c.doModalityRequestWithOptions(ctx, build, llm.HTTPCallOptions{})
+}
+
+// doCreateRequest is doModalityRequest for calls whose resend would bill or
+// produce a second artifact (image generation, speech synthesis): retried
+// only on 429/503 and connection failures, never on 500/502/504 (H5).
+func (c *Client) doCreateRequest(
+	ctx context.Context, build llm.HTTPRequestFactory,
+) (*http.Response, error) {
+	return c.doModalityRequestWithOptions(ctx, build, llm.HTTPCallOptions{NonIdempotent: true})
+}
+
+func (c *Client) doModalityRequestWithOptions(
+	ctx context.Context, build llm.HTTPRequestFactory, opts llm.HTTPCallOptions,
+) (*http.Response, error) {
+	response, err := llm.DoHTTPWithOptions(ctx, c.config, c.httpClient, build, opts)
 	if err != nil {
 		return nil, fmt.Errorf("openaicompat: request failed: %w", err)
 	}

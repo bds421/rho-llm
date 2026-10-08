@@ -7,6 +7,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-10-08
+
+Reliability patch from the 2026-10-07 architecture review (ids H*/M*/L refer to
+it). Backwards compatible: no exported symbol was removed or renamed and no
+exported signature changed; everything new is additive.
+
+> **Consumers must check — openai_responses usage accounting changed.** For the
+> `openai_responses` adapter (GPT-5 family via `Provider: "openai"`),
+> `OutputTokens` now **excludes reasoning tokens**, which are reported in
+> `ThinkingTokens` instead (before, `ThinkingTokens` was always 0 and
+> `OutputTokens` included reasoning). If you bill, meter or budget from the
+> usage fields yourself, charge **`OutputTokens + ThinkingTokens`** as output.
+> `EstimateCost` already prices `ThinkingTokens` at the output rate when you
+> pass both fields; totals are unchanged when both are summed.
+
+### Added
+
+- **`Config.RetryBudget` (H1).** Total wall-clock bound across one call's retry
+  sequence, for pooled chat clients (`Complete` and pre-data `Stream` retries)
+  and `DoHTTP` (modality + batch). Before each backoff the client checks whether
+  sleeping and trying again still fits; if not it returns the last error. 0
+  (default) = no budget. In-flight attempts are never cut — use `ctx` for that.
+  A backoff that would reach the `ctx` deadline is skipped the same way (see
+  Fixed).
+- **`Retry-After` support (H1).** `APIError.RetryAfter` carries the provider's
+  hint (delta-seconds, HTTP-date, or OpenAI's `retry-after-ms`), clamped to the
+  new `MaxRetryAfter` (60s). `ErrorFromResponse` fills it, and both retry
+  engines use it as a floor for the next backoff.
+- **`DoHTTPWithOptions` + `HTTPCallOptions{NonIdempotent}` (H5).** A
+  non-idempotent create is resent only after 429/503 or a dial/DNS/proxy-connect
+  failure — never after 408/500/502/504 or a post-send transport error, which may
+  follow a committed job. `DoHTTP` is unchanged (idempotent).
+- **`NewStreamingHTTPClient` and `StreamIdleTimeoutError` (H3)** — see Fixed.
+- **`Config.UsageHookCtx` / `ContextUsageHook` (M1).** Same per-attempt modality
+  `UsageEvent`s as `UsageHook`, plus the caller's `context.Context`, so one shared
+  `ModalityClient` can attribute usage per request (e.g. a user ID context value)
+  without a client per caller. Both hooks fire when set (`UsageHook` first),
+  each panic-recovered; fallback deployments inherit the primary's.
+- **`NewFallbackModalityClientWithPolicy` + `FailoverPolicy` (M3).**
+  `FailoverAnyProviderError` is the default (= `NewFallbackModalityClient`,
+  unchanged). `FailoverTransientOnly` — recommended when a rejected payload must
+  not be re-sent to another vendor — fails over on transport errors, 408/429/5xx
+  and 401/403/404, never on 400/413/415/422. Caller cancellation always stops
+  the chain.
+- **`UsageEvent.CacheReadTokens` / `ModalityUsage.CacheReadTokens` (M5).** Cached
+  prompt tokens, disjoint from `InputTokens` (the v0.9.4 chat contract), priced at
+  the cache-read rate in `CostUSD`.
+- `DefaultHTTPMaxAttempts` (3), `RedactSecrets(s, cfg)`.
+
+### Changed
+
+- **One retry model for chat and modality/batch (H1).** `DoHTTP` now makes
+  `DefaultHTTPMaxAttempts` = 3 attempts when `Config.MaxRetries` is 0 (was
+  `DefaultMaxRetries` = 10, ≈151s of backoff — the 2m22s modality stall); an
+  explicit `MaxRetries` (including `DefaultConfig()`'s 10) is still honoured.
+  A single-key chat client now backs off with `Config.RetryPolicy` (1s, 2s, …)
+  instead of sleeping the 30s/60s key cooldown, so `RetryPolicy` is no longer dead
+  configuration for it. Pools with more than one healthy key keep waiting for the
+  soonest cooling key. No backoff is slept after the final attempt.
+- **Breaker documentation matches behaviour (H2).** The README claimed every
+  client gets a circuit breaker; only `DefaultConfig()` sets `CircuitThreshold`.
+  Chosen fix: correct the docs rather than floor `CircuitThreshold` for struct
+  literals — a floor would silently change failure behaviour (fail-fast
+  `ErrCircuitOpen`) for every existing struct-literal consumer and leave no way to
+  express "no breaker". README/Config docs now state it, and the README example
+  sets it explicitly.
+- **Creates are not retried on 408/500/502/504 (H5).** Anthropic and Gemini
+  batch submit, OpenAI-compatible image generation and speech synthesis, and
+  Gemini image generation use `NonIdempotent`: they are still retried on 429 and
+  503 (the provider rejected the request before acting on it) and on
+  dial/DNS/proxy-connect failures, but not on 408/500/502/504 or a post-send
+  transport error, where the job may already exist. (OpenAI batch creates
+  already used a single attempt.)
+- **openai_responses usage (M6).** `reasoning_tokens` is read from
+  `usage.output_tokens_details` (it was read from a top-level field the API never
+  sends, so `ThinkingTokens` was always 0). Because it is a subset of
+  `output_tokens`, it is moved from `OutputTokens` to `ThinkingTokens` — the
+  Gemini-style "thinking separate from output" contract. Total cost is unchanged
+  and reasoning is billed once; `OutputTokens` for reasoning models is now the
+  visible output only.
+- **Library logging (M8).** Pool/factory `Info` logs and per-attempt /
+  per-request `Warn` notices (rate limited, overloaded, temperature ignored,
+  thinking budget clamped, tool-input JSON unparsable, …) are now `Debug`. `Warn`
+  remains only for a key disabled by an auth error and for recovered hook/callback
+  panics.
+- **Gemini embeddings report no usage (M5).** `EmbeddingResponse.InputTokens` is 0
+  instead of a fabricated `len(text)/4`; `embedContent` reports no usage.
+- **`NewSafeHTTPClient` transport bounds (non-stream too).** The transport now
+  sets a dial timeout (≤30s), a **TLS-handshake timeout of 10s** (or `Timeout`
+  if smaller), `ResponseHeaderTimeout` (= `Timeout`) and an **`IdleConnTimeout`
+  of 90s** for pooled keep-alive connections. Non-stream calls are still bounded
+  end to end by `Timeout`, but a TLS handshake slower than 10s now fails (as a
+  retryable timeout) even when `Timeout` is larger, and idle connections are
+  closed after 90s instead of being kept indefinitely.
+- Docs: provider count corrected to 23 providers / 35 preset names (README,
+  CLAUDE.md, ARCHITECTURE.md); `tasks/todo.md` header refreshed and the review's
+  remaining items (M2, M4, M9, …) recorded as open work.
+
+### Fixed
+
+- **Streams were killed by `http.Client.Timeout` (H3).** It covers reading the
+  whole body, so any stream longer than `Config.Timeout` (default 120s) — a
+  `ThinkingHigh` turn, a long generation — died mid-response after content was
+  yielded. Streams now use `NewStreamingHTTPClient`: same transport, no
+  whole-body timeout, and an idle watchdog that fails a body silent for more than
+  `Timeout` with `StreamIdleTimeoutError` (a `net.Error` timeout). Total stream
+  duration is bounded by `ctx`. **Caveat — silent reasoning:** the watchdog
+  counts bytes, not tokens. Anthropic sends `ping` events during long thinking,
+  which keep the stream alive; Gemini and the OpenAI Responses API can reason
+  for minutes without sending any bytes, and such a turn still fails with
+  `StreamIdleTimeoutError` once the silence exceeds `Timeout`. **Raise
+  `Config.Timeout` for silent long reasoning** (e.g. `ThinkingHigh` on Gemini or
+  GPT-5) and bound the total with `ctx`.
+- **A backoff no longer sleeps past the caller's deadline.** Before every
+  backoff (`DoHTTP`, pooled `Complete` and pre-data `Stream` retries) the client
+  checks `ctx.Deadline()`: if `now + delay` reaches it, the retry is abandoned
+  and the last error/response is returned at once — the same exit as an
+  exhausted `RetryBudget`. A 429 with `Retry-After: 2` under a 500ms deadline
+  now returns the 429 `*APIError` (with `RetryAfter` set) immediately instead of
+  `context.DeadlineExceeded` 500ms later.
+- **Gemini image-generation panic (H4).** An 8–11 byte inline payload labelled
+  `image/webp` indexed `raw[8:12]` past the end and crashed the caller.
+- **Gemini modality usage double-counted cached tokens (M5).** `InputTokens` now
+  excludes `cachedContentTokenCount` (reported in `CacheReadTokens`), and
+  `AudioInputTokens` excludes cached audio: the `AUDIO` entries of
+  `cacheTokensDetails` are subtracted from the `promptTokensDetails` audio total
+  (previously total audio was only clamped to the uncached input).
+- **Interleaved streamed tool calls were spliced together (M7).** openai_compat
+  now assembles calls per delta `index` (index-less servers keep the old
+  id-starts-a-call rule; a reused index with a new id starts a new call);
+  openai_responses per `item_id`/`output_index`, taking `name`/`call_id` from
+  `response.output_item.added` when the done event omits them. The tool-input
+  cap now bounds all in-flight calls together.
+
+### Security
+
+- `redactSecret` (and so `ErrorFromResponse`/`RedactSecrets`) no longer skips
+  keys of 4–7 bytes: they are scrubbed where they stand as a whole token (so
+  `Bearer abc1` is redacted without mangling words that merely contain the key).
+  Keys of 8+ bytes keep the v0.9.4 substring scrub. Keys under 4 bytes, and
+  well-known placeholder keys that local servers accept (`none`, `EMPTY`,
+  `ollama`, `dummy`, `test`, … — case-insensitive), are left alone: they are not
+  secrets, and scrubbing them would corrupt ordinary error text ("must be none").
+  A real 5–7 byte key is still redacted.
+- openai_responses in-stream `error` events are redacted (`RedactSecrets`) and
+  truncated to `EffectiveMaxErrorMessageLen` like HTTP error bodies.
+- `TestAllProviders` (live, paid calls) now skips in `-short` mode.
+
 ## [0.9.4] - 2026-10-07
 
 ### Fixed

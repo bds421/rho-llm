@@ -4,10 +4,12 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -77,6 +79,13 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 		Transport: &http.Transport{
 			Proxy:           proxy,
 			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+			// Phase bounds that also protect streaming requests, whose client
+			// (NewStreamingHTTPClient) has no overall Timeout. Each is capped
+			// by the configured Timeout so a non-stream call is unchanged.
+			DialContext:           (&net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   min(timeout, 10*time.Second),
+			ResponseHeaderTimeout: timeout,
+			IdleConnTimeout:       90 * time.Second,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -94,6 +103,110 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 		},
 	}, nil
 }
+
+// NewStreamingHTTPClient derives the client a streaming request should use
+// from base (normally the adapter's NewSafeHTTPClient result). http.Client's
+// Timeout covers reading the whole body, so on the shared client a stream
+// that legitimately runs longer than Config.Timeout — a ThinkingHigh turn, a
+// long generation — was cut off mid-response with nothing to retry. The
+// streaming client instead:
+//
+//   - shares base's transport (connection pool, proxy policy, TLS floor),
+//     whose dial, TLS-handshake and ResponseHeaderTimeout bounds still apply
+//     up to the first response byte;
+//   - has no overall Timeout, so total stream duration is bounded only by the
+//     request context;
+//   - fails a stream that goes silent: when no body bytes arrive for
+//     Config.Timeout (DefaultTimeout when zero), the body is closed and the
+//     read returns a timeout net.Error. Gaps are measured per read, so a
+//     stream is only ever cut later than the old whole-body Timeout would
+//     have cut it, never earlier.
+//
+// Redirect handling is base's. base must not be nil.
+func NewStreamingHTTPClient(base *http.Client, cfg Config) *http.Client {
+	idle := cfg.Timeout
+	if idle <= 0 {
+		idle = DefaultTimeout
+	}
+	stream := *base
+	stream.Timeout = 0
+	inner := base.Transport
+	if inner == nil {
+		inner = http.DefaultTransport
+	}
+	stream.Transport = &idleTimeoutTransport{base: inner, idle: idle}
+	return &stream
+}
+
+// idleTimeoutTransport wraps every response body in an idle watchdog.
+type idleTimeoutTransport struct {
+	base http.RoundTripper
+	idle time.Duration
+}
+
+func (t *idleTimeoutTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	body := &idleTimeoutBody{rc: resp.Body, idle: t.idle}
+	body.timer = time.AfterFunc(t.idle, body.expire)
+	resp.Body = body
+	return resp, nil
+}
+
+// CloseIdleConnections forwards to the shared transport so an adapter's
+// Close still drains the pool.
+func (t *idleTimeoutTransport) CloseIdleConnections() {
+	if closer, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
+type idleTimeoutBody struct {
+	rc      io.ReadCloser
+	idle    time.Duration
+	timer   *time.Timer
+	expired atomic.Bool
+}
+
+func (b *idleTimeoutBody) expire() {
+	b.expired.Store(true)
+	_ = b.rc.Close() // unblocks a pending Read
+}
+
+func (b *idleTimeoutBody) Read(p []byte) (int, error) {
+	n, err := b.rc.Read(p)
+	if b.expired.Load() {
+		return n, &StreamIdleTimeoutError{Idle: b.idle}
+	}
+	if n > 0 {
+		b.timer.Reset(b.idle)
+	}
+	return n, err
+}
+
+func (b *idleTimeoutBody) Close() error {
+	b.timer.Stop()
+	return b.rc.Close()
+}
+
+// StreamIdleTimeoutError reports a streaming response that sent no bytes for
+// longer than Config.Timeout. It is a net.Error with Timeout() true, so a
+// stall before the first event is retryable like any transport timeout.
+type StreamIdleTimeoutError struct {
+	Idle time.Duration
+}
+
+func (e *StreamIdleTimeoutError) Error() string {
+	return fmt.Sprintf("llm: stream idle timeout: no data for %v", e.Idle)
+}
+
+// Timeout reports true (net.Error).
+func (e *StreamIdleTimeoutError) Timeout() bool { return true }
+
+// Temporary reports true (net.Error; deprecated upstream but part of the interface).
+func (e *StreamIdleTimeoutError) Temporary() bool { return true }
 
 func proxyPolicy(cfg Config) (func(*http.Request) (*url.URL, error), error) {
 	proxyURL := strings.TrimSpace(cfg.ProxyURL)
@@ -180,7 +293,11 @@ type Config struct {
 	// Extended thinking level: ThinkingLow, ThinkingMedium, ThinkingHigh (zero value = none).
 	ThinkingLevel ThinkingLevel `json:"thinking_level"`
 
-	// HTTP request timeout. For streaming, use context cancellation instead.
+	// Timeout bounds a non-streaming HTTP request end to end (zero uses
+	// DefaultTimeout). Streaming requests are not cut off after Timeout in
+	// total: it bounds the wait for response headers and each silent gap
+	// between body bytes instead (see NewStreamingHTTPClient); bound a
+	// stream's total duration with the request context.
 	Timeout time.Duration `json:"timeout"`
 
 	// BaseURL overrides the provider's default endpoint.
@@ -230,10 +347,16 @@ type Config struct {
 	LogRequests bool `json:"log_requests,omitempty"`
 
 	// RetryPolicy configures backoff behavior. Nil uses DefaultRetryPolicy.
+	// It governs DoHTTP and every single-key chat retry. A provider
+	// Retry-After hint (capped at MaxRetryAfter) stretches a backoff that
+	// would be shorter. Multi-key pools that find every key in cooldown wait
+	// for the soonest key instead (CooldownRateLimit/CooldownOverload/...).
 	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
 
 	// CircuitThreshold is the number of consecutive failures before the circuit opens.
-	// Zero (default) disables the circuit breaker.
+	// Zero disables the circuit breaker. DefaultConfig sets
+	// DefaultCircuitThreshold (5); a struct-literal Config leaves it 0, i.e.
+	// no breaker — set it explicitly to get one.
 	CircuitThreshold int `json:"circuit_threshold,omitempty"`
 
 	// CircuitCooldown is how long the circuit stays open before allowing a probe.
@@ -261,10 +384,31 @@ type Config struct {
 	// instead. Not serialized.
 	UsageHook UsageHook `json:"-"`
 
+	// UsageHookCtx is UsageHook with the caller's context, for attributing
+	// events to the request that caused them (e.g. a user ID in a context
+	// value) on a client shared by many callers. Same events, same delivery
+	// rules; when both hooks are set each receives every event, UsageHook
+	// first. Not serialized.
+	UsageHookCtx ContextUsageHook `json:"-"`
+
 	// MaxRetries caps the number of retry/rotation iterations. Zero uses the
-	// default (DefaultMaxRetries). Minimum effective value is 3 (for single-key
-	// resilience against transient errors).
+	// default: DefaultMaxRetries as the cap for pooled chat clients (which
+	// make max(healthy keys, 3) attempts, so a single key gets 3), and
+	// DefaultHTTPMaxAttempts (3) for the modality/batch transport (DoHTTP).
+	// Minimum effective value is 3 (for single-key resilience against
+	// transient errors).
 	MaxRetries int `json:"max_retries,omitempty"`
+
+	// RetryBudget bounds the total wall-clock time one call may spend across
+	// its retry sequence (attempts plus backoff sleeps). Before each backoff
+	// the client checks whether sleeping and trying again would still fit;
+	// when it would not, the call returns the last error instead of sleeping.
+	// An attempt already in flight is never cut short by the budget — use the
+	// request context for a hard deadline. Zero (the default) or negative
+	// means no budget: the sequence is bounded only by MaxRetries, the
+	// backoff policy and ctx. Applies to pooled chat clients (Complete and
+	// pre-data Stream retries) and to DoHTTP (modality and batch calls).
+	RetryBudget time.Duration `json:"retry_budget,omitempty"`
 
 	// DisableRetries forces exactly one provider transport attempt. It is for
 	// callers whose durable outer execution authority owns retry, idempotency,
@@ -447,6 +591,14 @@ func redactProfileSecrets(s, apiKey, baseURL string) string {
 		}
 	}
 	return s
+}
+
+// RedactSecrets scrubs cfg's APIKey and any credential embedded in its
+// BaseURL out of s — the scrub ErrorFromResponse applies to error bodies.
+// Adapters use it for provider text that reaches an error or a log by another
+// path (e.g. an in-stream error event).
+func RedactSecrets(s string, cfg Config) string {
+	return redactProfileSecrets(s, cfg.APIKey, cfg.BaseURL)
 }
 
 func redactURLCredentials(raw string) string {

@@ -29,9 +29,12 @@ func init() {
 
 // Client implements the Google Gemini API.
 type Client struct {
-	config       llm.Config
-	baseURL      string // resolved base URL (cfg.BaseURL or default)
-	httpClient   *http.Client
+	config     llm.Config
+	baseURL    string // resolved base URL (cfg.BaseURL or default)
+	httpClient *http.Client
+	// streamClient serves Stream: same transport, no whole-body Timeout
+	// (H3). See llm.NewStreamingHTTPClient.
+	streamClient *http.Client
 	providerName string
 }
 
@@ -59,6 +62,7 @@ func New(cfg llm.Config) (*Client, error) {
 		config:       cfg,
 		baseURL:      base,
 		httpClient:   httpClient,
+		streamClient: llm.NewStreamingHTTPClient(httpClient, cfg),
 		providerName: providerName,
 	}, nil
 }
@@ -78,6 +82,15 @@ func (c *Client) Model() string {
 func (c *Client) Close() error {
 	c.httpClient.CloseIdleConnections()
 	return nil
+}
+
+// streamHTTPClient returns the streaming client, deriving it from httpClient
+// for a Client value built without New (tests).
+func (c *Client) streamHTTPClient() *http.Client {
+	if c.streamClient != nil {
+		return c.streamClient
+	}
+	return llm.NewStreamingHTTPClient(c.httpClient, c.config)
 }
 
 // Complete generates a non-streaming completion.
@@ -154,7 +167,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("x-goog-api-key", c.config.APIKey)
 
-		resp, err := c.httpClient.Do(httpReq)
+		resp, err := c.streamHTTPClient().Do(httpReq)
 		if err != nil {
 			yield(llm.StreamEvent{}, fmt.Errorf("request failed: %w", err))
 			return
@@ -466,7 +479,7 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 			if info.MaxTokens > 0 && padded > info.MaxTokens {
 				padded = info.MaxTokens
 			}
-			slog.Warn("padding maxOutputTokens for native thinking model",
+			slog.Debug("padding maxOutputTokens for native thinking model",
 				"provider", c.providerName, "model", model,
 				"original", cur, "padded", padded)
 			apiReq.GenerationConfig.MaxOutputTokens = padded
