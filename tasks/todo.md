@@ -11,10 +11,9 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ## Current state (2026-10-08)
 
-`v0.9.4` is the latest published release. Branch `fix/v0.9.5-reliability` carries the
-v0.9.5 patch (Fable review 2026-10-07 items H1–H5, M1, M3, M5–M8 and the low-severity
-hygiene batch) — see `CHANGELOG.md` `[0.9.5]`. It is reviewed, merged and tagged by the
-coordinator; nothing on that branch is pushed or tagged yet.
+`v0.9.5` is the latest published release (Fable review 2026-10-07 items H1–H5, M1, M3,
+M5–M8 and the low-severity hygiene batch — see `CHANGELOG.md` `[0.9.5]`). The review's
+remaining items are listed below as open work.
 
 ---
 

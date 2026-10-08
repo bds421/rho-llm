@@ -105,7 +105,7 @@ agent's confident assertion is not evidence — and label anything still unverif
 Layered decorator stack over a stateless `Client` interface (`Complete`/`Stream`/`Provider`/`Model`/`Close`):
 
 - **Entry:** `factory.go` (`NewClient`/`NewClientWithKeys`) → resolves protocol (`provider.go`) → looks up the registered adapter (`register.go`, driver pattern; adapters self-register in `init()` and are wired by `provider/all.go`).
-- **Resilience decorators:** `middleware.go` (privacy-safe logging) wraps `pool.go` (`PooledClient`: multi-key `AuthPool` rotation + retry), which uses `circuitbreaker.go` (3-state, nil-safe) and `retrypolicy.go` (backoff + jitter + hooks).
+- **Resilience decorators:** `middleware.go` (privacy-safe logging) wraps `pool.go` (`PooledClient`: multi-key `AuthPool` rotation + retry), which uses `circuitbreaker.go` (3-state, nil-safe), `retrypolicy.go` (backoff + jitter + hooks) and `retrybudget.go` (`RetryBudget`, `Retry-After`, ctx-deadline check).
 - **Adapters** (`provider/*/`): translate the neutral `[]Message` to each wire format and normalize responses/stop-reasons back. All HTTP goes through `SafeHTTPClient` (`config.go`: TLS 1.2+, strips auth headers on cross-host redirect).
 - **Conversation layer** (sits *above* the `Client`, never changes single-request behavior):
   - `conversation.go` — `Conversation` (serializable transcript + `Usage`, versioned JSON via `LoadConversation`).

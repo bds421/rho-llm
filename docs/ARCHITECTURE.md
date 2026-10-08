@@ -56,6 +56,9 @@ github.com/bds421/rho-llm/
 ├── transport.go         # Shared HTTP plumbing: bounded reads + APIError construction
 ├── pool.go              # AuthPool + PooledClient (rotation + retry for Complete and Stream pre-data failures)
 ├── retrypolicy.go       # RetryPolicy (configurable exponential backoff with jitter) + RetryHook
+├── retrybudget.go       # RetryBudget, Retry-After parsing (MaxRetryAfter), ctx-deadline backoff check, DefaultHTTPMaxAttempts
+├── usage.go             # UsageEvent, UsageHook / ContextUsageHook — per-attempt modality usage + cost events
+├── fallback_modality.go # NewFallbackModalityClient(WithPolicy) + FailoverPolicy (model/provider failover)
 ├── circuitbreaker.go    # CircuitBreaker (3-state: closed → open → half-open)
 ├── middleware.go        # LoggingClient decorator
 ├── errors.go            # APIError type + Is*() helpers

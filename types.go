@@ -687,7 +687,7 @@ type Response struct {
 	// cached share). EstimateCost relies on this to price each token once.
 	InputTokens    int `json:"input_tokens"`
 	OutputTokens   int `json:"output_tokens"`
-	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking (separate from OutputTokens)
+	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini, openai_responses: reasoning tokens, separate from OutputTokens (bill OutputTokens+ThinkingTokens as output)
 
 	// Cache token usage — disjoint from InputTokens (see above).
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache (Anthropic)
@@ -720,7 +720,7 @@ type StreamEvent struct {
 	// cache-token contract as Response.InputTokens.
 	InputTokens    int `json:"input_tokens,omitempty"`
 	OutputTokens   int `json:"output_tokens,omitempty"`
-	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini: tokens consumed by thinking
+	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini, openai_responses: reasoning tokens, separate from OutputTokens
 
 	// Done event
 	StopReason    string `json:"stop_reason,omitempty"`
