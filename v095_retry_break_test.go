@@ -107,19 +107,22 @@ func TestDoHTTPHonoursRetryAfterHTTPDate(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
+	// Abort the sleep early by cancelling once the backoff is chosen: only
+	// the chosen backoff matters here. (A ctx deadline shorter than the
+	// backoff would skip the sleep altogether — see v095_deadline_break_test.)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var backoff time.Duration
 	cfg := llm.Config{DisableProxy: true, RetryPolicy: fastPolicy, RetryHook: func(e llm.RetryEvent) {
 		if e.Type == llm.RetryBackingOff {
 			backoff = e.Backoff
+			cancel()
 		}
 	}}
-	// Abort the sleep early: only the chosen backoff matters here.
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
 	_, err := llm.DoHTTP(ctx, cfg, nil, func(ctx context.Context) (*http.Request, error) {
 		return http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
 	})
-	if !errors.Is(err, context.DeadlineExceeded) {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want the ctx to cut the Retry-After sleep, got %v", err)
 	}
 	// HTTP-date has 1 s resolution: 3 s ahead lands in (2s, 3s].
