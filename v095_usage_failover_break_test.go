@@ -242,6 +242,40 @@ func TestUsageHookGeminiCachedTokensSplitAndPriced(t *testing.T) {
 	}
 }
 
+// N1: cached audio is subtracted from the audio share using
+// cacheTokensDetails, rather than clamping total audio to the uncached input
+// (which billed cached audio — or text — as uncached audio).
+func TestUsageHookGeminiCachedAudioSplit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		usage                string
+		input, cached, audio int
+	}{
+		"audio partly cached": {`{"promptTokenCount":1000,"cachedContentTokenCount":600,` +
+			`"promptTokensDetails":[{"modality":"AUDIO","tokenCount":800},{"modality":"TEXT","tokenCount":200}],` +
+			`"cacheTokensDetails":[{"modality":"AUDIO","tokenCount":500},{"modality":"TEXT","tokenCount":100}]}`, 400, 600, 300},
+		"only text cached": {`{"promptTokenCount":1000,"cachedContentTokenCount":200,` +
+			`"promptTokensDetails":[{"modality":"AUDIO","tokenCount":800},{"modality":"TEXT","tokenCount":200}],` +
+			`"cacheTokensDetails":[{"modality":"TEXT","tokenCount":200}]}`, 800, 200, 800},
+		"all audio cached": {`{"promptTokenCount":1000,"cachedContentTokenCount":800,` +
+			`"promptTokensDetails":[{"modality":"AUDIO","tokenCount":800},{"modality":"TEXT","tokenCount":200}],` +
+			`"cacheTokensDetails":[{"modality":"AUDIO","tokenCount":800}]}`, 200, 800, 0},
+		"cached audio > audio": {`{"promptTokenCount":1000,"cachedContentTokenCount":100,` +
+			`"promptTokensDetails":[{"modality":"AUDIO","tokenCount":50}],` +
+			`"cacheTokensDetails":[{"modality":"AUDIO","tokenCount":90},{"modality":"AUDIO","tokenCount":-500}]}`, 900, 100, 0},
+	} {
+		srv := geminiServer(t, 200, okTranscript+`,"usageMetadata":`+tc.usage+`}`)
+		var log eventLog
+		client := geminiUsageClient(t, srv, "gemini-3.5-flash-lite", log.hook)
+		if _, err := transcribe(client); err != nil {
+			t.Fatal(err)
+		}
+		e := log.all()[0]
+		if e.InputTokens != tc.input || e.CacheReadTokens != tc.cached || e.AudioInputTokens != tc.audio {
+			t.Fatalf("%s: usage = %+v, want input %d / cached %d / audio %d", name, e, tc.input, tc.cached, tc.audio)
+		}
+	}
+}
+
 // M5: hostile cache counts never produce negative or overlapping usage.
 func TestUsageHookGeminiHostileCachedTokens(t *testing.T) {
 	for name, usage := range map[string]string{

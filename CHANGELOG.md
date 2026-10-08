@@ -106,7 +106,10 @@ exported signature changed; everything new is additive.
 - **Gemini image-generation panic (H4).** An 8–11 byte inline payload labelled
   `image/webp` indexed `raw[8:12]` past the end and crashed the caller.
 - **Gemini modality usage double-counted cached tokens (M5).** `InputTokens` now
-  excludes `cachedContentTokenCount` (reported in `CacheReadTokens`).
+  excludes `cachedContentTokenCount` (reported in `CacheReadTokens`), and
+  `AudioInputTokens` excludes cached audio: the `AUDIO` entries of
+  `cacheTokensDetails` are subtracted from the `promptTokensDetails` audio total
+  (previously total audio was only clamped to the uncached input).
 - **Interleaved streamed tool calls were spliced together (M7).** openai_compat
   now assembles calls per delta `index` (index-less servers keep the old
   id-starts-a-call rule; a reused index with a new id starts a new call);

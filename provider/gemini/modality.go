@@ -343,8 +343,10 @@ type geminiModalityResponse struct {
 // does not decode as documented — absent, null, wrong types, out-of-range
 // numbers — reports zero usage; negative counts are dropped by
 // llm.ReportModalityUsage. Output includes thinking tokens, which Gemini bills
-// at the output rate. AudioInputTokens sums promptTokensDetails entries whose
-// modality is AUDIO.
+// at the output rate. AudioInputTokens is the uncached audio share of
+// InputTokens: the AUDIO entries of promptTokensDetails minus the AUDIO
+// entries of cacheTokensDetails (cached audio is in CacheReadTokens), floored
+// at 0.
 func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
 	var usage struct {
 		PromptTokenCount        int `json:"promptTokenCount"`
@@ -355,6 +357,10 @@ func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
 			Modality   string `json:"modality"`
 			TokenCount int    `json:"tokenCount"`
 		} `json:"promptTokensDetails"`
+		CacheTokensDetails []struct {
+			Modality   string `json:"modality"`
+			TokenCount int    `json:"tokenCount"`
+		} `json:"cacheTokensDetails"`
 	}
 	if len(raw) == 0 || json.Unmarshal(raw, &usage) != nil {
 		return llm.ModalityUsage{}
@@ -374,10 +380,19 @@ func modalityUsage(raw json.RawMessage) llm.ModalityUsage {
 	if usage.ThoughtsTokenCount > 0 {
 		out.OutputTokens = saturatingAdd(out.OutputTokens, usage.ThoughtsTokenCount)
 	}
+	audio, cachedAudio := 0, 0
 	for _, detail := range usage.PromptTokensDetails {
 		if detail.Modality == "AUDIO" && detail.TokenCount > 0 {
-			out.AudioInputTokens = saturatingAdd(out.AudioInputTokens, detail.TokenCount)
+			audio = saturatingAdd(audio, detail.TokenCount)
 		}
+	}
+	for _, detail := range usage.CacheTokensDetails {
+		if detail.Modality == "AUDIO" && detail.TokenCount > 0 {
+			cachedAudio = saturatingAdd(cachedAudio, detail.TokenCount)
+		}
+	}
+	if audio > cachedAudio {
+		out.AudioInputTokens = audio - cachedAudio
 	}
 	return out
 }
