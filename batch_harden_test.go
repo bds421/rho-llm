@@ -262,7 +262,7 @@ func TestBatchSubmitEmbeddingsUploadsJSONL(t *testing.T) {
 // ---- Usage.AddBatchResponse (half cost, same tokens, sentinel clamp) --------
 
 func TestUsageAddBatchResponseHalfCostSameTokens(t *testing.T) {
-	resp := &llm.Response{Model: "gpt-5.3-chat-latest", InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	resp := &llm.Response{Model: "gpt-4.1-mini", InputTokens: 1_000_000, OutputTokens: 1_000_000}
 
 	var syncU, batchU llm.Usage
 	syncU.AddResponse(resp)
@@ -282,7 +282,7 @@ func TestUsageAddBatchResponseHalfCostSameTokens(t *testing.T) {
 func TestUsageAddBatchResponseClampsTokensNotReported(t *testing.T) {
 	// A streamed turn that never reported usage carries the -1 sentinel; folding it at
 	// batch pricing must not push tokens or cost negative.
-	resp := &llm.Response{Model: "gpt-5.3-chat-latest", InputTokens: llm.TokensNotReported, OutputTokens: llm.TokensNotReported}
+	resp := &llm.Response{Model: "gpt-4.1-mini", InputTokens: llm.TokensNotReported, OutputTokens: llm.TokensNotReported}
 	var u llm.Usage
 	u.AddBatchResponse(resp)
 	if u.InputTokens != 0 || u.OutputTokens != 0 {

@@ -48,9 +48,9 @@ var presets = map[string]ProviderPreset{
 	"perplexity": {BaseURL: "https://api.perplexity.ai", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"deepinfra":  {BaseURL: "https://api.deepinfra.com/v1/openai", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	// Z.ai / GLM — OpenAI-compatible chat (+ tools/vision where the model admits it).
-	"zai":  {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"z-ai": {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"glm":  {BaseURL: "https://api.z.ai/api/openai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"zai":  {BaseURL: "https://api.z.ai/api/paas/v4", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"z-ai": {BaseURL: "https://api.z.ai/api/paas/v4", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"glm":  {BaseURL: "https://api.z.ai/api/paas/v4", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	// MiniMax global OpenAI-compatible chat. Proprietary speech/video APIs are not
 	// registered as rho modalities (non-OpenAI wire).
 	"minimax": {BaseURL: "https://api.minimax.io/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},

@@ -284,6 +284,38 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 // thinking.budget_tokens; the API rejects anything smaller.
 const minThinkingBudgetTokens = 1024
 
+// thinkingOff is how a model accepts ThinkingNone.
+type thinkingOff int
+
+const (
+	thinkingOffDisabled     thinkingOff = iota // {"type":"disabled"}
+	thinkingOffBetweenTools                    // {"type":"between_tools"} — Sonnet 5.5 rejects "disabled"
+	thinkingOffOmit                            // always-on thinking: any explicit off is a 400
+)
+
+type adaptiveThinkingProfile struct {
+	off                thinkingOff
+	noForcedToolChoice bool // tool_choice "any"/"tool" returns a 400
+}
+
+// adaptiveThinkingModels are the Claude models that accept only adaptive
+// thinking. Per platform.claude.com/docs/en/build-with-claude/extended-thinking
+// (2026-10-31): "Claude 4.7 and later models do not support it [budget_tokens]
+// and reject requests that use it, returning a 400 error." Every anthropic
+// registry row must be classified here or listed as a budget model in the
+// tests, so a new Claude model is a deliberate decision.
+var adaptiveThinkingModels = map[string]adaptiveThinkingProfile{
+	"claude-fable-5-1":  {off: thinkingOffOmit, noForcedToolChoice: true},
+	"claude-fable-5":    {off: thinkingOffOmit},
+	"claude-opus-5-5":   {off: thinkingOffOmit, noForcedToolChoice: true},
+	"claude-opus-5":     {off: thinkingOffDisabled},
+	"claude-opus-4-8":   {off: thinkingOffDisabled},
+	"claude-opus-4-7":   {off: thinkingOffDisabled},
+	"claude-sonnet-5-5": {off: thinkingOffBetweenTools, noForcedToolChoice: true},
+	"claude-sonnet-5":   {off: thinkingOffDisabled},
+	"claude-haiku-5-5":  {off: thinkingOffDisabled},
+}
+
 func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, error) {
 	// Keep live and batch encoding consistent when reasoning is configured on
 	// the client rather than on each individual request.
@@ -502,13 +534,27 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	}
 
 	// Configure thinking
-	if llm.ResolveModelAlias(apiReq.Model) == "claude-sonnet-5" {
-		// Sonnet 5 removed manual budgets and defaults to adaptive thinking.
-		// Preserve ThinkingNone's no-thinking behavior explicitly.
-		apiReq.Thinking = &anthropicThinking{Type: "disabled"}
-		if req.ThinkingLevel != llm.ThinkingNone {
+	resolvedModel := llm.ResolveModelAlias(apiReq.Model)
+	if profile, ok := adaptiveThinkingModels[resolvedModel]; ok {
+		// Claude 4.7 and later reject thinking.type "enabled" + budget_tokens
+		// with a 400; depth is set by output_config.effort instead.
+		if apiReq.ToolChoice != nil && profile.noForcedToolChoice &&
+			(req.ToolChoice.Mode == llm.ToolChoiceRequired || req.ToolChoice.Mode == llm.ToolChoiceTool) {
+			return anthropicRequest{}, fmt.Errorf("anthropic: %s rejects forced tool_choice (%q); use ToolChoiceAuto and name the tool in the prompt", resolvedModel, req.ToolChoice.Mode)
+		}
+		if req.ThinkingLevel == llm.ThinkingNone {
+			switch profile.off {
+			case thinkingOffDisabled:
+				apiReq.Thinking = &anthropicThinking{Type: "disabled"}
+			case thinkingOffBetweenTools:
+				apiReq.Thinking = &anthropicThinking{Type: "between_tools"}
+			case thinkingOffOmit:
+				// Thinking is always on and any explicit "off" is a 400:
+				// leave the parameter out and let the model run adaptive.
+			}
+		} else {
 			if req.ThinkingBudget > 0 {
-				return anthropicRequest{}, fmt.Errorf("anthropic: claude-sonnet-5 does not support ThinkingBudget; use ThinkingLevel to control adaptive effort")
+				return anthropicRequest{}, fmt.Errorf("anthropic: %s does not support ThinkingBudget; use ThinkingLevel to control adaptive effort", resolvedModel)
 			}
 			effort := string(req.ThinkingLevel)
 			if req.ThinkingLevel == llm.ThinkingMinimal {

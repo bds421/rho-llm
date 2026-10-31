@@ -13,14 +13,14 @@ func testCfg() llm.Config {
 	cfg := llm.DefaultConfig()
 	cfg.Provider = "openai"
 	cfg.APIKey = "k"
-	cfg.Model = "gpt-5.3-chat-latest"
+	cfg.Model = "gpt-4.1-mini"
 	return cfg
 }
 
 func TestInferKindChatHomogeneous(t *testing.T) {
 	items := []llm.BatchItem{
-		{ItemID: "a", Request: &llm.Request{Model: "gpt-5.3-chat-latest"}},
-		{ItemID: "b", Request: &llm.Request{Model: "gpt-5.3-chat-latest"}},
+		{ItemID: "a", Request: &llm.Request{Model: "gpt-4.1-mini"}},
+		{ItemID: "b", Request: &llm.Request{Model: "gpt-4.1-mini"}},
 	}
 	k, err := inferKind(testCfg(), items)
 	if err != nil {
@@ -46,7 +46,7 @@ func TestInferKindResponsesModelRoutes(t *testing.T) {
 
 func TestInferKindMixedRejected(t *testing.T) {
 	items := []llm.BatchItem{
-		{ItemID: "a", Request: &llm.Request{Model: "gpt-5.3-chat-latest"}},
+		{ItemID: "a", Request: &llm.Request{Model: "gpt-4.1-mini"}},
 		{ItemID: "b", Embedding: &llm.EmbeddingRequest{Model: "text-embedding-3-small", Input: []string{"x"}}},
 	}
 	if _, err := inferKind(testCfg(), items); err == nil {
@@ -56,8 +56,8 @@ func TestInferKindMixedRejected(t *testing.T) {
 
 func TestInferKindDuplicateRejected(t *testing.T) {
 	items := []llm.BatchItem{
-		{ItemID: "dup", Request: &llm.Request{Model: "gpt-5.3-chat-latest"}},
-		{ItemID: "dup", Request: &llm.Request{Model: "gpt-5.3-chat-latest"}},
+		{ItemID: "dup", Request: &llm.Request{Model: "gpt-4.1-mini"}},
+		{ItemID: "dup", Request: &llm.Request{Model: "gpt-4.1-mini"}},
 	}
 	if _, err := inferKind(testCfg(), items); err == nil {
 		t.Fatal("expected duplicate custom_id error")

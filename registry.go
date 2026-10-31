@@ -39,15 +39,49 @@ type ModelInfo struct {
 // replacement. Registry lookup is fail-closed, so a removed entry would
 // otherwise surface as a generic "no reviewed capability metadata" error and
 // hide the real cause. Verified against each provider's live models endpoint
-// (2026-09-18): every ID here returns HTTP 404 from the provider.
+// (2026-09-18): every ID here returns HTTP 404 from the provider. The
+// 2026-10-31 additions come from each provider's deprecation page (shutdown
+// date passed) or a live probe (Fireworks 404 "Model not found", NVIDIA 410
+// "end of life").
 var retiredModels = map[string]string{
-	"claude-3-haiku-20240307":  "claude-haiku-4-5",
-	"claude-opus-4-0":          "claude-opus-4-5",
-	"claude-opus-4-1":          "claude-opus-4-5",
-	"claude-opus-4-1-20250805": "claude-opus-4-5",
-	"claude-opus-4-20250514":   "claude-opus-4-5",
-	"claude-sonnet-4-0":        "claude-sonnet-4-6",
-	"claude-sonnet-4-20250514": "claude-sonnet-4-6",
+	"claude-3-haiku-20240307":                   "claude-haiku-4-5",
+	"claude-opus-4-0":                           "claude-opus-4-5",
+	"claude-opus-4-1":                           "claude-opus-4-5",
+	"claude-opus-4-1-20250805":                  "claude-opus-4-5",
+	"claude-opus-4-20250514":                    "claude-opus-4-5",
+	"claude-sonnet-4-0":                         "claude-sonnet-4-6",
+	"claude-sonnet-4-20250514":                  "claude-sonnet-4-6",
+	"gpt-5.3-chat-latest":                       "gpt-5.6-sol",
+	"gpt-5.2-chat-latest":                       "gpt-5.6-sol",
+	"gpt-5.1-chat-latest":                       "gpt-5.6-sol",
+	"gpt-5-chat-latest":                         "gpt-5.6-sol",
+	"gpt-5-codex":                               "gpt-5.6-sol",
+	"gpt-4.1-nano":                              "gpt-5.6-luna",
+	"o4-mini":                                   "gpt-5.6-terra",
+	"o3-mini":                                   "gpt-5.6-sol",
+	"gpt-image-1":                               "gpt-image-2",
+	"mistral-small-2506":                        "mistral-small-2603",
+	"magistral-small-2509":                      "mistral-small-2603",
+	"magistral-medium-2509":                     "mistral-medium-latest",
+	"devstral-2512":                             "mistral-medium-latest",
+	"devstral-small-2-2512":                     "mistral-medium-latest",
+	"pixtral-large-2411":                        "mistral-medium-latest",
+	"pixtral-12b-2409":                          "ministral-14b-2512",
+	"deepseek-chat":                             "deepseek-flash",
+	"deepseek-reasoner":                         "deepseek-flash",
+	"deepseek-r1-distill-llama-70b":             "openai/gpt-oss-120b",
+	"deepseek-r1-distill-qwen-32b":              "openai/gpt-oss-120b",
+	"meta-llama/llama-4-scout-17b-16e-instruct": "openai/gpt-oss-120b",
+	"accounts/fireworks/models/fireworks/kimi-k2p7-code":    "accounts/fireworks/models/kimi-k3",
+	"accounts/fireworks/models/fireworks/kimi-k2p6":         "accounts/fireworks/models/kimi-k3",
+	"accounts/fireworks/models/fireworks/glm-5p2":           "accounts/fireworks/models/glm-5p3",
+	"accounts/fireworks/models/fireworks/minimax-m3":        "accounts/fireworks/models/minimax-m3",
+	"accounts/fireworks/models/fireworks/deepseek-v4-pro":   "accounts/fireworks/models/deepseek-v4p1-flash",
+	"accounts/fireworks/models/fireworks/deepseek-v4-flash": "accounts/fireworks/models/deepseek-v4p1-flash",
+	"accounts/fireworks/models/fireworks/qwen3p6-plus":      "accounts/fireworks/models/qwen3p8-max",
+	"deepseek-ai/DeepSeek-V3":                               "deepseek-ai/DeepSeek-V4.1-Flash",
+	"meta-llama/Llama-3.3-70B-Instruct-Turbo":               "deepseek-ai/DeepSeek-V4.1-Flash",
+	"meta/llama-3.1-8b-instruct":                            "nvidia/llama-3.1-nemotron-70b-instruct",
 }
 
 // RetiredModelReplacement reports whether model has been retired by its
@@ -60,10 +94,15 @@ func RetiredModelReplacement(model string) (string, bool) {
 // modelRegistry maps model ID to its metadata. Built-in entries are written
 // at init; RegisterModel extends/overrides at runtime under registryMu.
 var modelRegistry = map[string]ModelInfo{
-	// Anthropic — from platform.claude.com/docs (2026-09-19)
-	// Cache pricing: write = 1.25× input, read = 0.1× input (per Anthropic docs)
+	// Anthropic — from platform.claude.com/docs/en/about-claude/pricing (2026-10-31)
+	// Cache pricing: write = 1.25× input; read is usually 0.1× input but the
+	// page sets it per model (Fable 5.1 $0.25, Opus 5.5 $0.20, Sonnet 5.5 $0.10).
 	// Claude 5 family (no minor segment in major-version IDs).
-	"claude-fable-5-1":           {ID: "claude-fable-5-1", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheReadPricePer1M: 0.25, SupportsThinking: true, Label: "Fable 5.1"},
+	"claude-fable-5-1":  {ID: "claude-fable-5-1", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheReadPricePer1M: 0.25, SupportsThinking: true, Label: "Fable 5.1"},
+	"claude-opus-5-5":   {ID: "claude-opus-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 4.00, OutputPricePer1M: 20.00, CacheWritePricePer1M: 5.00, CacheReadPricePer1M: 0.20, SupportsThinking: true, Label: "Opus 5.5"},
+	"claude-sonnet-5-5": {ID: "claude-sonnet-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Sonnet 5.5"},
+	// Haiku 5.5 prompts over 100K tokens cost 5× (not modeled; short-prompt rates).
+	"claude-haiku-5-5":           {ID: "claude-haiku-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 0.10, OutputPricePer1M: 0.50, CacheWritePricePer1M: 0.125, CacheReadPricePer1M: 0.01, SupportsThinking: true, Label: "Haiku 5.5"},
 	"claude-fable-5":             {ID: "claude-fable-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheReadPricePer1M: 1.00, SupportsThinking: true, Label: "Fable 5"},
 	"claude-opus-5":              {ID: "claude-opus-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 5"},
 	"claude-sonnet-5":            {ID: "claude-sonnet-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheReadPricePer1M: 0.20, SupportsThinking: true, Label: "Sonnet 5"},
@@ -72,14 +111,16 @@ var modelRegistry = map[string]ModelInfo{
 	"claude-opus-4-6":            {ID: "claude-opus-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.6"},
 	"claude-opus-4-5":            {ID: "claude-opus-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5"},
 	"claude-opus-4-5-20251101":   {ID: "claude-opus-4-5-20251101", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5 (Nov)"},
-	"claude-sonnet-4-6":          {ID: "claude-sonnet-4-6", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 1000000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.6"},
+	"claude-sonnet-4-6":          {ID: "claude-sonnet-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.6"},
 	"claude-sonnet-4-5":          {ID: "claude-sonnet-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.5"},
 	"claude-sonnet-4-5-20250929": {ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.5 (Sep)"},
 	"claude-haiku-4-5-20251001":  {ID: "claude-haiku-4-5-20251001", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Haiku 4.5"},
 	"claude-haiku-4-5":           {ID: "claude-haiku-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Haiku 4.5"},
 
-	// xAI / Grok — from docs.x.ai/docs/models (2026-08-06)
+	// xAI / Grok — from docs.x.ai/developers/models (2026-10-31)
 	// Short-context rates; long-context (≥200k prompt) is 2× and not modeled here.
+	"grok-4.7":                     {ID: "grok-4.7", Provider: "xai", ContextWindow: 500000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, CacheReadPricePer1M: 0.50, Thinking: true, Label: "Grok 4.7"},
+	"grok-4.6":                     {ID: "grok-4.6", Provider: "xai", ContextWindow: 500000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, CacheReadPricePer1M: 0.50, Thinking: true, Label: "Grok 4.6"},
 	"grok-4.5":                     {ID: "grok-4.5", Provider: "xai", ContextWindow: 500000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, CacheReadPricePer1M: 0.30, Thinking: true, Label: "Grok 4.5"},
 	"grok-4.3":                     {ID: "grok-4.3", Provider: "xai", ContextWindow: 1000000, InputPricePer1M: 1.25, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.20, Thinking: true, Label: "Grok 4.3"},
 	"grok-4.20-0309-reasoning":     {ID: "grok-4.20-0309-reasoning", Provider: "xai", ContextWindow: 1000000, InputPricePer1M: 1.25, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.20, Thinking: true, Label: "Grok 4.20 R"},
@@ -100,28 +141,32 @@ var modelRegistry = map[string]ModelInfo{
 	"grok-3":                            {ID: "grok-3", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 3"},
 	"grok-3-mini":                       {ID: "grok-3-mini", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 3 Mini"},
 
-	// Gemini — from ai.google.dev/gemini-api/docs/pricing and /latest-model (2026-09-19)
+	// Gemini — from ai.google.dev/gemini-api/docs/pricing and /models (2026-10-31)
 	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
+	// Introductory rates: gemini-4-argon doubles from 2026-12-01; gemini-3.8-flash and
+	// gemini-3.6-flash double from 2027-01-01.
 	// AudioInputPricePer1M from ai.google.dev/gemini-api/docs/pricing (fetched 2026-10-07,
 	// page "last updated 2026-10-07"): set only where the page lists the audio rate
 	// (an explicit "(audio)" price, or one price for all input modalities).
+	"gemini-4-argon":         {ID: "gemini-4-argon", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 4 Argon"},
 	"gemini-3.8-flash":       {ID: "gemini-3.8-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.8 Flash"},
 	"gemini-3.7-flash":       {ID: "gemini-3.7-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.7 Flash"},
-	"gemini-3.6-flash":       {ID: "gemini-3.6-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 7.50, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.6 Flash"},
+	"gemini-3.6-flash":       {ID: "gemini-3.6-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.6 Flash"},
 	"gemini-3.5-flash":       {ID: "gemini-3.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 9.00, CacheReadPricePer1M: 0.15, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 1.50, Label: "Gemini 3.5 Flash"},
 	"gemini-3.5-flash-lite":  {ID: "gemini-3.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.03, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 0.30, Label: "Gemini 3.5 Flash Lite"},
-	"gemini-3.1-pro-preview": {ID: "gemini-3.1-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.1 Pro"},
-	"gemini-3.1-flash-lite":  {ID: "gemini-3.1-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 0.50, Label: "Gemini 3.1 Flash Lite"},
+	"gemini-3.1-pro-preview": {ID: "gemini-3.1-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, CacheReadPricePer1M: 0.20, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.1 Pro"},
+	"gemini-3.1-flash-lite":  {ID: "gemini-3.1-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, CacheReadPricePer1M: 0.025, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 0.50, Label: "Gemini 3.1 Flash Lite"},
 	"gemini-3-pro-preview":   {ID: "gemini-3-pro-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3 Pro"},
-	"gemini-3-flash-preview": {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 1.00, Label: "Gemini 3 Flash"},
-	"gemini-2.5-pro":         {ID: "gemini-2.5-pro", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, Label: "Gemini 2.5 Pro"},
-	"gemini-2.5-flash":       {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, Thinking: true, AudioInputPricePer1M: 1.00, Label: "Gemini 2.5 Flash"},
-	"gemini-2.5-flash-lite":  {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Thinking: true, AudioInputPricePer1M: 0.30, Label: "Flash Lite"},
+	"gemini-3-flash-preview": {ID: "gemini-3-flash-preview", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, CacheReadPricePer1M: 0.05, SupportsThinking: true, ThoughtSignature: true, AudioInputPricePer1M: 1.00, Label: "Gemini 3 Flash"},
+	"gemini-2.5-pro":         {ID: "gemini-2.5-pro", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.125, Thinking: true, Label: "Gemini 2.5 Pro"},
+	"gemini-2.5-flash":       {ID: "gemini-2.5-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.03, Thinking: true, AudioInputPricePer1M: 1.00, Label: "Gemini 2.5 Flash"},
+	"gemini-2.5-flash-lite":  {ID: "gemini-2.5-flash-lite", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, CacheReadPricePer1M: 0.01, Thinking: true, AudioInputPricePer1M: 0.30, Label: "Flash Lite"},
 	"gemini-2.0-flash":       {ID: "gemini-2.0-flash", Provider: "gemini", MaxTokens: 8192, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "Gemini 2.0 Flash"},
 	// Gemini non-chat modality models (explicit capabilities; not chat defaults).
 	"gemini-embedding-001":       {ID: "gemini-embedding-001", Provider: "gemini", ContextWindow: 2048, InputPricePer1M: 0.15, Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Gemini Embedding"},
-	"gemini-embedding-2":         {ID: "gemini-embedding-2", Provider: "gemini", ContextWindow: 8192, InputPricePer1M: 0.15, Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Gemini Embedding 2"},
+	"gemini-embedding-2":         {ID: "gemini-embedding-2", Provider: "gemini", ContextWindow: 8192, InputPricePer1M: 0.20, Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Gemini Embedding 2"},
 	"gemini-2.5-flash-image":     {ID: "gemini-2.5-flash-image", Provider: "gemini", ContextWindow: 32768, Capabilities: CapabilitySet(CapabilityImageGeneration | CapabilityBatch), Label: "Gemini 2.5 Flash Image"},
+	"gemini-3-pro-image":         {ID: "gemini-3-pro-image", Provider: "gemini", ContextWindow: 65536, Capabilities: CapabilitySet(CapabilityImageGeneration | CapabilityBatch), Label: "Gemini 3 Pro Image"},
 	"gemini-3-pro-image-preview": {ID: "gemini-3-pro-image-preview", Provider: "gemini", ContextWindow: 65536, Capabilities: CapabilitySet(CapabilityImageGeneration | CapabilityBatch), Label: "Gemini 3 Pro Image"},
 	// Pricing (ai.google.dev/gemini-api/docs/pricing, 2026-10-07): $2.00/1M audio input,
 	// $12.00/1M text output. Audio-only input, so no text input price.
@@ -130,88 +175,84 @@ var modelRegistry = map[string]ModelInfo{
 	// input / 32,768 output tokens, no Batch API, no thinking. Live-verified.
 	"gemini-3.5-transcribe": {ID: "gemini-3.5-transcribe", Provider: "gemini", MaxTokens: 32768, ContextWindow: 98304, Capabilities: CapabilitySet(CapabilityTranscription), OutputPricePer1M: 12.00, AudioInputPricePer1M: 2.00, Label: "Gemini 3.5 Transcribe"},
 
-	// OpenAI — GPT-5.x family (2026-08-06)
+	// OpenAI — GPT-6 / GPT-5.x families (developers.openai.com/api/docs/pricing, 2026-10-31)
 	// Reasoning models use ResponsesAPI: true — reasoning effort is controlled via /v1/responses, not Chat Completions.
 	// Non-reasoning "chat" variants use Chat Completions normally.
+	// GPT-6 family: 1.05M context, 922K max input, 128K output. Tool calling
+	// requires the Responses API ("Chat Completions supports function calling
+	// only with reasoning_effort set to none"). Prompts over 272K cost 2× input,
+	// 1.5× output (not modeled).
+	"gpt-6-astra":   {ID: "gpt-6-astra", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheReadPricePer1M: 1.00, Thinking: true, ResponsesAPI: true, Label: "GPT-6 Astra"},
+	"gpt-6.1-sol":   {ID: "gpt-6.1-sol", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, Thinking: true, ResponsesAPI: true, Label: "GPT-6.1 Sol"},
+	"gpt-6.1-terra": {ID: "gpt-6.1-terra", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheReadPricePer1M: 0.05, Thinking: true, ResponsesAPI: true, Label: "GPT-6.1 Terra"},
+	"gpt-6-sol":     {ID: "gpt-6-sol", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.20, Thinking: true, ResponsesAPI: true, Label: "GPT-6 Sol"},
+	"gpt-6-luna":    {ID: "gpt-6-luna", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 0.10, OutputPricePer1M: 0.50, CacheReadPricePer1M: 0.01, Thinking: true, ResponsesAPI: true, Label: "GPT-6 Luna"},
 	// GPT-5.6 family (Sol/Terra/Luna). Alias gpt-5.6 routes to Sol on the wire.
-	"gpt-5.6-sol":         {ID: "gpt-5.6-sol", Provider: "openai", MaxTokens: 128000, ContextWindow: 1050000, InputPricePer1M: 5.00, OutputPricePer1M: 30.00, CacheReadPricePer1M: 0.50, Thinking: true, ResponsesAPI: true, Label: "GPT-5.6 Sol"},
-	"gpt-5.6-terra":       {ID: "gpt-5.6-terra", Provider: "openai", MaxTokens: 128000, ContextWindow: 1050000, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, CacheReadPricePer1M: 0.20, Thinking: true, ResponsesAPI: true, Label: "GPT-5.6 Terra"},
-	"gpt-5.6-luna":        {ID: "gpt-5.6-luna", Provider: "openai", MaxTokens: 128000, ContextWindow: 1050000, InputPricePer1M: 0.20, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.02, Thinking: true, ResponsesAPI: true, Label: "GPT-5.6 Luna"},
-	"gpt-5.5-pro":         {ID: "gpt-5.5-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 30.00, OutputPricePer1M: 180.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.5 Pro"},
-	"gpt-5.5":             {ID: "gpt-5.5", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 5.00, OutputPricePer1M: 30.00, CacheReadPricePer1M: 0.50, Thinking: true, ResponsesAPI: true, Label: "GPT-5.5"},
-	"gpt-5.4-pro":         {ID: "gpt-5.4-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 30.00, OutputPricePer1M: 180.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Pro"},
-	"gpt-5.4":             {ID: "gpt-5.4", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 2.50, OutputPricePer1M: 15.00, CacheReadPricePer1M: 0.25, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4"},
-	"gpt-5.4-mini":        {ID: "gpt-5.4-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.75, OutputPricePer1M: 4.50, CacheReadPricePer1M: 0.075, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Mini"},
-	"gpt-5.4-nano":        {ID: "gpt-5.4-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.20, OutputPricePer1M: 1.25, CacheReadPricePer1M: 0.02, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Nano"},
-	"gpt-5.3-chat-latest": {ID: "gpt-5.3-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Label: "GPT-5.3 Chat"},
-	"gpt-5.3-codex":       {ID: "gpt-5.3-codex", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, CacheReadPricePer1M: 0.175, Thinking: true, ResponsesAPI: true, Label: "GPT-5.3 Codex"},
-	"gpt-5.2":             {ID: "gpt-5.2", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.2"},
-	"gpt-5.2-pro":         {ID: "gpt-5.2-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 21.00, OutputPricePer1M: 168.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.2 Pro"},
-	"gpt-5.2-chat-latest": {ID: "gpt-5.2-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Label: "GPT-5.2 Chat"},
-	"gpt-5.1":             {ID: "gpt-5.1", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.1"},
-	"gpt-5.1-chat-latest": {ID: "gpt-5.1-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Label: "GPT-5.1 Chat"},
-	"gpt-5":               {ID: "gpt-5", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5"},
-	"gpt-5-pro":           {ID: "gpt-5-pro", Provider: "openai", MaxTokens: 272000, ContextWindow: 400000, InputPricePer1M: 15.00, OutputPricePer1M: 120.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Pro"},
-	"gpt-5-chat-latest":   {ID: "gpt-5-chat-latest", Provider: "openai", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Label: "GPT-5 Chat"},
-	"gpt-5-codex":         {ID: "gpt-5-codex", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Codex"},
-	"gpt-5-mini":          {ID: "gpt-5-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.25, OutputPricePer1M: 2.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Mini"},
-	"gpt-5-nano":          {ID: "gpt-5-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.05, OutputPricePer1M: 0.40, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Nano"},
+	// Sol is at promotional pricing "at least through November 21, 2026".
+	"gpt-5.6-sol":   {ID: "gpt-5.6-sol", Provider: "openai", MaxTokens: 128000, ContextWindow: 1050000, InputPricePer1M: 4.00, OutputPricePer1M: 20.00, CacheReadPricePer1M: 0.40, Thinking: true, ResponsesAPI: true, Label: "GPT-5.6 Sol"},
+	"gpt-5.6-terra": {ID: "gpt-5.6-terra", Provider: "openai", MaxTokens: 128000, ContextWindow: 1050000, InputPricePer1M: 2.00, OutputPricePer1M: 12.00, CacheReadPricePer1M: 0.20, Thinking: true, ResponsesAPI: true, Label: "GPT-5.6 Terra"},
+	"gpt-5.6-luna":  {ID: "gpt-5.6-luna", Provider: "openai", MaxTokens: 128000, ContextWindow: 1050000, InputPricePer1M: 0.20, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.02, Thinking: true, ResponsesAPI: true, Label: "GPT-5.6 Luna"},
+	"gpt-5.5-pro":   {ID: "gpt-5.5-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 30.00, OutputPricePer1M: 180.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.5 Pro"},
+	"gpt-5.5":       {ID: "gpt-5.5", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 5.00, OutputPricePer1M: 30.00, CacheReadPricePer1M: 0.50, Thinking: true, ResponsesAPI: true, Label: "GPT-5.5"},
+	"gpt-5.4-pro":   {ID: "gpt-5.4-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 30.00, OutputPricePer1M: 180.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Pro"},
+	"gpt-5.4":       {ID: "gpt-5.4", Provider: "openai", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 2.50, OutputPricePer1M: 15.00, CacheReadPricePer1M: 0.25, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4"},
+	"gpt-5.4-mini":  {ID: "gpt-5.4-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.75, OutputPricePer1M: 4.50, CacheReadPricePer1M: 0.075, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Mini"},
+	"gpt-5.4-nano":  {ID: "gpt-5.4-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.20, OutputPricePer1M: 1.25, CacheReadPricePer1M: 0.02, Thinking: true, ResponsesAPI: true, Label: "GPT-5.4 Nano"},
+	"gpt-5.3-codex": {ID: "gpt-5.3-codex", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, CacheReadPricePer1M: 0.175, Thinking: true, ResponsesAPI: true, Label: "GPT-5.3 Codex"},
+	"gpt-5.2":       {ID: "gpt-5.2", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.75, OutputPricePer1M: 14.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.2"},
+	"gpt-5.2-pro":   {ID: "gpt-5.2-pro", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 21.00, OutputPricePer1M: 168.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.2 Pro"},
+	"gpt-5.1":       {ID: "gpt-5.1", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5.1"},
+	"gpt-5":         {ID: "gpt-5", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 1.25, OutputPricePer1M: 10.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5"},
+	"gpt-5-pro":     {ID: "gpt-5-pro", Provider: "openai", MaxTokens: 272000, ContextWindow: 400000, InputPricePer1M: 15.00, OutputPricePer1M: 120.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Pro"},
+	"gpt-5-mini":    {ID: "gpt-5-mini", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.25, OutputPricePer1M: 2.00, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Mini"},
+	"gpt-5-nano":    {ID: "gpt-5-nano", Provider: "openai", MaxTokens: 128000, ContextWindow: 400000, InputPricePer1M: 0.05, OutputPricePer1M: 0.40, Thinking: true, ResponsesAPI: true, Label: "GPT-5 Nano"},
 
 	// OpenAI — GPT-4.1 family (non-reasoning, 1M context)
 	"gpt-4.1":      {ID: "gpt-4.1", Provider: "openai", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Label: "GPT-4.1"},
 	"gpt-4.1-mini": {ID: "gpt-4.1-mini", Provider: "openai", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 0.40, OutputPricePer1M: 1.60, Label: "GPT-4.1 Mini"},
-	"gpt-4.1-nano": {ID: "gpt-4.1-nano", Provider: "openai", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.40, Label: "GPT-4.1 Nano"},
 
 	// OpenAI — O-series reasoning models
-	"o3":      {ID: "o3", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "O3"},
-	"o3-mini": {ID: "o3-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O3 Mini"},
-	"o3-pro":  {ID: "o3-pro", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 20.00, OutputPricePer1M: 80.00, Thinking: true, Label: "O3 Pro"},
-	"o4-mini": {ID: "o4-mini", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 1.10, OutputPricePer1M: 4.40, Thinking: true, Label: "O4 Mini"},
+	"o3":     {ID: "o3", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "O3"},
+	"o3-pro": {ID: "o3-pro", Provider: "openai", MaxTokens: 100000, ContextWindow: 200000, InputPricePer1M: 20.00, OutputPricePer1M: 80.00, Thinking: true, Label: "O3 Pro"},
 
 	// Groq — cloud inference (prices re-verified 2026-09-17 at console.groq.com/docs/models)
-	"llama-3.3-70b-versatile":                   {ID: "llama-3.3-70b-versatile", Provider: "groq", MaxTokens: 32768, ContextWindow: 128000, InputPricePer1M: 0.59, OutputPricePer1M: 0.79, Label: "Llama 3.3 70B"},
-	"llama-3.1-8b-instant":                      {ID: "llama-3.1-8b-instant", Provider: "groq", MaxTokens: 8192, ContextWindow: 128000, InputPricePer1M: 0.05, OutputPricePer1M: 0.08, Label: "Llama 3.1 8B"},
-	"openai/gpt-oss-120b":                       {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, Label: "GPT-OSS 120B"},
-	"openai/gpt-oss-20b":                        {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 0.075, OutputPricePer1M: 0.30, Label: "GPT-OSS 20B"},
-	"deepseek-r1-distill-llama-70b":             {ID: "deepseek-r1-distill-llama-70b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.75, OutputPricePer1M: 0.99, Thinking: true, Label: "DeepSeek R1 70B"},
-	"deepseek-r1-distill-qwen-32b":              {ID: "deepseek-r1-distill-qwen-32b", Provider: "groq", MaxTokens: 16384, ContextWindow: 128000, InputPricePer1M: 0.69, OutputPricePer1M: 0.69, Thinking: true, Label: "DeepSeek R1 32B"},
-	"meta-llama/llama-4-scout-17b-16e-instruct": {ID: "meta-llama/llama-4-scout-17b-16e-instruct", Provider: "groq", MaxTokens: 16384, ContextWindow: 327680, InputPricePer1M: 0.11, OutputPricePer1M: 0.34, Label: "Llama 4 Scout"},
+	"llama-3.3-70b-versatile": {ID: "llama-3.3-70b-versatile", Provider: "groq", MaxTokens: 32768, ContextWindow: 128000, InputPricePer1M: 0.59, OutputPricePer1M: 0.79, Label: "Llama 3.3 70B"},
+	"llama-3.1-8b-instant":    {ID: "llama-3.1-8b-instant", Provider: "groq", MaxTokens: 8192, ContextWindow: 128000, InputPricePer1M: 0.05, OutputPricePer1M: 0.08, Label: "Llama 3.1 8B"},
+	"openai/gpt-oss-120b":     {ID: "openai/gpt-oss-120b", Provider: "groq", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, Label: "GPT-OSS 120B"},
+	"openai/gpt-oss-20b":      {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 0.075, OutputPricePer1M: 0.30, Label: "GPT-OSS 20B"},
 
 	// Mistral — cloud API (2026-08-06)
 	"mistral-large-2512":    {ID: "mistral-large-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.50, OutputPricePer1M: 1.50, Label: "Mistral Large"},
 	"mistral-medium-latest": {ID: "mistral-medium-latest", Provider: "mistral", MaxTokens: 131072, ContextWindow: 131072, InputPricePer1M: 0.40, OutputPricePer1M: 2.00, Label: "Mistral Medium"},
 	"mistral-small-2603":    {ID: "mistral-small-2603", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, Thinking: true, Label: "Mistral Small 4"},
-	"mistral-small-2506":    {ID: "mistral-small-2506", Provider: "mistral", MaxTokens: 131072, ContextWindow: 131072, InputPricePer1M: 0.10, OutputPricePer1M: 0.30, Label: "Mistral Small 3"},
-	"magistral-medium-2509": {ID: "magistral-medium-2509", Provider: "mistral", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 2.00, OutputPricePer1M: 5.00, Thinking: true, Label: "Magistral Medium"},
-	"magistral-small-2509":  {ID: "magistral-small-2509", Provider: "mistral", MaxTokens: 8192, ContextWindow: 131072, InputPricePer1M: 0.50, OutputPricePer1M: 1.50, Thinking: true, Label: "Magistral Small"},
 	"codestral-2508":        {ID: "codestral-2508", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.30, OutputPricePer1M: 0.90, Label: "Codestral"},
-	"devstral-2512":         {ID: "devstral-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.40, OutputPricePer1M: 2.00, Label: "Devstral"},
-	"devstral-small-2-2512": {ID: "devstral-small-2-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.10, OutputPricePer1M: 0.30, Label: "Devstral Small 2"},
 	"ministral-8b-2512":     {ID: "ministral-8b-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.15, OutputPricePer1M: 0.15, Label: "Ministral 8B"},
 	"ministral-14b-2512":    {ID: "ministral-14b-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.20, OutputPricePer1M: 0.20, Label: "Ministral 14B"},
-	"pixtral-large-2411":    {ID: "pixtral-large-2411", Provider: "mistral", MaxTokens: 131072, ContextWindow: 131072, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Label: "Pixtral Large"},
-	"pixtral-12b-2409":      {ID: "pixtral-12b-2409", Provider: "mistral", MaxTokens: 131072, ContextWindow: 131072, InputPricePer1M: 0.15, OutputPricePer1M: 0.15, Label: "Pixtral 12B"},
 	"mistral-embed":         {ID: "mistral-embed", Provider: "mistral", ContextWindow: 8192, InputPricePer1M: 0.10, Capabilities: CapabilitySet(CapabilityEmbeddings), Label: "Mistral Embed"},
 	"mistral-large-latest":  {ID: "mistral-large-latest", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.50, OutputPricePer1M: 1.50, Label: "Mistral Large Latest"},
 	"codestral-latest":      {ID: "codestral-latest", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.30, OutputPricePer1M: 0.90, Label: "Codestral Latest"},
 
-	// DeepSeek — cloud API (2026-08-06). Chat/reasoner only; no first-party /embeddings.
-	"deepseek-chat":     {ID: "deepseek-chat", Provider: "deepseek", MaxTokens: 16384, ContextWindow: 1000000, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "DeepSeek V4"},
-	"deepseek-reasoner": {ID: "deepseek-reasoner", Provider: "deepseek", MaxTokens: 65536, ContextWindow: 128000, InputPricePer1M: 0.55, OutputPricePer1M: 2.19, Thinking: true, Label: "DeepSeek Reasoner"},
-	"deepseek-v4-flash": {ID: "deepseek-v4-flash", Provider: "deepseek", MaxTokens: 16384, ContextWindow: 1000000, InputPricePer1M: 0.14, OutputPricePer1M: 0.28, Thinking: true, Label: "DeepSeek V4 Flash"},
-	"deepseek-v4-pro":   {ID: "deepseek-v4-pro", Provider: "deepseek", MaxTokens: 65536, ContextWindow: 512000, InputPricePer1M: 1.74, OutputPricePer1M: 3.48, Thinking: true, Label: "DeepSeek V4 Pro"},
+	// DeepSeek — api-docs.deepseek.com/quick_start/pricing (2026-10-31). No first-party /embeddings.
+	// Peak-hour rates (off-peak is 50%). deepseek-v4-flash is a legacy name routed to V4.1 Flash.
+	"deepseek-flash":    {ID: "deepseek-flash", Provider: "deepseek", MaxTokens: 384000, ContextWindow: 1000000, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.006, Thinking: true, Label: "DeepSeek V4.1 Flash"},
+	"deepseek-v4-flash": {ID: "deepseek-v4-flash", Provider: "deepseek", MaxTokens: 384000, ContextWindow: 1000000, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.006, Thinking: true, Label: "DeepSeek V4 Flash (legacy → V4.1)"},
+	"deepseek-v4-pro":   {ID: "deepseek-v4-pro", Provider: "deepseek", MaxTokens: 384000, ContextWindow: 1000000, InputPricePer1M: 1.32, OutputPricePer1M: 3.96, CacheReadPricePer1M: 0.044, Thinking: true, Label: "DeepSeek V4 Pro"},
 
-	// Cohere — OpenAI-compatible API (2026-04-04)
-	"command-a-03-2025": {ID: "command-a-03-2025", Provider: "cohere", MaxTokens: 4096, ContextWindow: 256000, InputPricePer1M: 2.50, OutputPricePer1M: 10.00, Thinking: true, Label: "Command A"},
+	// Cohere — OpenAI-compatible API (docs.cohere.com/docs/models, 2026-10-31)
+	"command-a-03-2025": {ID: "command-a-03-2025", Provider: "cohere", MaxTokens: 8192, ContextWindow: 256000, InputPricePer1M: 2.50, OutputPricePer1M: 10.00, Label: "Command A"},
 
-	// Z.ai / GLM — OpenAI-compatible API at api.z.ai (2026-08-06). Open weights (MIT).
-	"glm-5.2": {ID: "glm-5.2", Provider: "zai", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, CacheReadPricePer1M: 0.26, Thinking: true, Label: "GLM-5.2"},
-	"glm-4.7": {ID: "glm-4.7", Provider: "zai", MaxTokens: 131072, ContextWindow: 200000, InputPricePer1M: 0.60, OutputPricePer1M: 2.20, CacheReadPricePer1M: 0.11, Thinking: true, Label: "GLM-4.7"},
-	"glm-4.6": {ID: "glm-4.6", Provider: "zai", MaxTokens: 131072, ContextWindow: 200000, InputPricePer1M: 0.60, OutputPricePer1M: 2.20, CacheReadPricePer1M: 0.11, Label: "GLM-4.6"},
+	// Z.ai / GLM — OpenAI-compatible API at api.z.ai/api/paas/v4 (docs.z.ai pricing, 2026-10-31). Open weights; license per model card.
+	"glm-5.3":       {ID: "glm-5.3", Provider: "zai", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, CacheReadPricePer1M: 0.26, Thinking: true, Label: "GLM-5.3"},
+	"glm-5.3-flash": {ID: "glm-5.3-flash", Provider: "zai", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 0.15, OutputPricePer1M: 0.50, CacheReadPricePer1M: 0.03, Thinking: true, Label: "GLM-5.3 Flash"},
+	"glm-5.2":       {ID: "glm-5.2", Provider: "zai", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, CacheReadPricePer1M: 0.26, Thinking: true, Label: "GLM-5.2"},
+	"glm-4.7":       {ID: "glm-4.7", Provider: "zai", MaxTokens: 131072, ContextWindow: 200000, InputPricePer1M: 0.60, OutputPricePer1M: 2.20, CacheReadPricePer1M: 0.11, Thinking: true, Label: "GLM-4.7"},
+	"glm-4.6":       {ID: "glm-4.6", Provider: "zai", MaxTokens: 131072, ContextWindow: 200000, InputPricePer1M: 0.60, OutputPricePer1M: 2.20, CacheReadPricePer1M: 0.11, Label: "GLM-4.6"},
 
-	// MiniMax — OpenAI-compatible API at api.minimax.io (2026-08-06). Open weights. Multimodal.
-	"MiniMax-M3":   {ID: "MiniMax-M3", Provider: "minimax", ContextWindow: 1048576, InputPricePer1M: 0.60, OutputPricePer1M: 2.40, CacheReadPricePer1M: 0.12, Label: "MiniMax M3"},
-	"MiniMax-M2.5": {ID: "MiniMax-M2.5", Provider: "minimax", ContextWindow: 1000000, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.06, Label: "MiniMax M2.5"},
+	// MiniMax — OpenAI-compatible API at api.minimax.io (platform.minimax.io pay-as-you-go, 2026-10-31).
+	// Open weights. Multimodal. MiniMax-M3 rates are the <=512K-input tier; above 512K they double.
+	"MiniMax-M3":         {ID: "MiniMax-M3", Provider: "minimax", ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.06, Label: "MiniMax M3"},
+	"MiniMax-M3.1-Flash": {ID: "MiniMax-M3.1-Flash", Provider: "minimax", ContextWindow: 1000000, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, CacheReadPricePer1M: 0.015, Thinking: true, Label: "MiniMax M3.1 Flash"},
+	"MiniMax-M2.5":       {ID: "MiniMax-M2.5", Provider: "minimax", ContextWindow: 1000000, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.06, Label: "MiniMax M2.5"},
 
 	// Moonshot / Kimi — OpenAI-compatible API at api.moonshot.ai (2026-08-06).
 	"kimi-k2.7-code":   {ID: "kimi-k2.7-code", Provider: "moonshot", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.95, OutputPricePer1M: 4.00, CacheReadPricePer1M: 0.16, Thinking: true, Label: "Kimi K2.7 Code"},
@@ -225,19 +266,22 @@ var modelRegistry = map[string]ModelInfo{
 	"sonar-reasoning-pro": {ID: "sonar-reasoning-pro", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "Sonar Reasoning Pro"},
 	"sonar-deep-research": {ID: "sonar-deep-research", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "Sonar Deep Research"},
 
-	// Fireworks — serverless (from docs.fireworks.ai/serverless/pricing, 2026-06-22).
+	// Fireworks — serverless (from docs.fireworks.ai/serverless/pricing, 2026-10-31; IDs live-probed).
 	// Open-weight families (GLM/Z.ai, MiniMax, Kimi) tracked under the host you'd call; prices cross-checked vs the provider + Together.
-	"accounts/fireworks/models/fireworks/kimi-k2p7-code":    {ID: "accounts/fireworks/models/fireworks/kimi-k2p7-code", Provider: "fireworks", ContextWindow: 262144, InputPricePer1M: 0.95, OutputPricePer1M: 4.00, Thinking: true, Label: "Kimi K2.7 Code"},
-	"accounts/fireworks/models/fireworks/kimi-k2p6":         {ID: "accounts/fireworks/models/fireworks/kimi-k2p6", Provider: "fireworks", ContextWindow: 262144, InputPricePer1M: 0.95, OutputPricePer1M: 4.00, Label: "Kimi K2.6"},
-	"accounts/fireworks/models/fireworks/glm-5p2":           {ID: "accounts/fireworks/models/fireworks/glm-5p2", Provider: "fireworks", ContextWindow: 1048576, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, Thinking: true, Label: "GLM-5.2"},
-	"accounts/fireworks/models/fireworks/minimax-m3":        {ID: "accounts/fireworks/models/fireworks/minimax-m3", Provider: "fireworks", ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, Label: "MiniMax M3"},
-	"accounts/fireworks/models/fireworks/deepseek-v4-pro":   {ID: "accounts/fireworks/models/fireworks/deepseek-v4-pro", Provider: "fireworks", ContextWindow: 163840, InputPricePer1M: 1.74, OutputPricePer1M: 3.48, Thinking: true, Label: "DeepSeek V4 Pro"},
-	"accounts/fireworks/models/fireworks/deepseek-v4-flash": {ID: "accounts/fireworks/models/fireworks/deepseek-v4-flash", Provider: "fireworks", ContextWindow: 163840, InputPricePer1M: 0.14, OutputPricePer1M: 0.28, Thinking: true, Label: "DeepSeek V4 Flash"},
-	"accounts/fireworks/models/fireworks/qwen3p6-plus":      {ID: "accounts/fireworks/models/fireworks/qwen3p6-plus", Provider: "fireworks", ContextWindow: 262144, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, Thinking: true, Label: "Qwen 3.6 Plus"},
+	// Context windows are not published per host, so they are left unknown (0).
+	"accounts/fireworks/models/kimi-k3":             {ID: "accounts/fireworks/models/kimi-k3", Provider: "fireworks", InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheReadPricePer1M: 0.30, Thinking: true, Label: "Kimi K3"},
+	"accounts/fireworks/models/glm-5p3":             {ID: "accounts/fireworks/models/glm-5p3", Provider: "fireworks", InputPricePer1M: 1.40, OutputPricePer1M: 4.40, CacheReadPricePer1M: 0.26, Thinking: true, Label: "GLM-5.3"},
+	"accounts/fireworks/models/glm-5p3-flash":       {ID: "accounts/fireworks/models/glm-5p3-flash", Provider: "fireworks", InputPricePer1M: 0.15, OutputPricePer1M: 0.50, CacheReadPricePer1M: 0.03, Thinking: true, Label: "GLM-5.3 Flash"},
+	"accounts/fireworks/models/minimax-m3":          {ID: "accounts/fireworks/models/minimax-m3", Provider: "fireworks", InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.06, Label: "MiniMax M3"},
+	"accounts/fireworks/models/deepseek-v4p1-flash": {ID: "accounts/fireworks/models/deepseek-v4p1-flash", Provider: "fireworks", InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.006, Thinking: true, Label: "DeepSeek V4.1 Flash"},
+	"accounts/fireworks/models/qwen3p8-max":         {ID: "accounts/fireworks/models/qwen3p8-max", Provider: "fireworks", InputPricePer1M: 2.00, OutputPricePer1M: 6.00, CacheReadPricePer1M: 0.25, Thinking: true, Label: "Qwen 3.8 Max"},
 
-	// Together AI — serverless (from together.ai/pricing, 2026-06-08; IDs as the API exposes them).
-	"deepseek-ai/DeepSeek-V3":                 {ID: "deepseek-ai/DeepSeek-V3", Provider: "together", ContextWindow: 131072, InputPricePer1M: 2.10, OutputPricePer1M: 4.40, Thinking: true, Label: "DeepSeek (Together)"},
-	"meta-llama/Llama-3.3-70B-Instruct-Turbo": {ID: "meta-llama/Llama-3.3-70B-Instruct-Turbo", Provider: "together", ContextWindow: 131072, InputPricePer1M: 1.04, OutputPricePer1M: 1.04, Label: "Llama 3.3 70B (Together)"},
+	// Together AI — serverless (together.ai/pricing + docs.together.ai/docs/serverless-models, 2026-10-31).
+	"moonshotai/Kimi-K3":              {ID: "moonshotai/Kimi-K3", Provider: "together", ContextWindow: 1048576, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheReadPricePer1M: 0.30, Thinking: true, Label: "Kimi K3 (Together)"},
+	"zai-org/GLM-5.3":                 {ID: "zai-org/GLM-5.3", Provider: "together", ContextWindow: 1048575, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, CacheReadPricePer1M: 0.26, Thinking: true, Label: "GLM-5.3 (Together)"},
+	"zai-org/GLM-5.3-Flash":           {ID: "zai-org/GLM-5.3-Flash", Provider: "together", ContextWindow: 1048575, InputPricePer1M: 0.15, OutputPricePer1M: 0.50, CacheReadPricePer1M: 0.03, Thinking: true, Label: "GLM-5.3 Flash (Together)"},
+	"deepseek-ai/DeepSeek-V4.1-Flash": {ID: "deepseek-ai/DeepSeek-V4.1-Flash", Provider: "together", ContextWindow: 1000000, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.006, Thinking: true, Label: "DeepSeek V4.1 Flash (Together)"},
+	"Qwen/Qwen3.8-Flash":              {ID: "Qwen/Qwen3.8-Flash", Provider: "together", ContextWindow: 1000000, InputPricePer1M: 0.15, OutputPricePer1M: 0.47, Thinking: true, Label: "Qwen 3.8 Flash (Together)"},
 
 	// DeepInfra — serverless (from deepinfra.com/pricing, 2026-06-08; distinct IDs to avoid registry key collisions with other hosts).
 	"Qwen/Qwen3-32B":                        {ID: "Qwen/Qwen3-32B", Provider: "deepinfra", ContextWindow: 40960, InputPricePer1M: 0.08, OutputPricePer1M: 0.28, Thinking: true, Label: "Qwen3 32B (DeepInfra)"},
@@ -251,12 +295,15 @@ var modelRegistry = map[string]ModelInfo{
 	"muse-spark-1.2-contributor": {ID: "muse-spark-1.2-contributor", Provider: "meta", MaxTokens: 128000, ContextWindow: 1048576, InputPricePer1M: 0.10, OutputPricePer1M: 0.20, CacheReadPricePer1M: 0.002, Thinking: true, Label: "Muse Spark 1.2 (Contributor)"},
 
 	// NVIDIA NIM — hosted catalog at build.nvidia.com is free for development (rate-limited; no public per-token price), so prices are left 0. IDs as integrate.api.nvidia.com exposes them.
+	"nvidia/nemotron-3-ultra-550b-a55b":      {ID: "nvidia/nemotron-3-ultra-550b-a55b", Provider: "nvidia", Label: "Nemotron 3 Ultra (NIM, free dev tier)"},
 	"nvidia/llama-3.1-nemotron-70b-instruct": {ID: "nvidia/llama-3.1-nemotron-70b-instruct", Provider: "nvidia", ContextWindow: 131072, Label: "Llama 3.1 Nemotron 70B (NIM, free dev tier)"},
-	"meta/llama-3.1-8b-instruct":             {ID: "meta/llama-3.1-8b-instruct", Provider: "nvidia", ContextWindow: 131072, Label: "Llama 3.1 8B (NIM, free dev tier)"},
 
-	// DashScope (Alibaba) — OpenAI-compatible API (2026-08-06). Intl default; override BaseURL for CN.
-	"qwen3.6-plus":       {ID: "qwen3.6-plus", Provider: "dashscope", MaxTokens: 65536, ContextWindow: 1000000, InputPricePer1M: 0.29, OutputPricePer1M: 1.74, Thinking: true, Label: "Qwen 3.6 Plus"},
-	"qwen3.6-flash":      {ID: "qwen3.6-flash", Provider: "dashscope", MaxTokens: 32768, ContextWindow: 1000000, InputPricePer1M: 0.05, OutputPricePer1M: 0.40, Thinking: true, Label: "Qwen 3.6 Flash"},
+	// DashScope (Alibaba) — Model Studio international (Singapore) pricing (2026-10-31). Intl default; override BaseURL for CN.
+	// Rates are the shortest input tier (qwen3.6: <=256K; above that they rise 2–4×).
+	"qwen3.8-max":        {ID: "qwen3.8-max", Provider: "dashscope", ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Qwen 3.8 Max"},
+	"qwen3.8-flash":      {ID: "qwen3.8-flash", Provider: "dashscope", ContextWindow: 1000000, InputPricePer1M: 0.15, OutputPricePer1M: 0.47, Thinking: true, Label: "Qwen 3.8 Flash"},
+	"qwen3.6-plus":       {ID: "qwen3.6-plus", Provider: "dashscope", MaxTokens: 65536, ContextWindow: 1000000, InputPricePer1M: 0.50, OutputPricePer1M: 3.00, Thinking: true, Label: "Qwen 3.6 Plus"},
+	"qwen3.6-flash":      {ID: "qwen3.6-flash", Provider: "dashscope", MaxTokens: 32768, ContextWindow: 1000000, InputPricePer1M: 0.25, OutputPricePer1M: 1.50, Thinking: true, Label: "Qwen 3.6 Flash"},
 	"qwen3-max":          {ID: "qwen3-max", Provider: "dashscope", MaxTokens: 65536, ContextWindow: 262144, InputPricePer1M: 1.20, OutputPricePer1M: 6.00, Thinking: true, Label: "Qwen 3 Max"},
 	"qwen3.5-omni-plus":  {ID: "qwen3.5-omni-plus", Provider: "dashscope", MaxTokens: 16384, ContextWindow: 256000, Thinking: true, Label: "Qwen 3.5 Omni Plus"},
 	"qwen3.5-omni-flash": {ID: "qwen3.5-omni-flash", Provider: "dashscope", MaxTokens: 16384, ContextWindow: 256000, Thinking: true, Label: "Qwen 3.5 Omni Flash"},
@@ -285,7 +332,6 @@ var modelRegistry = map[string]ModelInfo{
 	"text-embedding-3-small": {ID: "text-embedding-3-small", Provider: "openai", Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Text Embedding 3 Small"},
 	"text-embedding-3-large": {ID: "text-embedding-3-large", Provider: "openai", Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Text Embedding 3 Large"},
 	"gpt-image-2":            {ID: "gpt-image-2", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 2"},
-	"gpt-image-1":            {ID: "gpt-image-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 1"},
 	"tts-1":                  {ID: "tts-1", Provider: "openai", Capabilities: CapabilitySet(CapabilitySpeechSynthesis), Label: "TTS 1"},
 	"whisper-1":              {ID: "whisper-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), AudioPricePerMinute: 0.006, Label: "Whisper 1"},
 	// Transcription models from developers.openai.com/api/docs/guides/speech-to-text (2026-10-06).
@@ -319,22 +365,22 @@ func init() {
 }
 
 var defaultModels = map[string]string{
-	"anthropic":    "claude-sonnet-5",
-	"claude":       "claude-sonnet-5",
-	"xai":          "grok-4.5",
-	"grok":         "grok-4.5",
+	"anthropic":    "claude-sonnet-5-5",
+	"claude":       "claude-sonnet-5-5",
+	"xai":          "grok-4.7",
+	"grok":         "grok-4.7",
 	"gemini":       "gemini-3.5-flash-lite",
 	"google":       "gemini-3.5-flash-lite",
-	"openai":       "gpt-5.6-sol",
-	"gpt":          "gpt-5.6-sol",
+	"openai":       "gpt-6.1-sol",
+	"gpt":          "gpt-6.1-sol",
 	"meta":         "muse-spark-1.2",
-	"groq":         "llama-3.3-70b-versatile",
+	"groq":         "openai/gpt-oss-120b",
 	"mistral":      "mistral-small-2603",
-	"deepseek":     "deepseek-chat",
+	"deepseek":     "deepseek-flash",
 	"cohere":       "command-a-03-2025",
-	"zai":          "glm-5.2",
-	"z-ai":         "glm-5.2",
-	"glm":          "glm-5.2",
+	"zai":          "glm-5.3",
+	"z-ai":         "glm-5.3",
+	"glm":          "glm-5.3",
 	"minimax":      "MiniMax-M3",
 	"moonshot":     "kimi-k2.7-code",
 	"kimi":         "kimi-k2.7-code",
@@ -350,6 +396,9 @@ var defaultModels = map[string]string{
 var availableModels = map[string][]string{
 	"anthropic": {
 		"claude-fable-5-1",
+		"claude-opus-5-5",
+		"claude-sonnet-5-5",
+		"claude-haiku-5-5",
 		"claude-fable-5",
 		"claude-opus-5",
 		"claude-sonnet-5",
@@ -363,6 +412,8 @@ var availableModels = map[string][]string{
 		"claude-haiku-4-5-20251001",
 	},
 	"xai": {
+		"grok-4.7",
+		"grok-4.6",
 		"grok-4.5",
 		"grok-4.3",
 		"grok-4.20-0309-reasoning",
@@ -383,6 +434,7 @@ var availableModels = map[string][]string{
 		"grok-3-mini",
 	},
 	"gemini": {
+		"gemini-4-argon",
 		"gemini-3.8-flash",
 		"gemini-3.7-flash",
 		"gemini-3.6-flash",
@@ -398,6 +450,11 @@ var availableModels = map[string][]string{
 		"gemini-2.0-flash",
 	},
 	"openai": {
+		"gpt-6.1-sol",
+		"gpt-6.1-terra",
+		"gpt-6-astra",
+		"gpt-6-sol",
+		"gpt-6-luna",
 		"gpt-5.6-sol",
 		"gpt-5.6-terra",
 		"gpt-5.6-luna",
@@ -407,26 +464,18 @@ var availableModels = map[string][]string{
 		"gpt-5.4",
 		"gpt-5.4-mini",
 		"gpt-5.4-nano",
-		"gpt-5.3-chat-latest",
 		"gpt-5.3-codex",
 		"gpt-5.2-pro",
 		"gpt-5.2",
-		"gpt-5.2-chat-latest",
 		"gpt-5.1",
-		"gpt-5.1-chat-latest",
 		"gpt-5-pro",
 		"gpt-5",
-		"gpt-5-codex",
-		"gpt-5-chat-latest",
 		"gpt-5-mini",
 		"gpt-5-nano",
 		"gpt-4.1",
 		"gpt-4.1-mini",
-		"gpt-4.1-nano",
 		"o3-pro",
 		"o3",
-		"o3-mini",
-		"o4-mini",
 	},
 	"meta": {
 		"muse-spark-1.2",
@@ -434,35 +483,24 @@ var availableModels = map[string][]string{
 		"muse-spark-1.2-contributor",
 	},
 	"groq": {
-		"llama-3.3-70b-versatile",
-		"llama-3.1-8b-instant",
-		"meta-llama/llama-4-scout-17b-16e-instruct",
 		"openai/gpt-oss-120b",
 		"openai/gpt-oss-20b",
-		"deepseek-r1-distill-llama-70b",
-		"deepseek-r1-distill-qwen-32b",
+		"llama-3.3-70b-versatile",
+		"llama-3.1-8b-instant",
 	},
 	"mistral": {
 		"mistral-large-2512",
 		"mistral-large-latest",
 		"mistral-medium-latest",
 		"mistral-small-2603",
-		"mistral-small-2506",
-		"magistral-medium-2509",
-		"magistral-small-2509",
 		"codestral-2508",
 		"codestral-latest",
-		"devstral-2512",
-		"devstral-small-2-2512",
 		"ministral-8b-2512",
 		"ministral-14b-2512",
-		"pixtral-large-2411",
-		"pixtral-12b-2409",
 		"mistral-embed",
 	},
 	"deepseek": {
-		"deepseek-chat",
-		"deepseek-reasoner",
+		"deepseek-flash",
 		"deepseek-v4-flash",
 		"deepseek-v4-pro",
 	},
@@ -470,12 +508,15 @@ var availableModels = map[string][]string{
 		"command-a-03-2025",
 	},
 	"zai": {
+		"glm-5.3",
+		"glm-5.3-flash",
 		"glm-5.2",
 		"glm-4.7",
 		"glm-4.6",
 	},
 	"minimax": {
 		"MiniMax-M3",
+		"MiniMax-M3.1-Flash",
 		"MiniMax-M2.5",
 	},
 	"moonshot": {
@@ -484,6 +525,8 @@ var availableModels = map[string][]string{
 		"moonshot-v1-128k",
 	},
 	"dashscope": {
+		"qwen3.8-max",
+		"qwen3.8-flash",
 		"qwen3.6-plus",
 		"qwen3.6-flash",
 		"qwen3-max",
@@ -495,7 +538,7 @@ var availableModels = map[string][]string{
 	},
 	// Regional aliases share the same model catalog as their primary brand.
 	"dashscope-cn": {
-		"qwen3.6-plus", "qwen3.6-flash", "qwen3-max",
+		"qwen3.8-max", "qwen3.8-flash", "qwen3.6-plus", "qwen3.6-flash", "qwen3-max",
 		"qwen3.5-omni-plus", "qwen3.5-omni-flash", "qwen3.5-omni-light",
 		"text-embedding-v3", "text-embedding-v2",
 	},
@@ -521,22 +564,26 @@ var availableModels = map[string][]string{
 
 var modelAliases = map[string]string{
 	// Anthropic aliases
-	"opus":   "claude-opus-5",
-	"sonnet": "claude-sonnet-5",
+	"opus":   "claude-opus-5-5",
+	"sonnet": "claude-sonnet-5-5",
 	"fable":  "claude-fable-5",
-	"haiku":  "claude-haiku-4-5",
-	"claude": "claude-sonnet-5",
+	"haiku":  "claude-haiku-5-5",
+	"claude": "claude-sonnet-5-5",
 
 	// xAI/Grok aliases
-	"grok":               "grok-4.5",
+	"grok":               "grok-4.7",
+	"grok4.7":            "grok-4.7",
+	"grok-4-7":           "grok-4.7",
+	"grok4.6":            "grok-4.6",
+	"grok-4-6":           "grok-4.6",
 	"grok4.5":            "grok-4.5",
 	"grok-4-5":           "grok-4.5",
 	"grok4.3":            "grok-4.3",
 	"grok-4-3":           "grok-4.3",
 	"grok4.2":            "grok-4.20-0309-reasoning",
 	"grok4.20":           "grok-4.20-0309-reasoning",
-	"grok4":              "grok-4.5",
-	"grok-4":             "grok-4.5",
+	"grok4":              "grok-4.7",
+	"grok-4":             "grok-4.7",
 	"grok4.1":            "grok-4-1-fast-non-reasoning",
 	"grok-4-1":           "grok-4-1-fast-non-reasoning",
 	"grok-reasoning":     "grok-4-fast-reasoning",
@@ -547,7 +594,7 @@ var modelAliases = map[string]string{
 	"grok-build":         "grok-build-0.1",
 
 	// Groq aliases
-	"groq":          "llama-3.3-70b-versatile",
+	"groq":          "openai/gpt-oss-120b",
 	"llama":         "llama-3.3-70b-versatile",
 	"llama-70b":     "llama-3.3-70b-versatile",
 	"llama-8b":      "llama-3.1-8b-instant",
@@ -569,8 +616,8 @@ var modelAliases = map[string]string{
 	"pixtral-large":  "pixtral-large-2411",
 
 	// DeepSeek aliases
-	"deepseek-cloud":    "deepseek-chat",
-	"deepseek-v4":       "deepseek-chat",
+	"deepseek-cloud":    "deepseek-flash",
+	"deepseek-v4":       "deepseek-flash",
 	"deepseek-reasoner": "deepseek-reasoner",
 
 	// Cohere aliases
@@ -578,7 +625,9 @@ var modelAliases = map[string]string{
 	"command-a": "command-a-03-2025",
 
 	// Z.ai / GLM aliases
-	"glm":     "glm-5.2",
+	"glm":     "glm-5.3",
+	"glm5.3":  "glm-5.3",
+	"glm-5-3": "glm-5.3",
 	"glm5.2":  "glm-5.2",
 	"glm-5-2": "glm-5.2",
 	"glm4.7":  "glm-4.7",
@@ -609,7 +658,13 @@ var modelAliases = map[string]string{
 	"gemma3":        "gemma3:12b",
 
 	// OpenAI aliases
-	"gpt":          "gpt-5.6-sol",
+	"gpt":          "gpt-6.1-sol",
+	"gpt6":         "gpt-6-sol",
+	"gpt-6":        "gpt-6-sol",
+	"gpt6.1":       "gpt-6.1-sol",
+	"gpt-6.1":      "gpt-6.1-sol",
+	"gpt6-luna":    "gpt-6-luna",
+	"gpt6-astra":   "gpt-6-astra",
 	"gpt5.6":       "gpt-5.6-sol",
 	"gpt-5.6":      "gpt-5.6-sol",
 	"gpt5.6-sol":   "gpt-5.6-sol",

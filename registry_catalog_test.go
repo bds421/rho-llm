@@ -13,12 +13,12 @@ func TestCatalogDefaultsAndDiscoveryForPhaseCProviders(t *testing.T) {
 		sample   string
 		caps     []llm.Capability
 	}{
-		{"mistral", "mistral-small-2603", "pixtral-large-2411", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
-		{"zai", "glm-5.2", "glm-4.7", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
+		{"mistral", "mistral-small-2603", "ministral-14b-2512", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
+		{"zai", "glm-5.3", "glm-4.7", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
 		{"minimax", "MiniMax-M3", "MiniMax-M2.5", []llm.Capability{llm.CapabilityChat}},
 		{"moonshot", "kimi-k2.7-code", "kimi-k2.5", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
 		{"dashscope", "qwen3.6-plus", "qwen3.6-flash", []llm.Capability{llm.CapabilityChat}},
-		{"deepseek", "deepseek-chat", "deepseek-reasoner", []llm.Capability{llm.CapabilityChat}},
+		{"deepseek", "deepseek-flash", "deepseek-v4-pro", []llm.Capability{llm.CapabilityChat}},
 		{"meta", "muse-spark-1.2", "muse-spark-1.1", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision, llm.CapabilityDocumentInput}},
 	}
 	for _, tc := range cases {

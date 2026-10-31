@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-31
+
+Registry and endpoint refresh against every provider's primary docs (2026-10-31),
+plus a live unauthenticated probe of each preset endpoint and of the hosted model
+IDs where the host checks the model before auth (Fireworks, NVIDIA).
+
+> **Behaviour changes for callers who rely on defaults or aliases.** The provider
+> defaults and the `opus`/`sonnet`/`haiku`/`claude`/`gpt`/`grok`/`glm`/`groq`
+> aliases now resolve to newer models (see Changed). Pin an explicit `Model` to
+> keep the old one. IDs whose provider shut them down now fail with a
+> `retired by its provider; use "…"` error instead of a provider 404.
+
+### Fixed
+
+- **Anthropic thinking on Claude 4.7+ (Opus 4.7, 4.8, 5, 5.5; Fable 5, 5.1;
+  Sonnet 5, 5.5; Haiku 5.5).** Only `claude-sonnet-5` was sent adaptive
+  thinking; every other 4.7+ model got `thinking.type: "enabled"` with
+  `budget_tokens`, which Anthropic rejects with a 400 ("Claude 4.7 and later
+  models do not support it"). Any non-zero `ThinkingLevel` on those models
+  failed. They now send `{type: "adaptive"}` + `output_config.effort`, and
+  `ThinkingNone` is encoded the way each model accepts it: `disabled` (Opus
+  4.7/4.8/5, Sonnet 5, Haiku 5.5), `between_tools` (Sonnet 5.5, which rejects
+  `disabled`), or omitted (Fable 5/5.1, Opus 5.5 — thinking is always on and an
+  explicit off is a 400). `ThinkingBudget` on these models returns an error
+  before the request is sent.
+- **Sampling temperature on Claude 4.7+.** These models reject
+  `temperature`/`top_p`/`top_k` (Sonnet 5.5 and Haiku 5.5 reject non-default
+  values), but only Sonnet 5 dropped `CapabilityTemperature`; an explicit
+  `Temperature` now fails capability validation for all of them.
+- **Forced `tool_choice` on Fable 5.1, Opus 5.5 and Sonnet 5.5.** `ToolChoiceRequired`
+  / `ToolChoiceTool` return an error naming the model instead of a provider 400.
+- **Z.ai preset endpoint.** `zai`/`z-ai`/`glm` pointed at
+  `https://api.z.ai/api/openai/v1`, which does not exist (it answers HTTP 200
+  with `{"code":500,"msg":"404 NOT_FOUND"}`). Now the documented
+  `https://api.z.ai/api/paas/v4`.
+
+### Added
+
+- **Anthropic:** `claude-opus-5-5` ($4/$20, cache read $0.20), `claude-sonnet-5-5`
+  ($2/$10, cache read $0.10), `claude-haiku-5-5` ($0.10/$0.50; prompts over 100K
+  tokens cost 5×, not modeled).
+- **OpenAI:** GPT-6 family — `gpt-6.1-sol` ($2/$10), `gpt-6.1-terra` ($1/$5),
+  `gpt-6-sol`, `gpt-6-luna` ($0.10/$0.50), `gpt-6-astra` ($10/$50); all Responses
+  API (tool calling requires it), 922K input / 128K output.
+- **xAI:** `grok-4.7`, `grok-4.6` ($2/$6, cache read $0.50, 500K context).
+- **Gemini:** `gemini-4-argon` ($2/$10 introductory through 2026-11-30, then
+  $4/$20); `gemini-3-pro-image` (stable ID of Nano Banana Pro).
+- **DeepSeek:** `deepseek-flash` (V4.1 Flash, 1M context, 384K output).
+- **Z.ai:** `glm-5.3`, `glm-5.3-flash`. **MiniMax:** `MiniMax-M3.1-Flash`.
+  **DashScope:** `qwen3.8-max`, `qwen3.8-flash`. **NVIDIA:**
+  `nvidia/nemotron-3-ultra-550b-a55b`.
+- **Fireworks:** live IDs `accounts/fireworks/models/{kimi-k3,glm-5p3,glm-5p3-flash,minimax-m3,deepseek-v4p1-flash,qwen3p8-max}`.
+  **Together:** `moonshotai/Kimi-K3`, `zai-org/GLM-5.3`, `zai-org/GLM-5.3-Flash`,
+  `deepseek-ai/DeepSeek-V4.1-Flash`, `Qwen/Qwen3.8-Flash`.
+- Aliases `gpt6`/`gpt-6`, `gpt6.1`/`gpt-6.1`, `gpt6-luna`, `gpt6-astra`,
+  `grok4.7`/`grok-4-7`, `grok4.6`/`grok-4-6`, `glm5.3`/`glm-5-3`.
+
+### Changed
+
+- **Defaults:** anthropic/claude → `claude-sonnet-5-5`; openai/gpt →
+  `gpt-6.1-sol`; xai/grok → `grok-4.7`; deepseek → `deepseek-flash` (the legacy
+  `deepseek-chat`/`deepseek-reasoner` names were discontinued 2026-07-24); zai →
+  `glm-5.3`; groq → `openai/gpt-oss-120b` (Llama 3.3/3.1 left Groq's free and
+  developer tiers on 2026-08-16; the rows stay for enterprise contracts).
+- **Aliases:** `opus` → `claude-opus-5-5`, `sonnet`/`claude` → `claude-sonnet-5-5`,
+  `haiku` → `claude-haiku-5-5`, `grok`/`grok4`/`grok-4` → `grok-4.7`, `glm` →
+  `glm-5.3`, `groq` → `openai/gpt-oss-120b`, `deepseek-cloud`/`deepseek-v4` →
+  `deepseek-flash`. Aliases that name a retired model (`pixtral`, `magistral`,
+  `devstral`, `llama4`, `gpt5.3`, `gpt-instant`, `deepseek-reasoner`) now produce
+  the retired-model error with its replacement.
+- **Prices:** `gpt-5.6-sol` $5/$30 → $4/$20 (promotional "at least through
+  November 21, 2026"); `gemini-3.6-flash` $1.50/$7.50 → $0.75/$3.75 (through
+  2026-12-31); `gemini-embedding-2` $0.15 → $0.20; `MiniMax-M3` $0.60/$2.40 →
+  $0.30/$1.20 (the ≤512K tier); `qwen3.6-plus` $0.29/$1.74 → $0.50/$3.00 and
+  `qwen3.6-flash` $0.05/$0.40 → $0.25/$1.50 (≤256K tier); `deepseek-v4-pro`
+  → $1.32/$3.96 with 1M context / 384K output; `deepseek-v4-flash` (legacy name,
+  routed to V4.1 Flash) → V4.1 Flash rates. Cache-read prices added for
+  `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`,
+  `gemini-2.5-pro`/`-flash`/`-flash-lite`.
+- **Capabilities:** `claude-sonnet-4-6` max output 64K → 128K;
+  `command-a-03-2025` max output 4K → 8K and no longer flagged as reasoning
+  (Cohere's reasoning model is `command-a-reasoning-08-2025`).
+
+### Security
+
+- **Go 1.26.10 minimum (`go.mod`).** govulncheck reports ten standard-library
+  vulnerabilities reachable from this module on Go 1.26.8 — `net/http`
+  (GO-2026-6603, -6605, -6610, -6611, -6612, -6613, -6617), `net/textproto`
+  (GO-2026-6608) and `crypto/tls` (GO-2026-6607), fixed in 1.26.9, and
+  `crypto/x509` (GO-2026-6809), fixed in 1.26.10. Consumers building with an
+  older toolchain get it via `GOTOOLCHAIN=auto`.
+
+### Removed (retired by the provider → `retiredModels`)
+
+- **OpenAI** (shutdown passed): `gpt-5.3-chat-latest`, `gpt-5.2-chat-latest`,
+  `gpt-5.1-chat-latest`, `gpt-5-chat-latest`, `gpt-5-codex`, `gpt-4.1-nano`,
+  `o4-mini`, `o3-mini`, `gpt-image-1`.
+- **Mistral:** `mistral-small-2506`, `magistral-small-2509`,
+  `magistral-medium-2509`, `devstral-2512`, `devstral-small-2-2512`,
+  `pixtral-large-2411`, `pixtral-12b-2409`.
+- **DeepSeek:** `deepseek-chat`, `deepseek-reasoner`.
+- **Groq:** `deepseek-r1-distill-llama-70b`, `deepseek-r1-distill-qwen-32b`,
+  `meta-llama/llama-4-scout-17b-16e-instruct`.
+- **Fireworks:** all seven `accounts/fireworks/models/fireworks/*` IDs (the API
+  answers 404 "Model not found").
+- **Together:** `deepseek-ai/DeepSeek-V3`, `meta-llama/Llama-3.3-70B-Instruct-Turbo`.
+- **NVIDIA:** `meta/llama-3.1-8b-instruct` (410 "end of life on 2026-08-26").
+
 ## [0.9.5] - 2026-10-08
 
 Reliability patch from the 2026-10-07 architecture review (ids H*/M*/L refer to

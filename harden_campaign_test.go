@@ -25,7 +25,7 @@ import (
 // Request{Model: alias} override bypassed that and shipped the alias verbatim.
 func TestPerRequestAliasResolvesToCanonicalWireModel(t *testing.T) {
 	cases := []struct{ provider, reqModel, wantWire string }{
-		{"zai", "glm", "glm-5.2"},
+		{"zai", "glm", "glm-5.3"},
 		{"minimax", "minimax-m3", "MiniMax-M3"}, // lowercase variant of the mixed-case key
 		{"moonshot", "kimi", "kimi-k2.7-code"},
 	}

@@ -54,7 +54,7 @@ func TestModalityClientRejectsUnencodableRequestBeforeNetwork(t *testing.T) {
 	}))
 	defer server.Close()
 	cfg := cfgFor(server.URL)
-	cfg.Model = "gpt-image-1"
+	cfg.Model = "gpt-image-2"
 	client, err := llm.NewModalityClient(cfg)
 	if err != nil {
 		t.Fatal(err)

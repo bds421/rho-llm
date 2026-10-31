@@ -42,7 +42,7 @@ func newBatchClient(t *testing.T, baseURL string) llm.BatchClient {
 	cfg.Provider = "openai"
 	cfg.APIKey = "test-key"
 	cfg.BaseURL = baseURL
-	cfg.Model = "gpt-5.3-chat-latest"
+	cfg.Model = "gpt-4.1-mini"
 	cfg.DisableRetries = true
 	bc, err := llm.NewBatchClient(cfg)
 	if err != nil {
@@ -54,7 +54,7 @@ func newBatchClient(t *testing.T, baseURL string) llm.BatchClient {
 
 func chatItem(id string) llm.BatchItem {
 	return llm.BatchItem{ItemID: id, Request: &llm.Request{
-		Model:     "gpt-5.3-chat-latest",
+		Model:     "gpt-4.1-mini",
 		Messages:  []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "hi " + id}}}},
 		MaxTokens: 64,
 	}}
@@ -66,7 +66,7 @@ func embItem(id string) llm.BatchItem {
 
 func chatBody(content string, in, out int) map[string]any {
 	return map[string]any{
-		"id": "resp", "model": "gpt-5.3-chat-latest",
+		"id": "resp", "model": "gpt-4.1-mini",
 		"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": content}, "finish_reason": "stop"}},
 		"usage":   map[string]any{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out},
 	}
@@ -500,7 +500,7 @@ func TestBatchChatLineBodyMatchesLivePost(t *testing.T) {
 	cfg.Provider = "openai"
 	cfg.APIKey = "k"
 	cfg.BaseURL = srv.URL
-	cfg.Model = "gpt-5.3-chat-latest"
+	cfg.Model = "gpt-4.1-mini"
 
 	client, err := llm.NewClient(cfg)
 	if err != nil {
@@ -509,7 +509,7 @@ func TestBatchChatLineBodyMatchesLivePost(t *testing.T) {
 	defer client.Close()
 
 	req := llm.Request{
-		Model:     "gpt-5.3-chat-latest",
+		Model:     "gpt-4.1-mini",
 		System:    "be terse",
 		Messages:  []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "hi <there> & you"}}}},
 		MaxTokens: 100,
@@ -534,7 +534,7 @@ func TestBatchChatLineBodyMatchesLivePost(t *testing.T) {
 // ---- Cost: batch is exactly half ------------------------------------------
 
 func TestEstimateCostBatchIsHalf(t *testing.T) {
-	in := llm.CostInput{Model: "gpt-5.3-chat-latest", InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	in := llm.CostInput{Model: "gpt-4.1-mini", InputTokens: 1_000_000, OutputTokens: 1_000_000}
 	full := llm.EstimateCost(in)
 	in.Batch = true
 	half := llm.EstimateCost(in)

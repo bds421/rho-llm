@@ -29,7 +29,7 @@ type newProvider struct {
 }
 
 var newProviders = []newProvider{
-	{provider: "zai", alias: "glm", model: "glm-5.2", key: "sk-zai-secret-key"},
+	{provider: "zai", alias: "glm", model: "glm-5.3", key: "sk-zai-secret-key"},
 	{provider: "minimax", alias: "minimax", model: "MiniMax-M3", key: "sk-minimax-secret-key"},
 	{provider: "moonshot", alias: "kimi", model: "kimi-k2.7-code", key: "sk-moonshot-secret-key"},
 }
@@ -124,8 +124,8 @@ func TestNewProviderCostMathCacheAndSentinel(t *testing.T) {
 	// Exact expected cost for 1M input + 1M output + 1M cacheRead (+1M cacheCreate
 	// which MUST contribute nothing because write price is 0).
 	want := map[string]float64{
-		"glm-5.2":        1.40 + 4.40 + 0.26,
-		"MiniMax-M3":     0.60 + 2.40 + 0.12,
+		"glm-5.3":        1.40 + 4.40 + 0.26,
+		"MiniMax-M3":     0.30 + 1.20 + 0.06,
 		"kimi-k2.7-code": 0.95 + 4.00 + 0.16,
 	}
 	for _, p := range newProviders {

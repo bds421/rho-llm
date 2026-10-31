@@ -461,8 +461,8 @@ func TestModalityCreatesNotRetriedOn500(t *testing.T) {
 	_ = llm.RegisterModel(llm.ModelInfo{ID: "gemini-2.5-flash-image", Provider: "gemini",
 		Capabilities: llm.Capabilities(llm.CapabilityImageGeneration)})
 	calls := []call{
-		{"openai images", openai("gpt-image-1"), func(c llm.ModalityClient) error {
-			_, err := c.GenerateImages(context.Background(), llm.ImageRequest{Model: "gpt-image-1", Prompt: "x"})
+		{"openai images", openai("gpt-image-2"), func(c llm.ModalityClient) error {
+			_, err := c.GenerateImages(context.Background(), llm.ImageRequest{Model: "gpt-image-2", Prompt: "x"})
 			return err
 		}, 1},
 		{"openai speech", openai("tts-1"), func(c llm.ModalityClient) error {

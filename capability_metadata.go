@@ -372,8 +372,9 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 }
 
 func supportsSamplingTemperature(info ModelInfo) bool {
-	// Sonnet 5 accepts only provider-default sampling parameters.
-	if info.ID == "claude-sonnet-5" {
+	// Claude 4.7+ reject temperature/top_p/top_k (Sonnet 5.5 and Haiku 5.5
+	// reject non-default values), so no explicit temperature can be honored.
+	if _, denied := anthropicWithoutSamplingControls[info.ID]; denied {
 		return false
 	}
 	// OpenAI/xAI reasoning endpoints reject or ignore custom temperature.
@@ -390,11 +391,28 @@ func supportsSamplingTemperature(info ModelInfo) bool {
 	return !denied
 }
 
+// anthropicWithoutSamplingControls are the Claude IDs whose API rejects
+// sampling parameters (platform.claude.com model docs, 2026-10-31). It must
+// stay in step with the anthropic adapter's adaptiveThinkingModels — the
+// adapter's tests pin that.
+var anthropicWithoutSamplingControls = map[string]struct{}{
+	"claude-fable-5-1":  {},
+	"claude-fable-5":    {},
+	"claude-opus-5-5":   {},
+	"claude-opus-5":     {},
+	"claude-opus-4-8":   {},
+	"claude-opus-4-7":   {},
+	"claude-sonnet-5-5": {},
+	"claude-sonnet-5":   {},
+	"claude-haiku-5-5":  {},
+}
+
 // geminiWithoutSamplingControls are the Gemini IDs whose API rejects or ignores
 // temperature/top_p/top_k. Google removed the controls from the July 2026 GA
 // models onward, so every Gemini model registered after gemini-3.5-flash-lite
 // belongs here unless Google documents otherwise.
 var geminiWithoutSamplingControls = map[string]struct{}{
+	"gemini-4-argon":        {},
 	"gemini-3.5-flash-lite": {},
 	"gemini-3.6-flash":      {},
 	"gemini-3.7-flash":      {},

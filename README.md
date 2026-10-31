@@ -2,7 +2,7 @@
 
 Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), an async **Batch API** (~50% cheaper bulk processing), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports only the Go standard library (the `examples/` use `joho/godotenv`).
 
-**Requires Go 1.26.8+** (the minimum toolchain in `go.mod`, including the standard-library security updates described in the changelog).
+**Requires Go 1.26.10+** (the minimum toolchain in `go.mod`, including the standard-library security updates described in the changelog).
 
 ## Install
 
@@ -31,7 +31,7 @@ go get github.com/bds421/rho-llm
 | NVIDIA NIM | OpenAI-compat | Bearer | integrate.api.nvidia.com/v1 |
 | Perplexity | OpenAI-compat | Bearer | api.perplexity.ai |
 | DeepInfra | OpenAI-compat | Bearer | api.deepinfra.com/v1/openai |
-| Z.ai/GLM | OpenAI-compat | Bearer | api.z.ai/api/openai/v1 |
+| Z.ai/GLM | OpenAI-compat | Bearer | api.z.ai/api/paas/v4 |
 | MiniMax | OpenAI-compat | Bearer | api.minimax.io/v1 |
 | Moonshot/Kimi | OpenAI-compat | Bearer | api.moonshot.ai/v1 |
 | Ollama | OpenAI-compat | None | localhost:11434/v1 |
@@ -302,11 +302,16 @@ req := llm.Request{
 }
 ```
 
-For `claude-sonnet-5`, `ThinkingLevel` selects adaptive thinking effort instead
-of a token budget (`minimal` maps to `low`). A positive `ThinkingBudget` with
-reasoning enabled is rejected because this model removed manual budgets.
-`ThinkingNone` explicitly disables thinking unless a configured thinking level
-is inherited. The model does not advertise custom-temperature support.
+For Claude 4.7 and later (Opus 4.7/4.8/5/5.5, Fable 5/5.1, Sonnet 5/5.5,
+Haiku 5.5), `ThinkingLevel` selects adaptive thinking effort instead of a token
+budget (`minimal` maps to `low`) — Anthropic rejects manual `budget_tokens` on
+these models, so a positive `ThinkingBudget` with reasoning enabled is rejected
+before dispatch. `ThinkingNone` is sent the way each model accepts it: thinking
+`disabled` (Opus 4.7/4.8/5, Sonnet 5, Haiku 5.5), `between_tools` (Sonnet 5.5),
+or omitted on Fable 5/5.1 and Opus 5.5, whose thinking is always on. These
+models do not advertise custom-temperature support, and Fable 5.1, Opus 5.5 and
+Sonnet 5.5 reject a forced `ToolChoice` (`Required`/`Tool`) before dispatch.
+Opus 4.6, Sonnet 4.6 and the 4.5 models keep manual budgets.
 
 **Note:** For Anthropic manual extended thinking, an explicit temperature other
 than `1.0` is rejected before dispatch. An omitted temperature stays omitted;
@@ -762,11 +767,11 @@ defer modalities.Close()
 emb, _ := modalities.GenerateEmbeddings(ctx, llm.EmbeddingRequest{Model: cfg.Model, Input: []string{"hi"}})
 
 // A different exact deployment/client owns image generation.
-imageCfg := cfg; imageCfg.Model = "gpt-image-1"
+imageCfg := cfg; imageCfg.Model = "gpt-image-2"
 imageClient, _ := llm.NewModalityClient(imageCfg)
 defer imageClient.Close()
 img, _ := imageClient.GenerateImages(ctx, llm.ImageRequest{
-    Model: "gpt-image-1", Prompt: "a cat", WidthPixels: 1024, HeightPixels: 1024,
+    Model: "gpt-image-2", Prompt: "a cat", WidthPixels: 1024, HeightPixels: 1024,
     MediaType: "image/png",
 })
 speechCfg := cfg; speechCfg.Model = "tts-1"
@@ -941,9 +946,9 @@ bc, _ := llm.NewBatchClient(cfg)           // gated by ProviderPreset.SupportsBa
 defer bc.Close()
 
 handle, _ := bc.Submit(ctx, []llm.BatchItem{
-    {ItemID: "q1", Request: &llm.Request{Model: "gpt-5.3-chat-latest",
+    {ItemID: "q1", Request: &llm.Request{Model: "gpt-4.1-mini",
         Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "classify: ..."}}}}}},
-    {ItemID: "q2", Request: &llm.Request{Model: "gpt-5.3-chat-latest", /* ... */ }},
+    {ItemID: "q2", Request: &llm.Request{Model: "gpt-4.1-mini", /* ... */ }},
 }, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 
 blob, _ := json.Marshal(handle)            // persist; resume after a restart with llm.LoadBatchHandle(blob)
@@ -1028,7 +1033,7 @@ if err != nil {
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | Provider | string | "anthropic" | Provider name |
-| Model | string | "claude-sonnet-5" | Model identifier |
+| Model | string | "claude-sonnet-5-5" | Model identifier |
 | ModelCapabilities | CapabilitySet | 0 | Exact deployment-scoped reviewed capabilities for Model; overrides global registry metadata |
 | APIKey | string | "" | API key (empty OK for local providers) |
 | MaxTokens | int | 8192 | Max output tokens (zero is floored to the default; see the note below on Gemini thinking models) |
@@ -1070,8 +1075,8 @@ client `Config` field.
 Use `ResolveModelAlias()` for short aliases:
 
 ```go
-model := llm.ResolveModelAlias("opus")   // -> "claude-opus-5"
-model = llm.ResolveModelAlias("grok")    // -> "grok-4.5"
+model := llm.ResolveModelAlias("opus")   // -> "claude-opus-5-5"
+model = llm.ResolveModelAlias("grok")    // -> "grok-4.7"
 model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 ```
 
@@ -1079,17 +1084,20 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `opus` | `claude-opus-5` |
-| `sonnet` | `claude-sonnet-5` |
-| `haiku` | `claude-haiku-4-5` |
-| `claude` | `claude-sonnet-5` |
+| `opus` | `claude-opus-5-5` |
+| `sonnet` | `claude-sonnet-5-5` |
+| `haiku` | `claude-haiku-5-5` |
+| `fable` | `claude-fable-5` |
+| `claude` | `claude-sonnet-5-5` |
 
 ### xAI / Grok aliases
 
 | Alias | Resolves to |
 |-------|-------------|
+| `grok`, `grok4`, `grok-4`, `grok4.7`, `grok-4-7` | `grok-4.7` |
+| `grok4.6`, `grok-4-6` | `grok-4.6` |
+| `grok4.5`, `grok-4-5` | `grok-4.5` |
 | `grok4.3`, `grok-4-3` | `grok-4.3` |
-| `grok`, `grok4`, `grok-4` | `grok-4.5` |
 | `grok4.2`, `grok4.20` | `grok-4.20-0309-reasoning` |
 | `grok4.1`, `grok-4-1` | `grok-4-1-fast-non-reasoning` |
 | `grok-reasoning`, `grok-4-reasoning` | `grok-4-fast-reasoning` |
@@ -1101,11 +1109,14 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
+| `gpt`, `gpt6.1`, `gpt-6.1` | `gpt-6.1-sol` |
+| `gpt6`, `gpt-6` | `gpt-6-sol` |
+| `gpt6-luna` | `gpt-6-luna` |
+| `gpt6-astra` | `gpt-6-astra` |
+| `gpt5`, `gpt5.6`, `gpt-5.6` | `gpt-5.6-sol` |
 | `gpt5.5` | `gpt-5.5` |
 | `gpt5.5-pro` | `gpt-5.5-pro` |
-| `gpt`, `gpt5` | `gpt-5.6-sol` |
 | `gpt5.4` | `gpt-5.4` |
-| `gpt5.3`, `gpt-instant` | `gpt-5.3-chat-latest` |
 | `gpt5.4-mini` | `gpt-5.4-mini` |
 | `gpt5.4-nano` | `gpt-5.4-nano` |
 | `gpt5.2` | `gpt-5.2` |
@@ -1118,11 +1129,9 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `groq` | `llama-3.3-70b-versatile` |
-| `llama`, `llama-70b` | `llama-3.3-70b-versatile` |
-| `llama-8b` | `llama-3.1-8b-instant` |
-| `llama4`, `llama-4-scout` | `meta-llama/llama-4-scout-17b-16e-instruct` |
-| `gpt-oss` | `openai/gpt-oss-120b` |
+| `groq`, `gpt-oss` | `openai/gpt-oss-120b` |
+| `llama`, `llama-70b` | `llama-3.3-70b-versatile` (enterprise tier only since 2026-08-16) |
+| `llama-8b` | `llama-3.1-8b-instant` (enterprise tier only since 2026-08-16) |
 | `gpt-oss-20b` | `openai/gpt-oss-20b` |
 
 ### Mistral aliases
@@ -1132,17 +1141,26 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 | `mistral-large` | `mistral-large-2512` |
 | `mistral-medium` | `mistral-medium-latest` |
 | `mistral-small` | `mistral-small-2603` |
-| `magistral` | `magistral-medium-2509` |
 | `codestral` | `codestral-2508` |
-| `devstral` | `devstral-2512` |
-| `devstral-small` | `devstral-small-2-2512` |
 | `ministral` | `ministral-8b-2512` |
 
 ### DeepSeek aliases
 
 | Alias | Resolves to |
 |-------|-------------|
-| `deepseek-cloud`, `deepseek-v4` | `deepseek-chat` |
+| `deepseek-cloud`, `deepseek-v4` | `deepseek-flash` |
+
+### Z.ai / GLM aliases
+
+| Alias | Resolves to |
+|-------|-------------|
+| `glm`, `glm5.3`, `glm-5-3` | `glm-5.3` |
+| `glm5.2`, `glm-5-2` | `glm-5.2` |
+| `glm4.7`, `glm-4-7` | `glm-4.7` |
+
+Aliases that name a model the provider has retired (`pixtral`, `magistral`,
+`devstral`, `llama4`, `gpt5.3`, `gpt-instant`, `deepseek-reasoner`) are kept so
+they fail with the retired-model error and its replacement (see below).
 
 ### Cohere aliases
 
@@ -1185,7 +1203,8 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
 > that must be echoed in the corresponding `tool_result`. The adapter handles this
 > automatically; no changes to calling code are required.
 
-`gemini-3.6-flash` and `gemini-3.5-flash-lite` deliberately do not advertise
+`gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash` and
+`gemini-3.5-flash-lite` deliberately do not advertise
 the sampling-temperature capability: Google deprecates and ignores
 `temperature`, `top_p`, and `top_k` for these models and states that future
 generations reject them.
@@ -1204,7 +1223,7 @@ fmt.Printf("Context: %d tokens\n", info.ContextWindow)
 provider := llm.ProviderForModel("gemini-2.5-flash") // -> "gemini"
 
 // Get the default model for a provider
-model := llm.GetDefaultModel("xai") // -> "grok-4.5"
+model := llm.GetDefaultModel("xai") // -> "grok-4.7"
 ```
 
 **`MaxTokens` on Gemini thinking models.** Gemini 2.5 models reason internally and

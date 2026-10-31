@@ -74,7 +74,7 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 		}
 
 		// 6. Gemini 3+ chat models expose API-controlled thinkingLevel.
-		if strings.HasPrefix(id, "gemini-3") && !isGeminiModalityOnly {
+		if isGemini3Plus(id) && !isGeminiModalityOnly {
 			if !info.SupportsThinking {
 				t.Errorf("Model %s (Gemini 3+) should have SupportsThinking=true", id)
 			}
@@ -87,13 +87,19 @@ func TestComprehensiveThinkingFlags(t *testing.T) {
 		// Haiku 4.5+ supports extended thinking; only Claude 3 Haiku does not.
 		isLegacyHaiku := strings.Contains(id, "claude-3-haiku")
 		isGeminiWithoutThinking := strings.HasPrefix(id, "gemini-") &&
-			!strings.HasPrefix(id, "gemini-2.5") && !strings.HasPrefix(id, "gemini-3")
+			!strings.HasPrefix(id, "gemini-2.5") && !isGemini3Plus(id)
 		if isGeminiWithoutThinking || isLegacyHaiku || strings.Contains(id, "non-reasoning") {
 			if info.SupportsThinking || info.Thinking {
 				t.Errorf("Model %s should not have any thinking flags set", id)
 			}
 		}
 	}
+}
+
+// isGemini3Plus reports a Gemini 3.x or later model ID (gemini-3*, gemini-4*):
+// the generations with API-controlled thinkingLevel and thought signatures.
+func isGemini3Plus(id string) bool {
+	return strings.HasPrefix(id, "gemini-3") || strings.HasPrefix(id, "gemini-4")
 }
 
 // TestThoughtSignatureFlags ensures ThoughtSignature is set correctly across the registry.
@@ -104,7 +110,7 @@ func TestThoughtSignatureFlags(t *testing.T) {
 			!info.Capabilities.Supports(CapabilityChat) &&
 			(info.Capabilities.Supports(CapabilityEmbeddings) || info.Capabilities.Supports(CapabilityImageGeneration) ||
 				info.Capabilities.Supports(CapabilityTranscription))
-		isGemini3Chat := strings.HasPrefix(id, "gemini-3") && !isGeminiModalityOnly
+		isGemini3Chat := isGemini3Plus(id) && !isGeminiModalityOnly
 		if isGemini3Chat && !info.ThoughtSignature {
 			t.Errorf("Model %s (Gemini 3.x chat) should have ThoughtSignature=true", id)
 		}

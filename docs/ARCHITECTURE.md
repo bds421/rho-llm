@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of October 2026 (v0.9.5).
+> **Status:** Reflects the current implementation as of October 2026 (v0.10.0).
 
 ---
 
@@ -599,13 +599,21 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 
 | Provider | Models |
 |---|---|
-| Anthropic | claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 |
-| xAI | grok-4.3, grok-4.20-beta, grok-4-1-fast-{reasoning,non-reasoning}, grok-4-fast-{reasoning,non-reasoning}, grok-code-fast-1, grok-3, grok-3-mini |
-| Gemini | gemini-3.6-flash, gemini-3.5-{flash,flash-lite}, gemini-3.1-flash-lite, gemini-3.1-pro-preview, gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite} |
+| Anthropic | claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5, claude-fable-5, claude-opus-5, claude-sonnet-5, claude-opus-4-{8,7,6,5}, claude-sonnet-4-{6,5}, claude-haiku-4-5 |
+| OpenAI | gpt-6.1-{sol,terra}, gpt-6-{astra,sol,luna}, gpt-5.6-{sol,terra,luna}, gpt-5.5(-pro), gpt-5.4(-pro,-mini,-nano), gpt-5.3-codex, gpt-5.2(-pro), gpt-5.1, gpt-5(-pro,-mini,-nano), gpt-4.1(-mini), o3, o3-pro |
+| xAI | grok-4.7, grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-{reasoning,non-reasoning}, grok-4.20-multi-agent-0309, grok-build-0.1, legacy grok-4.20-beta*/grok-4-1-fast-*/grok-4-fast-*/grok-4-0709/grok-code-fast-1/grok-3(-mini) |
+| Gemini | gemini-4-argon, gemini-3.8-flash, gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-{flash,flash-lite}, gemini-3.1-flash-lite, gemini-3.1-pro-preview, gemini-3-{pro,flash}-preview, gemini-2.5-{pro,flash,flash-lite}, gemini-2.0-flash |
+
+The full list (19 providers with curated rows, including Groq, Mistral, DeepSeek,
+Cohere, Z.ai, MiniMax, Moonshot, DashScope, Meta, Perplexity, Fireworks, Together,
+DeepInfra, NVIDIA and Ollama) lives in `registry.go`; `Models()` /
+`GetAvailableModels(provider)` enumerate it. IDs a provider has shut down move to
+`retiredModels`, so a request naming one fails with the replacement instead of a
+provider 404.
 
 `EstimateCost(CostInput{...})` returns a USD float from registry pricing. Accepts all token types including `ThinkingTokens`, `CacheCreateTokens`, and `CacheReadTokens` for accurate cache-aware pricing. Returns `0` if the model is unknown. Negative token counts (e.g. `TokensNotReported = -1`) are clamped to 0. **Cache-token contract (v0.9.4):** `InputTokens`, `CacheReadTokens` and `CacheCreateTokens` are disjoint — `InputTokens` is the uncached input only and the full prompt is their sum — so each token is priced exactly once (uncached × `InputPricePer1M` + cache reads × `CacheReadPricePer1M` + cache writes × `CacheWritePricePer1M`). Every adapter reports `Response`/`EventDone` usage in that shape (see Context Caching below). A model with no registered cache-read price bills cache reads at `InputPricePer1M` (never free). The result is always finite, `>= 0` and monotonic in every input (v0.9.3): counts are converted to `float64` before any arithmetic (no int sum can wrap), a negative/NaN/±Inf registered price counts as 0, and an overflowing total saturates at `math.MaxFloat64`. `Usage` and `ReportModalityUsage` running totals saturate the same way (`math.MaxInt` tokens, `math.MaxFloat64` seconds/cost).
 
-**Runtime extension (v0.4.0):** built-in metadata is curated for 15 providers, but `RegisterModel(ModelInfo)` and `RegisterModelAlias(alias, modelID)` add or override entries at runtime — so unlisted/newly released models get cost estimation, capability flags, and discovery (and stale built-in pricing can be corrected) without a library release. The registry maps were "immutable after init"; they are now guarded by an `RWMutex` taken by every reader (`GetModelInfo`, `EstimateCost`, `ResolveModelAlias`, `Models`, …), so runtime registration is safe for concurrent use.
+**Runtime extension (v0.4.0):** built-in metadata is curated for 19 providers, but `RegisterModel(ModelInfo)` and `RegisterModelAlias(alias, modelID)` add or override entries at runtime — so unlisted/newly released models get cost estimation, capability flags, and discovery (and stale built-in pricing can be corrected) without a library release. The registry maps were "immutable after init"; they are now guarded by an `RWMutex` taken by every reader (`GetModelInfo`, `EstimateCost`, `ResolveModelAlias`, `Models`, …), so runtime registration is safe for concurrent use.
 
 ---
 
@@ -655,9 +663,15 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Auth: `x-api-key: <key>` + `anthropic-version: 2023-06-01`
 - Streaming: SSE with `event: content_block_delta` / `event: message_delta`
 - Manual extended thinking uses `thinking: {type: enabled, budget_tokens: N}`,
-  with a budget mapped from `ThinkingLevel`. Sonnet 5 instead uses adaptive
-  thinking with `output_config.effort`; explicit manual budgets are rejected.
-  On Sonnet 5, the effective `ThinkingNone` explicitly disables thinking.
+  with a budget mapped from `ThinkingLevel` — only for Opus 4.6, Sonnet 4.6 and
+  the 4.5 models. Claude 4.7 and later reject `budget_tokens` with a 400, so the
+  adapter's `adaptiveThinkingModels` table sends them `{type: adaptive}` +
+  `output_config.effort` and rejects an explicit `ThinkingBudget`. The effective
+  `ThinkingNone` is encoded per model: `disabled` (Opus 4.7/4.8/5, Sonnet 5,
+  Haiku 5.5), `between_tools` (Sonnet 5.5), or omitted (Fable 5/5.1, Opus 5.5 —
+  thinking always on). Fable 5.1, Opus 5.5 and Sonnet 5.5 reject forced
+  `tool_choice`, which the adapter refuses before dispatch. All of these models
+  lack `CapabilityTemperature` (`anthropicWithoutSamplingControls`).
 - Tool use: native anthropic format with `type: tool_use` content blocks
 - Context caching: `cache_control: {type: "ephemeral"}` on content blocks, system blocks, and tool definitions. Cache tokens reported in `usage` for both Complete and Stream responses.
 

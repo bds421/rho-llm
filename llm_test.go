@@ -145,11 +145,11 @@ func TestFactoryDefaultModels(t *testing.T) {
 		provider string
 		expected string
 	}{
-		{"anthropic", "claude-sonnet-5"},
-		{"claude", "claude-sonnet-5"},
-		{"xai", "grok-4.5"},
-		{"grok", "grok-4.5"},
-		{"openai", "gpt-5.6-sol"},
+		{"anthropic", "claude-sonnet-5-5"},
+		{"claude", "claude-sonnet-5-5"},
+		{"xai", "grok-4.7"},
+		{"grok", "grok-4.7"},
+		{"openai", "gpt-6.1-sol"},
 		{"meta", "muse-spark-1.2"},
 		{"gemini", "gemini-3.5-flash-lite"},
 		{"google", "gemini-3.5-flash-lite"},
@@ -311,11 +311,13 @@ func TestResolveModelAlias(t *testing.T) {
 		alias    string
 		expected string
 	}{
-		{"opus", "claude-opus-5"},
-		{"sonnet", "claude-sonnet-5"},
+		{"opus", "claude-opus-5-5"},
+		{"sonnet", "claude-sonnet-5-5"},
 		{"fable", "claude-fable-5"},
-		{"haiku", "claude-haiku-4-5"},
-		{"grok", "grok-4.5"},
+		{"haiku", "claude-haiku-5-5"},
+		{"grok", "grok-4.7"},
+		{"gpt6.1", "gpt-6.1-sol"},
+		{"grok4.7", "grok-4.7"},
 		{"grok4.5", "grok-4.5"},
 		{"grok4.3", "grok-4.3"},
 		{"gpt5.6", "gpt-5.6-sol"},
@@ -4739,15 +4741,13 @@ func TestReasoningModelMaxTokensWireFormat(t *testing.T) {
 		wantMaxCompletionToken bool // expect max_completion_tokens in wire request
 	}{
 		// OpenAI reasoning models → max_completion_tokens (gpt-5 family uses Responses API, tested separately)
-		{"openai", "o3-mini", false, true},
+		{"openai", "o3", false, true},
 		// xAI reasoning models → max_completion_tokens
 		{"xai", "grok-3-mini", false, true},
 		// Mistral reasoning models → max_tokens
 		{"mistral", "mistral-small-2603", true, false},
-		{"mistral", "magistral-medium-2509", true, false},
-		{"mistral", "magistral-small-2509", true, false},
-		// Groq reasoning models → max_tokens
-		{"groq", "deepseek-r1-distill-llama-70b", true, false},
+		// Other openai_compat reasoning hosts → max_tokens
+		{"dashscope", "qwen3.6-plus", true, false},
 		// Ollama reasoning models → max_tokens
 		{"ollama", "qwen3:8b", true, false},
 		// Non-reasoning models → max_tokens

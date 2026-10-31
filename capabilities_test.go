@@ -37,7 +37,7 @@ func generateImages(
 	ctx context.Context, cfg llm.Config, req llm.ImageRequest,
 ) (*llm.ImageResponse, error) {
 	if req.Model == "" {
-		req.Model = "gpt-image-1"
+		req.Model = "gpt-image-2"
 	}
 	cfg.Model = req.Model
 	client, err := llm.NewModalityClient(cfg)
@@ -144,7 +144,7 @@ func TestGenerateImages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := generateImages(context.Background(), cfgFor(srv.URL), llm.ImageRequest{Model: "gpt-image-1", Prompt: "a cat", WidthPixels: 1024, HeightPixels: 1024, MediaType: "image/png"})
+	res, err := generateImages(context.Background(), cfgFor(srv.URL), llm.ImageRequest{Model: "gpt-image-2", Prompt: "a cat", WidthPixels: 1024, HeightPixels: 1024, MediaType: "image/png"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,12 +162,12 @@ func TestGenerateImages(t *testing.T) {
 		t.Error("empty prompt should error")
 	}
 	if _, err := generateImages(context.Background(), cfgFor(srv.URL), llm.ImageRequest{
-		Model: "gpt-image-1", Prompt: "a cat", WidthPixels: 100, MediaType: "image/png",
+		Model: "gpt-image-2", Prompt: "a cat", WidthPixels: 100, MediaType: "image/png",
 	}); err == nil {
 		t.Error("partial geometry should error")
 	}
 	if _, err := generateImages(context.Background(), cfgFor(srv.URL), llm.ImageRequest{
-		Model: "gpt-image-1", Prompt: "a cat", WidthPixels: 100, HeightPixels: 100,
+		Model: "gpt-image-2", Prompt: "a cat", WidthPixels: 100, HeightPixels: 100,
 		MediaType: "image/tiff",
 	}); err == nil {
 		t.Error("adapter-unsupported media type should error")
@@ -220,7 +220,7 @@ func TestGenerateImagesVerifiesPayloadSignaturesAndLeavesURLUnlabeled(t *testing
 			}))
 			defer server.Close()
 			response, err := generateImages(context.Background(), cfgFor(server.URL), llm.ImageRequest{
-				Model: "gpt-image-1", Prompt: "verified", MediaType: test.mediaType,
+				Model: "gpt-image-2", Prompt: "verified", MediaType: test.mediaType,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -238,7 +238,7 @@ func TestGenerateImagesVerifiesPayloadSignaturesAndLeavesURLUnlabeled(t *testing
 		}))
 		defer server.Close()
 		if _, err := generateImages(context.Background(), cfgFor(server.URL), llm.ImageRequest{
-			Model: "gpt-image-1", Prompt: "mismatch", MediaType: "image/png",
+			Model: "gpt-image-2", Prompt: "mismatch", MediaType: "image/png",
 		}); err == nil {
 			t.Fatal("JPEG payload was labeled as requested PNG")
 		}
@@ -250,7 +250,7 @@ func TestGenerateImagesVerifiesPayloadSignaturesAndLeavesURLUnlabeled(t *testing
 		}))
 		defer server.Close()
 		_, err := generateImages(context.Background(), cfgFor(server.URL), llm.ImageRequest{
-			Model: "gpt-image-1", Prompt: "url", MediaType: "image/png",
+			Model: "gpt-image-2", Prompt: "url", MediaType: "image/png",
 		})
 		if err == nil {
 			t.Fatal("URL-only image was accepted after b64_json was required")
@@ -264,7 +264,7 @@ func TestGenerateImagesVerifiesPayloadSignaturesAndLeavesURLUnlabeled(t *testing
 		}))
 		defer server.Close()
 		_, err := generateImages(context.Background(), cfgFor(server.URL), llm.ImageRequest{
-			Model: "gpt-image-1", Prompt: "two", N: 2, MediaType: "image/png",
+			Model: "gpt-image-2", Prompt: "two", N: 2, MediaType: "image/png",
 		})
 		if err == nil {
 			t.Fatal("provider result count different from requested count was accepted")
@@ -360,7 +360,7 @@ func TestNonChatRequestValidatorsPerformNoNetworkIO(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := llm.ValidateImageRequest(cfg, llm.ImageRequest{
-		Model: "gpt-image-1", Prompt: "probe", MediaType: "image/png",
+		Model: "gpt-image-2", Prompt: "probe", MediaType: "image/png",
 	}); err != nil {
 		t.Fatal(err)
 	}

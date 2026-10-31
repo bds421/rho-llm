@@ -76,10 +76,10 @@ func TestOpenAICompatEmbeddingsForMistralAndDashScope(t *testing.T) {
 func TestOpenAICompatEmbeddingRejectsChatOnlyDeepSeek(t *testing.T) {
 	// DeepSeek has no first-party embeddings model in the registry — fail closed.
 	err := llm.ValidateEmbeddingRequest(llm.Config{
-		Provider: "deepseek", Model: "deepseek-chat",
-	}, llm.EmbeddingRequest{Model: "deepseek-chat", Input: []string{"x"}})
+		Provider: "deepseek", Model: "deepseek-flash",
+	}, llm.EmbeddingRequest{Model: "deepseek-flash", Input: []string{"x"}})
 	if err == nil || !strings.Contains(err.Error(), "embeddings") {
-		t.Fatalf("want embeddings rejected for deepseek-chat, got %v", err)
+		t.Fatalf("want embeddings rejected for deepseek-flash, got %v", err)
 	}
 }
 

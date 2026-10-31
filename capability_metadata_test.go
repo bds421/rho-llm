@@ -238,7 +238,7 @@ func TestReasoningCapabilityMeansEffortIsEnforceable(t *testing.T) {
 		t.Fatalf("Responses reasoning effort rejected: %v", err)
 	}
 	for _, cfg := range []Config{
-		{Provider: "openai", Model: "gpt-5.3-chat-latest"},
+		{Provider: "openai", Model: "gpt-4.1-mini"},
 		{Provider: "ollama", Model: "qwen3:8b"},
 		{Provider: "gemini", Model: "gemini-2.5-flash"},
 	} {

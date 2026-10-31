@@ -339,7 +339,7 @@ func TestNewProvidersHaveRegistryEntries(t *testing.T) {
 		t.Errorf("EstimateCost(sonar-pro, 1M/1M) = %v, want > 0", cost)
 	}
 	// They appear via GetModelInfo too.
-	if _, ok := llm.GetModelInfo("accounts/fireworks/models/fireworks/kimi-k2p6"); !ok {
+	if _, ok := llm.GetModelInfo("accounts/fireworks/models/kimi-k3"); !ok {
 		t.Error("fireworks model not found via GetModelInfo")
 	}
 }

@@ -288,7 +288,7 @@ func TestBatchSubmitPOSTsAreAlwaysSingleDispatch(t *testing.T) {
 	cfg.Provider = "openai"
 	cfg.APIKey = "test-key"
 	cfg.BaseURL = srv.URL
-	cfg.Model = "gpt-5.3-chat-latest"
+	cfg.Model = "gpt-4.1-mini"
 	bc, err := llm.NewBatchClient(cfg) // default retries enabled: Submit must still dispatch once.
 	if err != nil {
 		t.Fatalf("NewBatchClient: %v", err)
