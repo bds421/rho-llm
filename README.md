@@ -59,7 +59,7 @@ import _ "github.com/bds421/rho-llm/provider" // required: register adapters
 // 1. Configure and initialize
 cfg := llm.Config{
     Provider: "gemini",
-    Model:    "flash", // resolves to gemini-2.5-flash
+    Model:    "flash", // resolves to gemini-3.8-flash
     APIKey:   os.Getenv("GEMINI_API_KEY"),
 }
 client, err := llm.NewClient(cfg)
@@ -1077,7 +1077,7 @@ Use `ResolveModelAlias()` for short aliases:
 ```go
 model := llm.ResolveModelAlias("opus")   // -> "claude-opus-5-5"
 model = llm.ResolveModelAlias("grok")    // -> "grok-4.7"
-model = llm.ResolveModelAlias("flash")   // -> "gemini-2.5-flash"
+model = llm.ResolveModelAlias("flash")   // -> "gemini-3.8-flash"
 ```
 
 ### Anthropic aliases
@@ -1194,11 +1194,10 @@ they fail with the retired-model error and its replacement (see below).
 | `gemini3.6` | `gemini-3.6-flash` |
 | `gemini3.5` | `gemini-3.5-flash` |
 | `gemini3.1-lite` | `gemini-3.1-flash-lite` |
-| `flash` | `gemini-2.5-flash` |
-| `gemini-pro`, `gemini3.1`, `gemini3` | `gemini-3.1-pro-preview` |
-| `gemini-3` | `gemini-3-pro-preview` |
+| `flash` | `gemini-3.8-flash` |
+| `gemini-pro`, `gemini3.1`, `gemini3`, `gemini-3` | `gemini-3.1-pro-preview` |
 
-> **Gemini 3 note:** `gemini-3-pro-preview` and `gemini-3-flash-preview` use
+> **Gemini 3 note:** `gemini-3.1-pro-preview` and `gemini-3-flash-preview` use
 > `ThoughtSignature` — the model returns an opaque signature in tool call responses
 > that must be echoed in the corresponding `tool_result`. The adapter handles this
 > automatically; no changes to calling code are required.
@@ -1220,7 +1219,7 @@ info, ok := llm.GetModelInfo("grok-4.20-beta")
 fmt.Printf("Context: %d tokens\n", info.ContextWindow)
 
 // Detect provider from model ID
-provider := llm.ProviderForModel("gemini-2.5-flash") // -> "gemini"
+provider := llm.ProviderForModel("gemini-3.8-flash") // -> "gemini"
 
 // Get the default model for a provider
 model := llm.GetDefaultModel("xai") // -> "grok-4.7"

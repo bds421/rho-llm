@@ -470,9 +470,11 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	}
 
 	// Gemini 2.5 models think by default but do NOT support thinkingConfig —
-	// the API rejects it. Thinking tokens silently consume maxOutputTokens.
-	// Pad maxOutputTokens so the caller's intended output budget isn't starved.
-	if hasInfo && info.Thinking {
+	// the API rejects it. Gemini 3+ models (SupportsThinking) also think by
+	// default, even without a ThinkingLevel. Either way thinking tokens
+	// silently consume maxOutputTokens, so pad it so the caller's intended
+	// output budget isn't starved.
+	if hasInfo && (info.Thinking || info.SupportsThinking) {
 		cur := apiReq.GenerationConfig.MaxOutputTokens
 		if cur > 0 {
 			padded := cur + llm.ThinkingBudgetTokens(llm.ThinkingLow, 0)

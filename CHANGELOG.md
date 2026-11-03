@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-03
+
+Gemini registry follow-ups from the 2026-10-31 refresh, checked against
+`GET /v1beta/models` with a key and aistudio.google.com/docs (2026-11-03).
+
+> **Alias change.** `flash` now resolves to `gemini-3.8-flash` (was
+> `gemini-2.5-flash`, which Google shuts down 2026-12-01). `gemini-3.8-flash`
+> rejects `temperature`/`top_p`/`top_k`; pin `Model: "gemini-2.5-flash"` until
+> the shutdown if you need sampling controls.
+
+### Fixed
+
+- **Gemini 3+ replies cut off by their own thinking.** Gemini 3 and later models
+  think by default even without a `ThinkingLevel`, and thinking tokens count
+  against `maxOutputTokens`, but the adapter only padded `maxOutputTokens` for
+  Gemini 2.5. Live on 2026-11-03, `gemini-3.8-flash` with `MaxTokens: 100`
+  spent 93 tokens thinking and returned 3 visible tokens (`stop_reason:
+  max_tokens`). The padding (`MaxTokens` + the `ThinkingLow` budget, capped at
+  the model limit) now applies to every Gemini model with `SupportsThinking`;
+  the same request returns the full answer.
+- **`gemini-4-argon` max output** is 32,768 tokens (`outputTokenLimit`), not
+  65,536.
+- **`gemini-3` alias** pointed at the shut-down `gemini-3-pro-preview`; it now
+  resolves to `gemini-3.1-pro-preview`, like `gemini3`.
+
+### Added
+
+- `gemini-3.1-pro-preview-customtools` (the Gemini 3.1 Pro endpoint tuned to
+  prefer custom tools; same limits and prices as `gemini-3.1-pro-preview`).
+- Image generation: `gemini-3.1-flash-image` (Nano Banana 2),
+  `gemini-3.1-flash-lite-image` (Nano Banana 2 Lite), `gemini-nano-banana-2.1`.
+
+### Removed (retired by the provider → `retiredModels`)
+
+- **Gemini:** `gemini-2.0-flash` (shut down 2026-06-01; use `gemini-3.6-flash`)
+  and `gemini-3-pro-preview` (shut down 2026-03-09; use
+  `gemini-3.1-pro-preview`). Neither appears in `GET /v1beta/models` any more.
+
 ## [0.10.0] - 2026-10-31
 
 Registry and endpoint refresh against every provider's primary docs (2026-10-31),

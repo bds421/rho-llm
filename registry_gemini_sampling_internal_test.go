@@ -16,15 +16,14 @@ import (
 func TestEveryRegisteredGeminiChatModelHasASamplingDecision(t *testing.T) {
 	// Models predating the removal legitimately support sampling controls.
 	legacySupported := map[string]struct{}{
-		"gemini-3.5-flash":       {},
-		"gemini-3.1-pro-preview": {},
-		"gemini-3.1-flash-lite":  {},
-		"gemini-3-pro-preview":   {},
-		"gemini-3-flash-preview": {},
-		"gemini-2.5-pro":         {},
-		"gemini-2.5-flash":       {},
-		"gemini-2.5-flash-lite":  {},
-		"gemini-2.0-flash":       {},
+		"gemini-3.5-flash":                   {},
+		"gemini-3.1-pro-preview":             {},
+		"gemini-3.1-pro-preview-customtools": {},
+		"gemini-3.1-flash-lite":              {},
+		"gemini-3-flash-preview":             {},
+		"gemini-2.5-pro":                     {},
+		"gemini-2.5-flash":                   {},
+		"gemini-2.5-flash-lite":              {},
 	}
 
 	seen := 0

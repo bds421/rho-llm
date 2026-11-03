@@ -9,11 +9,10 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ---
 
-## Current state (2026-10-31)
+## Current state (2026-11-03)
 
-`v0.9.5` is the latest published release (Fable review 2026-10-07 items H1–H5, M1, M3,
-M5–M8 and the low-severity hygiene batch — see `CHANGELOG.md` `[0.9.5]`). The review's
-remaining items are listed below as open work.
+`v0.10.1` is the latest published release (Gemini registry follow-ups and the
+Gemini 3+ `maxOutputTokens` padding fix — see `CHANGELOG.md` `[0.10.1]`).
 
 ---
 
@@ -47,9 +46,23 @@ registry deliberately. Re-check with a key that has o3 access before removing.
 
 ### 🟠 Registry follow-ups from the 2026-10-31 refresh — **S/M**
 Left out of the refresh because the primary source could not confirm them:
-- **Gemini `gemini-2.0-flash` / `gemini-3-pro-preview`:** ai.google.dev lists both as
-  "Shut down", but `TestLiveModelsStillRegistered` records them as live on 2026-09-18.
-  Re-check `GET /v1beta/models` with a key, then retire or keep.
+- **Upcoming shutdowns (checked 2026-11-03):** `claude-sonnet-4-5` retires 2026-11-30
+  (→ `claude-sonnet-5-5`); `gemini-2.5-pro` and `gemini-2.5-flash` shut down 2026-12-01
+  (Google routes them to `gemini-3.8-flash` / `gemini-3.5-flash-lite`). Move them to
+  `retiredModels` on those dates.
+- **Gemini 3.5/3.7 Flash** now auto-route to `gemini-3.8-flash` (deprecated 2026-10-08);
+  their registry prices may no longer match what is billed.
+- **Not registered on purpose (2026-11-03):** `gemini-omni-*` (video generation, only
+  via the Interactions API — generateContent returns 400); `gemma-4-*` on the Gemini
+  API (free tier only, data used for training, thinkingLevel only `high`/`minimal`,
+  which `ThinkingLow`/`Medium` would violate); `gemini-*-latest` (moving targets,
+  so capability metadata cannot be reviewed); Live/TTS/native-audio models (no
+  realtime Gemini adapter yet).
+- **Anthropic API version `2026-10-21`** removes `temperature`/`top_p`/`top_k` on every
+  model. The adapter defaults to `2023-06-01` (`Config.AnthropicVersion` overrides);
+  decide before changing the default.
+- **Image model limits:** docs and `GET /v1beta/models` disagree for the Nano Banana
+  rows (e.g. `gemini-3-pro-image` 65,536 vs 131,072 input); kept the docs values.
 - **Kimi K3 / K3.1 Pro** (platform.kimi.ai pricing tables did not render) — and the K2
   series retires end of December 2026 (`kimi-k2.7-code` is the moonshot default).
 - **Meta `muse-spark-1.3`** (the docs' recommended model; no published price found).
@@ -101,6 +114,30 @@ Review: `health-dashboard/docs/reviews/2026-10-07-fable-rho-llm-review.md`.
 - Expand live smokes to Meta/Mistral/CN hosts when keys are available
 
 ---
+
+## pi parity (survey 2026-11-03, pi-ai 1.5.0)
+
+pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
+`@mariozechner/pi-ai` stopped at 0.73.1). Features pi added since 0.84.0 (2026-08)
+that rho lacks, by value:
+- 🟠 **Cross-model thinking replay — S.** pi drops thinking blocks from a *different
+  model* on a model switch (models started imitating the old reasoning);
+  `NormalizeForProvider` converts cross-provider thinking to text instead.
+- 🟠 **Anthropic message threads — M.** Beta `message-threads-2026-08-12`: only new
+  messages are sent per turn (big token savings in long sessions).
+- 🟡 **`ThinkingMax` — S.** Claude 4.7+ accept effort `max` (Models API); rho stops at
+  `ThinkingXHigh`.
+- 🟡 **1h prompt-cache TTL — S** (only ephemeral `CacheControl` today).
+- 🟡 **Long-context price tiers — S** (see registry follow-ups).
+- 🟡 **Streamed tool-call argument deltas — M** (`input_json_delta` is buffered; tool
+  calls are emitted once complete).
+- 🟡 **Strict tool schemas — M** (`strict: prefer/require`, retry once non-strict).
+- 🟡 **Mid-conversation effort/system/tool changes that keep the cache — L.**
+- 🟡 **xAI on the Responses API with encrypted reasoning replay — M.**
+- 🟢 Malformed tool-JSON surfaced as an error, `durationMs`, provider-reported cost,
+  telemetry spans + User-Agent, raw provider stream-event hook, Anthropic refusal
+  fallback, deferred tool loading, classifier models, subscription OAuth flows,
+  Bedrock/Vertex/Azure Foundry providers, models.dev-generated catalog.
 
 ## Where rho already leads pi — do not regress
 - **PDF / document input** (native Anthropic/Gemini) — pi has no document type

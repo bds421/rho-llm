@@ -803,7 +803,7 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 
 	// 4. No reasoning
 	none := []string{
-		"gemini-2.0-flash",
+		"gpt-4.1",
 	}
 	for _, model := range none {
 		info, ok := llm.GetModelInfo(model)
@@ -4853,7 +4853,7 @@ func TestTemperatureNilOmitted(t *testing.T) {
 	}{
 		{"openai", "gpt-4.1", `"temperature"`},
 		{"anthropic", "claude-sonnet-4-6", `"temperature"`},
-		{"gemini", "gemini-2.0-flash", `"temperature"`},
+		{"gemini", "gemini-3.1-flash-lite", `"temperature"`},
 	}
 
 	for _, tt := range adapters {
@@ -5172,8 +5172,6 @@ func TestLiveModelsStillRegistered(t *testing.T) {
 		"claude-sonnet-4-5",
 		"claude-opus-4-5",
 		"claude-haiku-4-5",
-		"gemini-2.0-flash",
-		"gemini-3-pro-preview",
 	} {
 		if _, ok := llm.GetModelInfo(model); !ok {
 			t.Errorf("GetModelInfo(%q) = not registered, want registered (still live)", model)

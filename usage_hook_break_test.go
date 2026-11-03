@@ -277,8 +277,8 @@ func TestUsageCostZeroWhenPriceUnknown(t *testing.T) {
 	if got := llm.EstimateCost(llm.CostInput{Model: "no-such-model-xyz", InputTokens: 1e6, AudioInputTokens: 1e6, AudioSeconds: 600}); got != 0 {
 		t.Fatalf("unknown model priced at %v", got)
 	}
-	// gemini-2.0-flash has a text price but no verified audio price.
-	if got := llm.EstimateCost(llm.CostInput{Model: "gemini-2.0-flash", InputTokens: 1e6, AudioInputTokens: 1e6}); got != 0 {
+	// gemini-3.1-pro-preview has a text price but no verified audio price.
+	if got := llm.EstimateCost(llm.CostInput{Model: "gemini-3.1-pro-preview", InputTokens: 1e6, AudioInputTokens: 1e6}); got != 0 {
 		t.Fatalf("audio tokens billed at a guessed rate: %v", got)
 	}
 	// Hostile durations never produce negative or NaN cost.

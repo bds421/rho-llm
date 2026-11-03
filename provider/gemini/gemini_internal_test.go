@@ -298,6 +298,28 @@ func TestBuildRequestMaxOutputTokensPaddedForThinkingModel(t *testing.T) {
 	}
 }
 
+// TestBuildRequestMaxOutputTokensPaddedForGemini3 verifies the padding also
+// covers Gemini 3+ models (SupportsThinking, not Thinking). They think by
+// default as well: live on 2026-11-03, gemini-3.8-flash with MaxTokens 100 and
+// no ThinkingLevel spent 93 tokens thinking and returned 3 visible tokens.
+func TestBuildRequestMaxOutputTokensPaddedForGemini3(t *testing.T) {
+	for _, level := range []llm.ThinkingLevel{llm.ThinkingNone, llm.ThinkingLow, llm.ThinkingHigh} {
+		c := &Client{config: llm.Config{Model: "gemini-3.8-flash"}, providerName: "gemini"}
+		apiReq, err := c.buildRequest(llm.Request{
+			MaxTokens:     100,
+			ThinkingLevel: level,
+			Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "Why is the sky blue?")},
+		})
+		if err != nil {
+			t.Fatalf("level %q: buildRequest: %v", level, err)
+		}
+		want := 100 + llm.ThinkingBudgetTokens(llm.ThinkingLow, 0)
+		if got := apiReq.GenerationConfig.MaxOutputTokens; got != want {
+			t.Errorf("level %q: MaxOutputTokens = %d, want %d", level, got, want)
+		}
+	}
+}
+
 // TestBuildRequestThinkingConfigSkippedForNativeThinkingModel verifies that
 // setting ThinkingLevel on a Gemini 2.5 model (Thinking: true) does NOT
 // produce thinkingConfig — the API rejects it.
@@ -335,7 +357,7 @@ func TestBuildRequestThinkingConfigSkippedForNativeThinkingModel(t *testing.T) {
 // models that do NOT think by default keep maxOutputTokens as-is.
 func TestBuildRequestMaxOutputTokensNotPaddedForNonThinkingModel(t *testing.T) {
 	c := &Client{
-		config:       llm.Config{Model: "gemini-2.0-flash"},
+		config:       llm.Config{Model: "tuned-gemini-deployment"}, // unregistered: no thinking metadata
 		providerName: "gemini",
 	}
 
@@ -361,7 +383,7 @@ func TestBuildRequestMaxOutputTokensNotPaddedForNonThinkingModel(t *testing.T) {
 // thinkingConfig is nested inside generationConfig (not top-level).
 func TestBuildRequestThinkingConfigInsideGenerationConfig(t *testing.T) {
 	c := &Client{
-		config:       llm.Config{Model: "gemini-3-pro-preview"},
+		config:       llm.Config{Model: "gemini-3.1-pro-preview"},
 		providerName: "gemini",
 	}
 
@@ -431,7 +453,7 @@ func TestBuildRequestThinkingLevelStringMapping(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Client{
-				config:       llm.Config{Model: "gemini-3-pro-preview"},
+				config:       llm.Config{Model: "gemini-3.1-pro-preview"},
 				providerName: "gemini",
 			}
 			apiReq, err := c.buildRequest(llm.Request{
@@ -470,7 +492,7 @@ func TestBuildRequestThinkingLevelStringMapping(t *testing.T) {
 func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
 	// gemini-3-pro-preview has MaxTokens=65536 — ThinkingXHigh (128000) exceeds it.
 	c := &Client{
-		config:       llm.Config{Model: "gemini-3-pro-preview"},
+		config:       llm.Config{Model: "gemini-3.1-pro-preview"},
 		providerName: "gemini",
 	}
 
@@ -487,9 +509,9 @@ func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
 		t.Fatalf("buildRequest: %v", err)
 	}
 
-	info, ok := llm.GetModelInfo("gemini-3-pro-preview")
+	info, ok := llm.GetModelInfo("gemini-3.1-pro-preview")
 	if !ok {
-		t.Fatal("gemini-3-pro-preview not in registry")
+		t.Fatal("gemini-3.1-pro-preview not in registry")
 	}
 
 	tc := apiReq.GenerationConfig.ThinkingConfig
@@ -506,7 +528,7 @@ func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
 // overrides the level and uses thinkingBudget (not thinkingLevel).
 func TestBuildRequestCustomThinkingBudget(t *testing.T) {
 	c := &Client{
-		config:       llm.Config{Model: "gemini-3-pro-preview"},
+		config:       llm.Config{Model: "gemini-3.1-pro-preview"},
 		providerName: "gemini",
 	}
 
