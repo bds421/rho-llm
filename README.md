@@ -304,7 +304,7 @@ req := llm.Request{
 
 For Claude 4.7 and later (Opus 4.7/4.8/5/5.5, Fable 5/5.1, Sonnet 5/5.5,
 Haiku 5.5), `ThinkingLevel` selects adaptive thinking effort instead of a token
-budget (`minimal` maps to `low`) — Anthropic rejects manual `budget_tokens` on
+budget (`minimal` maps to `low`; `ThinkingMax` sends effort `max`) — Anthropic rejects manual `budget_tokens` on
 these models, so a positive `ThinkingBudget` with reasoning enabled is rejected
 before dispatch. `ThinkingNone` is sent the way each model accepts it: thinking
 `disabled` (Opus 4.7/4.8/5, Sonnet 5, Haiku 5.5), `between_tools` (Sonnet 5.5),
@@ -366,7 +366,7 @@ if err != nil {
 }
 ```
 
-On a handoff, `NormalizeForProvider` (applied automatically by `Session`, and exported for direct `Client` users) prepares the transcript for the target provider: extended-thinking blocks are replayed verbatim only to the **same** provider that produced them (Anthropic requires the original signature) and otherwise **degrade to plain text** so the reasoning survives; orphaned tool calls get a synthetic error result (every provider rejects an unanswered tool call); dangling tool results are dropped; and errored/aborted turns are dropped. Text, images, documents, and tool calls carry over unchanged.
+On a handoff, `NormalizeForModel` (applied automatically by `Session`; it and `NormalizeForProvider` are exported for direct `Client` users) prepares the transcript for the target model: thinking from a **different model** is dropped, because a model shown another model's reasoning tends to imitate it; thinking from the same model is replayed verbatim only to the **same** provider with a valid signature (Anthropic requires the original signature) and otherwise **degrades to plain text**; orphaned tool calls get a synthetic error result (every provider rejects an unanswered tool call); dangling tool results are dropped; and errored/aborted turns are dropped. Text, images, documents, and tool calls carry over unchanged.
 
 > **Thinking replay requires thinking enabled.** Anthropic only accepts replayed thinking blocks when extended thinking is on for the request, so keep it enabled across turns (e.g. `llm.NewSession(client, llm.WithBaseRequest(llm.Request{ThinkingLevel: llm.ThinkingLow}))`, or set `ThinkingLevel` on the client `Config`). With thinking off, historical thinking blocks are simply dropped (no error). A failed `Send`/`Stream` rolls back its appended input, so the transcript stays consistent and retryable.
 
@@ -1038,7 +1038,7 @@ if err != nil {
 | APIKey | string | "" | API key (empty OK for local providers) |
 | MaxTokens | int | 8192 | Max output tokens (zero is floored to the default; see the note below on Gemini thinking models) |
 | Temperature | *float64 | nil | Sampling temperature (nil = provider default, omitted from wire) |
-| ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingLow/ThinkingMedium/ThinkingHigh |
+| ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingMinimal/Low/Medium/High/XHigh/Max. Providers without a level get their deepest one: `ThinkingMax` → OpenAI `xhigh`, Gemini `high` |
 | Timeout | Duration | 120s | Non-stream request timeout; for streams, the header wait and max silent gap between bytes (see [Streaming and `Config.Timeout`](#streaming-and-configtimeout)) |
 | BaseURL | string | "" | Override provider endpoint |
 | ProxyURL | string | "" | Explicit reviewed HTTP(S) forward proxy; overrides ambient proxy variables |
@@ -1294,7 +1294,7 @@ llm/
   batchregister.go                       # RegisterBatchProvider() + batch driver registry
   conversation.go                        # Conversation + Usage + versioned serialization
   session.go                             # Session (stateful driver) + provider handoff
-  normalize.go                           # NormalizeForProvider() cross-provider handoff pass
+  normalize.go                           # NormalizeForProvider/NormalizeForModel() handoff pass
   store.go                               # Store interface + MemoryStore / FileStore
   streamevents.go                        # StreamWithBoundaries() fine-grained events
   mock.go                                # MockClient (test double) + faux builders

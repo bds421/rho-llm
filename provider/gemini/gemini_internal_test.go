@@ -447,7 +447,8 @@ func TestBuildRequestThinkingLevelStringMapping(t *testing.T) {
 		{"medium", llm.ThinkingMedium, "medium", false},
 		{"high", llm.ThinkingHigh, "high", false},
 		{"minimal_fallback", llm.ThinkingMinimal, "", true},
-		{"xhigh_fallback", llm.ThinkingXHigh, "", true},
+		{"xhigh_maps_to_high", llm.ThinkingXHigh, "high", false},
+		{"max_maps_to_high", llm.ThinkingMax, "high", false},
 	}
 
 	for _, tc := range tests {
@@ -490,15 +491,17 @@ func TestBuildRequestThinkingLevelStringMapping(t *testing.T) {
 // TestBuildRequestThinkingBudgetClampedToModelMax verifies that a thinking
 // budget exceeding the model's MaxTokens is clamped.
 func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
-	// gemini-3-pro-preview has MaxTokens=65536 — ThinkingXHigh (128000) exceeds it.
+	// gemini-3.1-pro-preview has MaxTokens=65536 — a 128000 budget exceeds it,
+	// and the API caps thinkingBudget at 65535 (one below MaxTokens).
 	c := &Client{
 		config:       llm.Config{Model: "gemini-3.1-pro-preview"},
 		providerName: "gemini",
 	}
 
 	req := llm.Request{
-		MaxTokens:     100,
-		ThinkingLevel: llm.ThinkingXHigh,
+		MaxTokens:      100,
+		ThinkingLevel:  llm.ThinkingHigh,
+		ThinkingBudget: 128000,
 		Messages: []llm.Message{
 			llm.NewTextMessage(llm.RoleUser, "think hard"),
 		},
@@ -521,6 +524,9 @@ func TestBuildRequestThinkingBudgetClampedToModelMax(t *testing.T) {
 	if tc.ThinkingBudget > info.MaxTokens {
 		t.Errorf("ThinkingBudget = %d, want <= %d (model MaxTokens)",
 			tc.ThinkingBudget, info.MaxTokens)
+	}
+	if tc.ThinkingBudget != 65535 {
+		t.Errorf("ThinkingBudget = %d, want 65535 (API maximum)", tc.ThinkingBudget)
 	}
 }
 

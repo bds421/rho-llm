@@ -14,6 +14,7 @@ func TestSonnet5ThinkingWire(t *testing.T) {
 	}{
 		{llm.ThinkingNone, ""}, {llm.ThinkingMinimal, "low"}, {llm.ThinkingLow, "low"},
 		{llm.ThinkingMedium, "medium"}, {llm.ThinkingHigh, "high"}, {llm.ThinkingXHigh, "xhigh"},
+		{llm.ThinkingMax, "max"},
 	} {
 		t.Run(string(tc.level), func(t *testing.T) {
 			c := &Client{config: llm.Config{Model: "claude-sonnet-5"}}

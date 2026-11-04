@@ -447,23 +447,21 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		// Prefer string-based thinkingLevel for standard levels (Gemini 3);
 		// fall back to thinkingBudget for custom budgets or non-standard levels.
 		if req.ThinkingBudget > 0 {
-			budget := req.ThinkingBudget
-			if hasInfo && info.MaxTokens > 0 {
-				budget = llm.ClampThinkingBudget(c.providerName, model, budget, info.MaxTokens)
-			}
-			tc.ThinkingBudget = budget
+			tc.ThinkingBudget = c.clampThinkingBudget(model, req.ThinkingBudget, info, hasInfo)
 		} else {
 			switch thinkingLevel {
 			case llm.ThinkingLow, llm.ThinkingMedium, llm.ThinkingHigh:
 				tc.ThinkingLevel = string(thinkingLevel)
+			case llm.ThinkingXHigh, llm.ThinkingMax:
+				// "high" is Gemini's deepest level. A 128K token budget instead
+				// was clamped to the model's 65,536 output limit, one above the
+				// API's thinkingBudget maximum, and rejected with a 400.
+				tc.ThinkingLevel = string(llm.ThinkingHigh)
 			default:
-				// ThinkingMinimal, ThinkingXHigh — no matching Gemini string,
-				// fall back to token budget.
+				// ThinkingMinimal — no matching Gemini string, fall back to a
+				// token budget.
 				budget := llm.ThinkingBudgetTokens(thinkingLevel, 0)
-				if hasInfo && info.MaxTokens > 0 {
-					budget = llm.ClampThinkingBudget(c.providerName, model, budget, info.MaxTokens)
-				}
-				tc.ThinkingBudget = budget
+				tc.ThinkingBudget = c.clampThinkingBudget(model, budget, info, hasInfo)
 			}
 		}
 		apiReq.GenerationConfig.ThinkingConfig = tc
@@ -763,4 +761,18 @@ func resolveToolName(toolUseID string) string {
 	}
 
 	return toolUseID
+}
+
+// maxThinkingBudget is the largest thinkingBudget the Gemini API accepts
+// ("thinking_budget must be in the range [-1, 65535]") — one below the 65,536
+// output limit of most Gemini models.
+const maxThinkingBudget = 65535
+
+// clampThinkingBudget clamps a thinking budget to the model's output limit and
+// to the API's thinkingBudget maximum.
+func (c *Client) clampThinkingBudget(model string, budget int, info llm.ModelInfo, hasInfo bool) int {
+	if hasInfo && info.MaxTokens > 0 {
+		budget = llm.ClampThinkingBudget(c.providerName, model, budget, info.MaxTokens)
+	}
+	return llm.ClampThinkingBudget(c.providerName, model, budget, maxThinkingBudget)
 }

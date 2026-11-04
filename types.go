@@ -135,6 +135,10 @@ const (
 	ThinkingMedium  ThinkingLevel = "medium"
 	ThinkingHigh    ThinkingLevel = "high"
 	ThinkingXHigh   ThinkingLevel = "xhigh" // OpenAI: maximum reasoning effort
+	// ThinkingMax is the deepest level: Claude 4.7+ adaptive effort "max". Providers
+	// without a "max" level get their highest one (OpenAI "xhigh"; Gemini and
+	// budget-based Claude models a token budget clamped to the model limit).
+	ThinkingMax ThinkingLevel = "max"
 )
 
 // ReasoningSummary controls whether reasoning summary text is included in responses.
@@ -162,7 +166,7 @@ func ThinkingBudgetTokens(level ThinkingLevel, customBudget int) int {
 		return 16384
 	case ThinkingHigh:
 		return 65536
-	case ThinkingXHigh:
+	case ThinkingXHigh, ThinkingMax:
 		return 128000
 	default:
 		return 0

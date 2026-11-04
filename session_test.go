@@ -85,7 +85,7 @@ func TestSessionSendAppendsAndTracks(t *testing.T) {
 	}
 }
 
-func TestSessionProviderHandoffDegradesThinking(t *testing.T) {
+func TestSessionProviderHandoffDropsThinking(t *testing.T) {
 	// Turn 1 on Anthropic: response carries a signed thinking block.
 	a := &fakeClient{
 		provider: "anthropic", model: "claude-sonnet-4-6",
@@ -103,26 +103,22 @@ func TestSessionProviderHandoffDegradesThinking(t *testing.T) {
 		t.Fatalf("send2: %v", err)
 	}
 
-	// The OpenAI client must NOT receive a raw thinking block (foreign signature);
-	// it must have been degraded to a text part.
+	// Another model's reasoning is dropped (since v0.11.0 — before, it was
+	// degraded to text), neither as a thinking block nor as text; the visible
+	// answer survives.
+	answer := false
 	for _, m := range b.gotReq.Messages {
 		for _, p := range m.Content {
-			if p.Type == llm.ContentThinking {
-				t.Errorf("thinking block leaked to openai after handoff: %+v", p)
+			if p.Type == llm.ContentThinking || p.Text == "let me think" {
+				t.Errorf("Anthropic thinking reached openai after handoff: %+v", p)
+			}
+			if p.Text == "ok" {
+				answer = true
 			}
 		}
 	}
-	// The reasoning text should survive as a text part somewhere in the history.
-	found := false
-	for _, m := range b.gotReq.Messages {
-		for _, p := range m.Content {
-			if p.Type == llm.ContentText && p.Text == "let me think" {
-				found = true
-			}
-		}
-	}
-	if !found {
-		t.Error("degraded thinking text not preserved after handoff")
+	if !answer {
+		t.Error("visible answer lost after handoff")
 	}
 }
 

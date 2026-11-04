@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of November 2026 (v0.10.1).
+> **Status:** Reflects the current implementation as of November 2026 (v0.11.0).
 
 ---
 
@@ -15,7 +15,7 @@
 - Image/vision support (base64 images in all four protocol adapters)
 - Document/PDF support (`ContentDocument`: native on Gemini/Anthropic, data URI on OpenAI-compatible)
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
-- Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForProvider`); pluggable persistence (`Store`: `MemoryStore`/`FileStore`)
+- Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForModel`); pluggable persistence (`Store`: `MemoryStore`/`FileStore`)
 - Structured output (JSON mode / JSON schema) on OpenAI-compatible + Gemini; tool-call validation; fine-grained streaming boundaries (`StreamWithBoundaries`)
 - Registered `ModalityClient` adapters for embeddings, image generation, speech,
   and transcription; OpenAI-compatible and Gemini modality drivers
@@ -44,7 +44,7 @@ github.com/bds421/rho-llm/
 ├── factory.go        # NewClient() / NewModalityClient() / NewBatchClient()
 ├── conversation.go      # Conversation (serializable transcript) + Usage + versioned JSON
 ├── session.go           # Session (concurrency-safe driver) + provider handoff (SwitchProvider)
-├── normalize.go         # NormalizeForProvider() — cross-provider transcript translation
+├── normalize.go         # NormalizeForProvider/NormalizeForModel() — transcript translation
 ├── store.go             # Store interface + MemoryStore / FileStore (conversation persistence)
 ├── streamevents.go      # StreamWithBoundaries() — fine-grained block events
 ├── mock.go              # MockClient test double + faux builders
@@ -777,12 +777,18 @@ Every assistant `Message` records `Provider`/`Model`/`StopReason` provenance (al
 so older blobs stay valid). This is what makes cross-provider handoff decidable from the data
 alone: a thinking block is replayable verbatim **only** to the same provider that produced it.
 
-### The handoff pass (`NormalizeForProvider`)
+### The handoff pass (`NormalizeForModel`)
 
-`Session` applies `NormalizeForProvider(messages, targetProvider)` before every request (so it
-also self-heals same-provider transcripts); direct `Client` users can call it explicitly. It is
-the single choke point for all cross-provider concerns and never mutates its input:
+`Session` applies `NormalizeForModel(messages, targetProvider, targetModel)` before every
+request (so it also self-heals same-provider transcripts); direct `Client` users can call it or
+`NormalizeForProvider` (the same pass without step 0) explicitly. It is the single choke point
+for all handoff concerns and never mutates its input:
 
+0. **Other models' thinking dropped** — a thinking block whose message records a `Model` other
+   than the target is removed, not converted (since v0.11.0; pi-ai does the same). A model shown
+   another model's reasoning tends to imitate it. IDs differing only by a snapshot suffix
+   (`claude-haiku-4-5` / `claude-haiku-4-5-20251001`) count as the same model; messages without
+   a recorded `Model` fall through to step 1.
 1. **Thinking degradation** — a thinking block is kept verbatim only when `msg.Provider ==
    targetProvider` *and* it carries a provider-valid signature (or is redacted). Otherwise the
    reasoning is preserved by converting it to a plain text block. (A foreign/unsigned thinking

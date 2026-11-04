@@ -103,6 +103,7 @@ func TestBuildRequestReasoningEffort(t *testing.T) {
 		{"high+detailed", llm.ThinkingHigh, llm.ReasoningSummaryDetailed, "high", "detailed", true},
 		{"minimal", llm.ThinkingMinimal, llm.ReasoningSummaryNone, "minimal", "", true},
 		{"xhigh+concise", llm.ThinkingXHigh, llm.ReasoningSummaryConcise, "xhigh", "concise", true},
+		{"max maps to xhigh", llm.ThinkingMax, llm.ReasoningSummaryNone, "xhigh", "", true},
 		{"summary only", llm.ThinkingNone, llm.ReasoningSummaryAuto, "", "auto", true},
 	}
 

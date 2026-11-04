@@ -1,6 +1,10 @@
 package llm
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
 
 // NormalizeForProvider returns a copy of msgs prepared for replay to the given
 // provider, applying the cross-provider handoff fixes that every wire protocol
@@ -26,9 +30,29 @@ import "fmt"
 //     unanswered tool call in history.
 //   - Empty messages dropped: a message left with no content is removed.
 //
-// Sessions apply this automatically each turn; direct Client users can call it
-// before replaying a transcript to a different provider.
+// Sessions apply NormalizeForModel automatically each turn; direct Client users
+// can call either before replaying a transcript to a different provider.
 func NormalizeForProvider(msgs []Message, provider string) []Message {
+	return normalize(msgs, provider, "")
+}
+
+// NormalizeForModel is NormalizeForProvider plus one more rule: thinking from a
+// DIFFERENT model is dropped instead of replayed or converted to text. A model
+// shown another model's reasoning tends to imitate it rather than reason for
+// itself. Thinking is kept (subject to the provider rules above) when the
+// message has no recorded Model or model is empty.
+//
+// Two IDs name the same model when their aliases resolve to the same ID or one
+// is the other plus a date or version suffix of at least three digits
+// ("claude-haiku-4-5" vs "claude-haiku-4-5-20251001", "gemini-x" vs
+// "gemini-x-001"; but not "gpt-5" vs "gpt-5-mini" or "claude-opus-4" vs
+// "claude-opus-4-8"), because the served model ID a response reports
+// can be more specific than the configured one.
+func NormalizeForModel(msgs []Message, provider, model string) []Message {
+	return normalize(msgs, provider, model)
+}
+
+func normalize(msgs []Message, provider, model string) []Message {
 	if len(msgs) == 0 {
 		return msgs
 	}
@@ -74,6 +98,9 @@ func NormalizeForProvider(msgs []Message, provider string) []Message {
 				np.ToolResultID = target
 				nm.Content = append(nm.Content, np)
 			case ContentThinking:
+				if model != "" && m.Model != "" && !sameModel(m.Model, model) {
+					continue // another model's reasoning — drop, don't convert
+				}
 				sameProvider := m.Provider != "" && m.Provider == provider
 				// Replay verbatim only when it would be valid: a redacted block, or
 				// a signed block that actually has reasoning text. A signed-but-empty
@@ -121,6 +148,26 @@ func NormalizeForProvider(msgs []Message, provider string) []Message {
 		}
 	}
 	return repaired
+}
+
+// sameModel reports whether two model IDs name the same model — see
+// NormalizeForModel.
+func sameModel(a, b string) bool {
+	a, b = ResolveModelAlias(a), ResolveModelAlias(b)
+	if a == b {
+		return true
+	}
+	return isVersionSuffixOf(a, b) || isVersionSuffixOf(b, a)
+}
+
+// versionSuffix matches a dated or numbered snapshot suffix: "-20251001",
+// "-001", "-2025-08-07".
+var versionSuffix = regexp.MustCompile(`^-[0-9]{3,}(-[0-9]+)*$`)
+
+// isVersionSuffixOf reports whether long is short plus a snapshot suffix.
+func isVersionSuffixOf(long, short string) bool {
+	rest, ok := strings.CutPrefix(long, short)
+	return ok && versionSuffix.MatchString(rest)
 }
 
 // uniqueToolID returns the first "<base>#<n>" not already present in used.

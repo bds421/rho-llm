@@ -249,10 +249,10 @@ func (s *Session) prepareTurn(msgs []Message) (Request, Client, string) {
 	combined := make([]Message, 0, len(s.conv.Messages)+len(msgs))
 	combined = append(combined, s.conv.Messages...)
 	combined = append(combined, msgs...)
-	req.Messages = NormalizeForProvider(combined, provider)
 	if req.Model == "" {
 		req.Model = client.Model()
 	}
+	req.Messages = NormalizeForModel(combined, provider, req.Model)
 	return req, client, provider
 }
 

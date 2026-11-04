@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-04
+
+First two items from the consolidated backlog (`tasks/todo.md`), both taken
+from pi-ai 1.5.0.
+
+> **Behaviour change.** `Session` now drops thinking produced by a different
+> model when you switch models (including Opus → Haiku on the same provider).
+> Before, a signed same-provider block was replayed verbatim and cross-provider
+> thinking was converted to text. The visible answers are unchanged.
+> `NormalizeForProvider` keeps the old behaviour.
+
+### Added
+
+- **`ThinkingMax`** — the deepest thinking level. Claude 4.7+ get adaptive
+  effort `max` (all of them list it in `GET /v1/models`); the OpenAI Responses
+  API, which has no `max`, gets `xhigh`; Gemini gets `high`; budget-based Claude
+  models get the `ThinkingXHigh` budget (128,000, clamped to the model limit).
+  Live 2026-11-04: `claude-haiku-5-5` and `gpt-6-luna` accept it.
+- **`NormalizeForModel(msgs, provider, model)`** — `NormalizeForProvider` plus
+  dropping thinking from other models. Model IDs that differ only by a snapshot
+  suffix of three or more digits count as the same model.
+
+### Changed
+
+- `Session` normalizes each turn with `NormalizeForModel` for the turn's model.
+  Live 2026-11-04: a session switched from `claude-sonnet-5-5` (thinking) to
+  `claude-haiku-5-5` continues normally.
+
+### Fixed
+
+- **`ThinkingXHigh` on Gemini 3+ returned 400.** It fell back to a token
+  budget clamped to the model's 65,536-token output limit, but the API accepts
+  `thinkingBudget` only up to 65,535. `ThinkingXHigh` and `ThinkingMax` now send
+  `thinkingLevel: "high"` (Gemini's deepest level), and every `thinkingBudget`
+  (including a custom `ThinkingBudget`) is capped at 65,535.
+
 ## [0.10.1] - 2026-11-03
 
 Gemini registry follow-ups from the 2026-10-31 refresh, checked against

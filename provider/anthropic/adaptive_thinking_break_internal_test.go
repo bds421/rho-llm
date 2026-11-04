@@ -61,7 +61,7 @@ func TestEveryAnthropicModelHasAThinkingDecision(t *testing.T) {
 }
 
 func TestAdaptiveModelsNeverSendBudgetTokens(t *testing.T) {
-	levels := []llm.ThinkingLevel{llm.ThinkingNone, llm.ThinkingMinimal, llm.ThinkingLow, llm.ThinkingMedium, llm.ThinkingHigh, llm.ThinkingXHigh}
+	levels := []llm.ThinkingLevel{llm.ThinkingNone, llm.ThinkingMinimal, llm.ThinkingLow, llm.ThinkingMedium, llm.ThinkingHigh, llm.ThinkingXHigh, llm.ThinkingMax}
 	for id, profile := range adaptiveThinkingModels {
 		for _, level := range levels {
 			for _, maxTokens := range []int{0, 1, 1024, 16000, 128000} {

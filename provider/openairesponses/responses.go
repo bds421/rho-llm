@@ -619,7 +619,12 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 
 	// Set reasoning effort and optional summary
 	if thinkingLevel != llm.ThinkingNone {
-		reasoning := &responsesReasoning{Effort: string(thinkingLevel)}
+		effort := string(thinkingLevel)
+		if thinkingLevel == llm.ThinkingMax {
+			// The Responses API has no "max" effort; xhigh is its deepest.
+			effort = string(llm.ThinkingXHigh)
+		}
+		reasoning := &responsesReasoning{Effort: effort}
 		if req.ReasoningSummary != llm.ReasoningSummaryNone {
 			reasoning.Summary = string(req.ReasoningSummary)
 		}
