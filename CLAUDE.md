@@ -67,11 +67,8 @@ finished task lives in the changelog, not the todo list.
   (This is not hypothetical: a session once refreshed the registry, tagged `v0.6.0`, and only
   on push discovered `v0.6.0`/`v0.7.0`/`v0.7.1` were already published — duplicating six weeks
   of someone else's work. If a push is rejected, **never** reach for `--force`.)
-- **Two remotes.** `origin` → GitHub `github.com/bds421/rho-llm` (canonical/public). `gitlab` →
-  `git@gitlab2024.bds421-cloud.com:bds421/rho/llm.git` (internal mirror on the bds421-cloud GitLab,
-  alongside the team's other `bds421/rho/*` projects). Releases can go to either or both.
-- ⚠️ **`bds421/rho/pdf` is a DIFFERENT project** (an AI PDF-extraction service, cloned at
-  `../rho-pdf`) — never push rho-llm there or merge the two.
+- **Remotes.** `origin` → GitHub `github.com/bds421/rho-llm` (canonical, public, the Go module
+  source). Private mirrors and sibling projects are not named in this public repository.
 - **Committer identity.** Commit under **your own** git identity — whatever your global
   `user.name`/`user.email` is set to. Authorship on a public repo should reflect who
   actually made the change, so don't impersonate another contributor or set per-commit
@@ -82,8 +79,7 @@ finished task lives in the changelog, not the todo list.
   fakes allowed, `.gitignore` covers `.env`/`.claude`; (2) **`README.md` is up to date**; and
   (3) **CI is green** — run `make ci` (incl. `gosec`/`govulncheck`, which aren't installed by
   default — `go install` them first) so the GitHub Actions check won't go red. Leaks and stale
-  public docs are hard to retract. (GitLab is the internal mirror — this gate is for the public
-  GitHub push.)
+  public docs are hard to retract.
 - **Cutting a release:**
   1. Move `## [Unreleased]` content into `## [X.Y.Z] - YYYY-MM-DD` in `CHANGELOG.md` (leave an empty
      `[Unreleased]`). Minor bump for features, patch for fixes.
