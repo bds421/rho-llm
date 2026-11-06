@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-06
+
+### Fixed
+
+- **Thinking disabled at effort `xhigh` / `max` on Claude Haiku 5.5 and
+  Claude Opus 5.** Both accept `thinking: {"type": "disabled"}` only at effort
+  `low`, `medium` or `high` and return a 400 otherwise; the docs say to lower
+  the effort or use adaptive thinking. Without a `ThinkingLevel` the adapter
+  sends `disabled` and no effort (the model default, valid), so the 400 came
+  only from an `output_config.effort` of `xhigh` or `max` passed through
+  `SamplingParams`. Such a request now fails before it is sent, with an error
+  that names both fixes. The choice is the caller's, so the adapter does not
+  switch thinking on or lower the effort itself. Other models are unchanged.
+
 ## [0.12.0] - 2026-11-06
 
 Anthropic server tools (web search first), `pause_turn` continuations,

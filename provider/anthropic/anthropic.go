@@ -312,6 +312,9 @@ const (
 type adaptiveThinkingProfile struct {
 	off                thinkingOff
 	noForcedToolChoice bool // tool_choice "any"/"tool" returns a 400
+	// disabledUpToHigh: {"type":"disabled"} is accepted only at effort low,
+	// medium or high; with xhigh or max it returns a 400.
+	disabledUpToHigh bool
 }
 
 // adaptiveThinkingModels are the Claude models that accept only adaptive
@@ -324,12 +327,12 @@ var adaptiveThinkingModels = map[string]adaptiveThinkingProfile{
 	"claude-fable-5-1":  {off: thinkingOffOmit, noForcedToolChoice: true},
 	"claude-fable-5":    {off: thinkingOffOmit},
 	"claude-opus-5-5":   {off: thinkingOffOmit, noForcedToolChoice: true},
-	"claude-opus-5":     {off: thinkingOffDisabled},
+	"claude-opus-5":     {off: thinkingOffDisabled, disabledUpToHigh: true},
 	"claude-opus-4-8":   {off: thinkingOffDisabled},
 	"claude-opus-4-7":   {off: thinkingOffDisabled},
 	"claude-sonnet-5-5": {off: thinkingOffBetweenTools, noForcedToolChoice: true},
 	"claude-sonnet-5":   {off: thinkingOffDisabled},
-	"claude-haiku-5-5":  {off: thinkingOffDisabled},
+	"claude-haiku-5-5":  {off: thinkingOffDisabled, disabledUpToHigh: true},
 }
 
 func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, error) {
@@ -623,6 +626,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		if req.ThinkingLevel == llm.ThinkingNone {
 			switch profile.off {
 			case thinkingOffDisabled:
+				if effort := samplingEffort(req.SamplingParams); profile.disabledUpToHigh && (effort == "xhigh" || effort == "max") {
+					return anthropicRequest{}, fmt.Errorf("anthropic: %s rejects thinking disabled at effort %q (SamplingParams output_config); set a ThinkingLevel for adaptive thinking, or use effort high or lower", resolvedModel, effort)
+				}
 				apiReq.Thinking = &anthropicThinking{Type: "disabled"}
 			case thinkingOffBetweenTools:
 				apiReq.Thinking = &anthropicThinking{Type: "between_tools"}
@@ -999,4 +1005,25 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// reason would be indistinguishable from a complete turn. Wrapping
 	// io.ErrUnexpectedEOF lets the pool classify the failure as retryable.
 	yield(llm.StreamEvent{}, fmt.Errorf("anthropic: stream ended without completion: %w", io.ErrUnexpectedEOF))
+}
+
+// samplingEffort returns output_config.effort when the caller passes it
+// through SamplingParams (the adapter sets output_config itself only with a
+// ThinkingLevel), or "".
+func samplingEffort(params map[string]any) string {
+	raw, ok := params["output_config"]
+	if !ok {
+		return ""
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Effort string `json:"effort"`
+	}
+	if json.Unmarshal(data, &cfg) != nil {
+		return ""
+	}
+	return cfg.Effort
 }

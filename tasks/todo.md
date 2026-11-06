@@ -11,8 +11,9 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ## Current state (2026-11-06)
 
-`v0.12.0` is the latest release (Anthropic server tools with web search, `pause_turn`
-continuation, per-iteration usage and search pricing — see `CHANGELOG.md` `[0.12.0]`).
+`v0.12.1` is the latest release (v0.12.0: Anthropic server tools with web search,
+`pause_turn` continuation, per-iteration usage and search pricing; v0.12.1: refuse
+thinking disabled at effort xhigh/max on Haiku 5.5 and Opus 5 — see `CHANGELOG.md`).
 
 ---
 
