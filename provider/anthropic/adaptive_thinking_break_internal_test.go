@@ -207,15 +207,19 @@ func TestForcedToolChoiceRejectedWhereTheAPIRejectsIt(t *testing.T) {
 func TestAdaptiveModelsRejectTemperatureAndBudgetModelsAccept(t *testing.T) {
 	temperature := 0.2
 	for id := range adaptiveThinkingModels {
-		cfg := llm.Config{Provider: "anthropic", Model: id}
+		cfg := llm.Config{Provider: "anthropic", Model: id, AnthropicVersion: llm.AnthropicVersion20230601}
 		if err := llm.ValidateRequestCapabilities(cfg, llm.Request{Temperature: &temperature}, false); err == nil {
 			t.Errorf("%s: explicit temperature must be rejected", id)
 		}
 	}
 	for id := range budgetThinkingModels {
-		cfg := llm.Config{Provider: "anthropic", Model: id}
+		cfg := llm.Config{Provider: "anthropic", Model: id, AnthropicVersion: llm.AnthropicVersion20230601}
 		if err := llm.ValidateRequestCapabilities(cfg, llm.Request{Temperature: &temperature}, false); err != nil {
 			t.Errorf("%s: temperature is supported, got %v", id, err)
+		}
+		// API version 2026-10-21 (the default) rejects it on every model.
+		if err := llm.ValidateRequestCapabilities(llm.Config{Provider: "anthropic", Model: id}, llm.Request{Temperature: &temperature}, false); err == nil {
+			t.Errorf("%s: temperature accepted on 2026-10-21", id)
 		}
 	}
 }

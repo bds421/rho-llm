@@ -51,7 +51,7 @@ func StreamWithBoundaries(seq iter.Seq2[StreamEvent, error]) iter.Seq2[StreamEve
 				if !closeBlock() {
 					return
 				}
-				yield(StreamEvent{}, err)
+				yield(ev, err)
 				return
 			}
 			switch ev.Type {

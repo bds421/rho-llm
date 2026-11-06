@@ -83,3 +83,29 @@ func TestBuildRequestDocumentInvalidMediaType(t *testing.T) {
 		t.Error("buildRequest with unsupported document media type = nil error, want error")
 	}
 }
+
+func TestBuildRequestRefusesTextDocument(t *testing.T) {
+	c := &Client{providerName: "gemini"}
+	req := llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{llm.NewTextDocument("", "plain text")}}}}
+	if _, err := c.buildRequest(req); err == nil {
+		t.Error("text document accepted; it would be sent as base64 data")
+	}
+}
+
+func TestUnsupportedAnthropicFieldsRefused(t *testing.T) {
+	c := &Client{providerName: "gemini"}
+	msgs := []llm.Message{llm.NewTextMessage(llm.RoleUser, "q")}
+	for name, req := range map[string]llm.Request{
+		"effort":    {Effort: llm.EffortLow, Messages: msgs},
+		"container": {ContainerID: "container_1", Messages: msgs},
+	} {
+		if _, err := c.buildRequest(req); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	for raw, want := range map[string]string{"SAFETY": llm.StopRefusal, "PROHIBITED_CONTENT": llm.StopRefusal, "RECITATION": "RECITATION"} {
+		if got := normalizeStopReason(raw); got != want {
+			t.Errorf("%s -> %s, want %s", raw, got, want)
+		}
+	}
+}

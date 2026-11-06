@@ -4,6 +4,7 @@ package anthropic
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -163,7 +164,13 @@ type anthropicThinking struct {
 }
 
 type anthropicOutputConfig struct {
-	Effort string `json:"effort"`
+	Effort string                 `json:"effort,omitempty"`
+	Format *anthropicOutputFormat `json:"format,omitempty"`
+}
+
+type anthropicOutputFormat struct {
+	Type   string         `json:"type"`
+	Schema map[string]any `json:"schema"`
 }
 
 // anthropicResponse is the Anthropic API response format.
@@ -191,16 +198,23 @@ const interleavedThinkingBeta = "interleaved-thinking-2025-05-14"
 // thinking), except the interleaved-thinking flag without budget thinking.
 func (c *Client) setBetaHeader(httpReq *http.Request, apiReq anthropicRequest) {
 	budgetThinking := apiReq.Thinking != nil && apiReq.Thinking.Type == "enabled"
+	if betas := BetaFeatures(c.config.BetaFeatures, budgetThinking); len(betas) > 0 {
+		httpReq.Header.Set("anthropic-beta", strings.Join(betas, ","))
+	}
+}
+
+// BetaFeatures returns the anthropic-beta values to send: the configured
+// features, with the interleaved-thinking beta only when a request uses
+// budget thinking. The batch client sends the same set.
+func BetaFeatures(features []string, budgetThinking bool) []string {
 	var betas []string
-	for _, beta := range c.config.BetaFeatures {
+	for _, beta := range features {
 		if beta == interleavedThinkingBeta && !budgetThinking {
 			continue
 		}
 		betas = append(betas, beta)
 	}
-	if len(betas) > 0 {
-		httpReq.Header.Set("anthropic-beta", strings.Join(betas, ","))
-	}
+	return betas
 }
 
 func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*llm.Response, error) {
@@ -209,6 +223,9 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 		req.ThinkingLevel = c.config.ThinkingLevel
 	}
 
+	if err := llm.ValidateRequestCapabilities(c.capabilityConfig(), req, stream); err != nil {
+		return nil, err
+	}
 	apiReq, err := c.buildRequest(req, stream)
 	if err != nil {
 		return nil, err
@@ -255,6 +272,10 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 		req.ThinkingLevel = c.config.ThinkingLevel
 	}
 
+	if err := llm.ValidateRequestCapabilities(c.capabilityConfig(), req, true); err != nil {
+		yield(llm.StreamEvent{}, err)
+		return
+	}
 	apiReq, err := c.buildRequest(req, true)
 	if err != nil {
 		yield(llm.StreamEvent{}, err)
@@ -343,6 +364,20 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	}
 	if err := req.ToolChoice.Validate(); err != nil {
 		return anthropicRequest{}, err
+	}
+	if err := llm.AnthropicSamplingError(c.config, req); err != nil {
+		return anthropicRequest{}, err
+	}
+	if c.config.AnthropicStrictVersion() {
+		if err := strictVersionContent(req.Messages); err != nil {
+			return anthropicRequest{}, err
+		}
+	}
+	if err := llm.ValidateCacheMarkers(req); err != nil {
+		return anthropicRequest{}, err
+	}
+	if req.CachedContent != "" {
+		return anthropicRequest{}, fmt.Errorf("anthropic: CachedContent is a Gemini cache name; Anthropic caches by prefix, use CacheControl on the system prompt, tools or content")
 	}
 	apiReq := anthropicRequest{
 		Model:       req.Model,
@@ -438,7 +473,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				}
 				apiMsg.Content = append(apiMsg.Content, block)
 			case llm.ContentDocument:
-				// Anthropic parses PDFs natively via the "document" content block.
+				// A base64 PDF or a plain-text source; both share the source shape.
 				if err := llm.ValidateDocumentSource(part); err != nil {
 					return anthropicRequest{}, err
 				}
@@ -449,6 +484,12 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 						"media_type": part.Document.MediaType,
 						"data":       part.Document.Data,
 					},
+				}
+				if part.Title != "" {
+					block["title"] = part.Title
+				}
+				if part.Context != "" {
+					block["context"] = part.Context
 				}
 				if part.CacheControl {
 					cc, err := cacheControl(part.CacheTTL)
@@ -614,9 +655,28 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		apiReq.StopSequences = req.StopSequences
 	}
 
+	format, err := outputFormat(req.ResponseFormat)
+	if err != nil {
+		return anthropicRequest{}, err
+	}
+	if format != nil {
+		apiReq.OutputConfig = &anthropicOutputConfig{Format: format}
+	}
+
 	// Configure thinking
 	resolvedModel := llm.ResolveModelAlias(apiReq.Model)
-	if profile, ok := adaptiveThinkingModels[resolvedModel]; ok {
+	profile, adaptiveModel := adaptiveThinkingModels[resolvedModel]
+	effort, err := requestEffort(req, resolvedModel, adaptiveModel)
+	if err != nil {
+		return anthropicRequest{}, err
+	}
+	if effort != "" {
+		if apiReq.OutputConfig == nil {
+			apiReq.OutputConfig = &anthropicOutputConfig{}
+		}
+		apiReq.OutputConfig.Effort = effort
+	}
+	if adaptiveModel {
 		// Claude 4.7 and later reject thinking.type "enabled" + budget_tokens
 		// with a 400; depth is set by output_config.effort instead.
 		if apiReq.ToolChoice != nil && profile.noForcedToolChoice &&
@@ -626,11 +686,14 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		if req.ThinkingLevel == llm.ThinkingNone {
 			switch profile.off {
 			case thinkingOffDisabled:
-				if effort := samplingEffort(req.SamplingParams); profile.disabledUpToHigh && (effort == "xhigh" || effort == "max") {
-					return anthropicRequest{}, fmt.Errorf("anthropic: %s rejects thinking disabled at effort %q (SamplingParams output_config); set a ThinkingLevel for adaptive thinking, or use effort high or lower", resolvedModel, effort)
+				if e := cmp.Or(effort, samplingEffort(req.SamplingParams)); profile.disabledUpToHigh && aboveHigh(e) {
+					return anthropicRequest{}, fmt.Errorf("anthropic: %s rejects thinking disabled at effort %q; set a ThinkingLevel for adaptive thinking, or use effort high or lower", resolvedModel, e)
 				}
 				apiReq.Thinking = &anthropicThinking{Type: "disabled"}
 			case thinkingOffBetweenTools:
+				if e := cmp.Or(effort, samplingEffort(req.SamplingParams)); aboveHigh(e) {
+					return anthropicRequest{}, fmt.Errorf("anthropic: %s accepts thinking between_tools only at effort high or lower, not %q; set a ThinkingLevel for adaptive thinking", resolvedModel, e)
+				}
 				apiReq.Thinking = &anthropicThinking{Type: "between_tools"}
 			case thinkingOffOmit:
 				// Thinking is always on and any explicit "off" is a 400:
@@ -640,12 +703,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			if req.ThinkingBudget > 0 {
 				return anthropicRequest{}, fmt.Errorf("anthropic: %s does not support ThinkingBudget; use ThinkingLevel to control adaptive effort", resolvedModel)
 			}
-			effort := string(req.ThinkingLevel)
-			if req.ThinkingLevel == llm.ThinkingMinimal {
-				effort = "low"
-			}
-			apiReq.Thinking = &anthropicThinking{Type: "adaptive", Display: "summarized"}
-			apiReq.OutputConfig = &anthropicOutputConfig{Effort: effort}
+			apiReq.Thinking = &anthropicThinking{Type: "adaptive", Display: thinkingDisplay(req.ReasoningSummary)}
 		}
 	} else if req.ThinkingLevel != llm.ThinkingNone {
 		budget := llm.ThinkingBudgetTokens(req.ThinkingLevel, req.ThinkingBudget)
@@ -733,34 +791,17 @@ func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 		ServerToolUse:         apiResp.Usage.serverToolUse(),
 		CacheCreation1hTokens: apiResp.Usage.CacheCreation.Ephemeral1h,
 		StopDetails:           llm.StopDetailsFromRaw(apiResp.StopDetails),
-		Iterations:            apiResp.Usage.Iterations,
+		Iterations:            apiResp.Usage.iterations(),
 	}
 	if apiResp.Container != nil {
 		resp.ContainerID = apiResp.Container.ID
 	}
 
+	parts := make([]llm.ContentPart, 0, len(apiResp.Content))
 	for _, block := range apiResp.Content {
-		resp.Parts = append(resp.Parts, blockPart(block))
-		switch block.Type {
-		case "text":
-			resp.Content += block.Text
-		case "tool_use":
-			resp.ToolCalls = append(resp.ToolCalls, llm.ToolCall{
-				ID:    block.ID,
-				Name:  block.Name,
-				Input: block.Input,
-			})
-		case "thinking":
-			resp.Thinking += block.Thinking
-			if block.Signature != "" {
-				resp.ThinkingSignature = block.Signature
-			}
-		case "redacted_thinking":
-			resp.Thinking += block.Data
-			resp.ThinkingRedacted = true
-		}
+		parts = append(parts, blockPart(block))
 	}
-
+	resp.SetParts(parts)
 	return resp
 }
 
@@ -778,9 +819,36 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	var inputTokens = llm.TokensNotReported
 	var cacheCreationTokens, cacheReadTokens int
 	var startUsage anthropicUsage
+	var started bool
+	var model string
 	var containerID string
 	var thinkingSignature string
 	blocks := newStreamBlocks()
+
+	// fail ends the stream with err. After message_start the error comes with
+	// an EventError carrying the usage reported so far (input and cache tokens,
+	// message_start's output count) and the content assembled so far, so a
+	// caller can record what the broken turn cost.
+	fail := func(err error) {
+		if !started {
+			yield(llm.StreamEvent{}, err)
+			return
+		}
+		yield(llm.StreamEvent{
+			Type:                  llm.EventError,
+			Error:                 err.Error(),
+			Model:                 model,
+			InputTokens:           inputTokens,
+			OutputTokens:          startUsage.OutputTokens,
+			CacheCreationTokens:   cacheCreationTokens,
+			CacheReadTokens:       cacheReadTokens,
+			CacheCreation1hTokens: startUsage.CacheCreation.Ephemeral1h,
+			ServerToolUse:         startUsage.serverToolUse(),
+			Iterations:            startUsage.iterations(),
+			Parts:                 blocks.parts(),
+			ContainerID:           containerID,
+		}, err)
+	}
 
 	// flushToolCall emits any accumulated tool call and clears the buffer.
 	// Returns false if the caller broke iteration. Called both on
@@ -841,6 +909,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			} `json:"delta"`
 			ContentBlock json.RawMessage `json:"content_block"`
 			Message      struct {
+				Model      string         `json:"model"`
 				StopReason string         `json:"stop_reason"`
 				Usage      anthropicUsage `json:"usage"`
 				Container  *struct {
@@ -849,6 +918,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			} `json:"message"`
 			// message_delta puts usage at top level (not inside message)
 			Usage anthropicUsage `json:"usage"`
+			Error struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -918,13 +991,13 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			case "input_json_delta":
 				if blocks.isServerToolUse(event.Index) {
 					if !blocks.appendServerInput(event.Index, event.Delta.PartialJSON, maxToolInput) {
-						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
+						fail(fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 						return
 					}
 					break
 				}
 				if inputBuffer.Len()+len(event.Delta.PartialJSON) > maxToolInput {
-					yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
+					fail(fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 					return // stop parsing — continuing would corrupt the tool call
 				}
 				inputBuffer.WriteString(event.Delta.PartialJSON)
@@ -948,13 +1021,29 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			if event.Delta.Container != nil {
 				containerID = event.Delta.Container.ID
 			}
+			// message_delta usage is cumulative; with server tools it carries the
+			// input and cache counts of every sampling step, which message_start
+			// (the first step only) under-reports.
+			if event.Usage.InputTokens > 0 {
+				inputTokens = event.Usage.InputTokens
+			}
+			if event.Usage.CacheCreationTokens > 0 {
+				cacheCreationTokens = event.Usage.CacheCreationTokens
+			}
+			if event.Usage.CacheReadTokens > 0 {
+				cacheReadTokens = event.Usage.CacheReadTokens
+			}
+			cache1h := startUsage.CacheCreation.Ephemeral1h
+			if event.Usage.CacheCreation.Ephemeral1h > 0 {
+				cache1h = event.Usage.CacheCreation.Ephemeral1h
+			}
 			serverToolUse := event.Usage.serverToolUse()
 			if serverToolUse == (llm.ServerToolUsage{}) {
 				serverToolUse = startUsage.serverToolUse()
 			}
-			iterations := event.Usage.Iterations
+			iterations := event.Usage.iterations()
 			if len(iterations) == 0 {
-				iterations = startUsage.Iterations
+				iterations = startUsage.iterations()
 			}
 			// The terminal event: emit Done and stop. Returning here means any
 			// trailing bytes the server sends after the turn is complete
@@ -962,6 +1051,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// would mask the completed turn.
 			yield(llm.StreamEvent{
 				Type:                  llm.EventDone,
+				Model:                 model,
 				StopReason:            normalizeStopReason(event.Delta.StopReason),
 				RawStopReason:         event.Delta.StopReason,
 				InputTokens:           inputTokens,
@@ -970,12 +1060,16 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				CacheCreationTokens:   cacheCreationTokens,
 				CacheReadTokens:       cacheReadTokens,
 				ServerToolUse:         serverToolUse,
-				CacheCreation1hTokens: startUsage.CacheCreation.Ephemeral1h,
+				CacheCreation1hTokens: cache1h,
 				StopDetails:           llm.StopDetailsFromRaw(event.Delta.StopDetails),
 				Iterations:            iterations,
 				Parts:                 blocks.parts(),
 				ContainerID:           containerID,
 			}, nil)
+			return
+
+		case "error":
+			fail(streamError(event.Error.Type, event.Error.Message, c.config))
 			return
 
 		case "message_stop":
@@ -987,6 +1081,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			cacheCreationTokens = event.Message.Usage.CacheCreationTokens
 			cacheReadTokens = event.Message.Usage.CacheReadTokens
 			startUsage = event.Message.Usage
+			started = true
+			model = event.Message.Model
 			if event.Message.Container != nil {
 				containerID = event.Message.Container.ID
 			}
@@ -996,7 +1092,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// Reaching this point means no message_delta arrived (that case returns
 	// right after EventDone, so a trailing read error after it is never seen).
 	if err := scanner.Err(); err != nil {
-		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
+		fail(fmt.Errorf("stream error: %w", err))
 		return
 	}
 
@@ -1004,7 +1100,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// explicit error — otherwise a half-accumulated tool call or missing stop
 	// reason would be indistinguishable from a complete turn. Wrapping
 	// io.ErrUnexpectedEOF lets the pool classify the failure as retryable.
-	yield(llm.StreamEvent{}, fmt.Errorf("anthropic: stream ended without completion: %w", io.ErrUnexpectedEOF))
+	fail(fmt.Errorf("anthropic: stream ended without completion: %w", io.ErrUnexpectedEOF))
 }
 
 // samplingEffort returns output_config.effort when the caller passes it
@@ -1026,4 +1122,14 @@ func samplingEffort(params map[string]any) string {
 		return ""
 	}
 	return cfg.Effort
+}
+
+// capabilityConfig is the config the capability check runs against. A
+// client built directly with New may leave Provider empty; it is Anthropic.
+func (c *Client) capabilityConfig() llm.Config {
+	cfg := c.config
+	if cfg.Provider == "" {
+		cfg.Provider = "anthropic"
+	}
+	return cfg
 }

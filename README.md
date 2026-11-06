@@ -10,6 +10,32 @@ Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/docume
 go get github.com/bds421/rho-llm
 ```
 
+### Upgrading to v0.13.0
+
+v0.13.0 sends Anthropic API version `2026-10-21` by default
+([migration guide](https://platform.claude.com/docs/en/api/migration-2026-10-21)). Check:
+
+- **Sampling.** `Request.Temperature` and `temperature` / `top_p` / `top_k` in `SamplingParams`
+  are refused on Anthropic (every model). Remove them, or set
+  `Config.AnthropicVersion = llm.AnthropicVersion20230601` where a Claude 4.6 or 4.5 call needs
+  a non-default temperature. Claude 4.7 and later took only the defaults already.
+- **History.** A document in an assistant message, or citations on user text (copying
+  Claude's cited blocks into a user turn), is refused; move the document to a user
+  message and send the text without `Citations`.
+- **Batches** created before the switch finish under the version they were created with.
+- **Anthropic requests that now fail before sending:** `ResponseFormat` `json_object` (use a
+  schema), `CacheTTL` without `CacheControl`, a 1-hour cache marker after a 5-minute one,
+  `CachedContent`, an `Effort` that conflicts with the `ThinkingLevel`. A client built
+  directly with `anthropic.New` checks capabilities like the factory, so an unregistered
+  model needs `Config.ModelCapabilities`.
+- **Other providers:** `ContainerID` and `Effort` are refused by Gemini and
+  OpenAI-compatible adapters; Gemini `SAFETY` / `PROHIBITED_CONTENT` and OpenAI
+  `content_filter` now stop with `StopRefusal` (`RawStopReason` keeps the value). A fallback
+  chain that reuses one `Request` across providers must not set the provider-specific fields.
+- **Thinking text.** `ReasoningSummaryAuto` now leaves Anthropic `display` to the API default,
+  so Claude 4.7 and later return empty thinking text; leave `ReasoningSummary` unset for
+  readable summaries.
+
 ## Supported Providers
 
 | Provider | Protocol | Auth | Default BaseURL |
@@ -178,6 +204,13 @@ msg := llm.NewDocumentMessage(llm.RoleUser, "application/pdf", pdfData)
 
 Supported media types: `application/pdf`.
 
+**Plain-text documents (Anthropic).** `llm.NewTextDocument(title, text)` builds a
+document part with a `text` source (`media_type: text/plain`, the text itself as
+`Data`). `ContentPart.Title` and `ContentPart.Context` are optional on any document
+and go to the model next to it; `CacheControl`/`CacheTTL` work as on other parts.
+The text must be valid, non-empty UTF-8. Gemini and OpenAI-compatible adapters
+refuse text documents (send the text as a text part there).
+
 ## Streaming
 
 `client.Stream()` returns a Go 1.23 iterator (`iter.Seq2[StreamEvent, error]`) that yields events as the model generates tokens. This lets you display partial output in real time rather than waiting for the full response. Use `break` to abort early — the iterator cleans up the underlying HTTP connection automatically.
@@ -223,10 +256,19 @@ for event, err := range client.Stream(ctx, req) {
 | `EventThinking` | `Thinking` | Thinking output returned by the provider, including models that reason by default. |
 | `EventServerTool` | `Part` | Anthropic: a server tool call (once its input is complete) or its result. |
 | `EventCitation` | `Citation` | Anthropic: a citation for the text block being streamed. |
-| `EventDone` | `StopReason`, `RawStopReason`, `InputTokens`, `OutputTokens`, `ServerToolUse`, `Iterations`, `Parts`, `ContainerID` | Stream completed. Common stop reasons normalize to `end_turn`, `tool_use`, or `max_tokens`; provider-specific reasons can remain unchanged. `RawStopReason` preserves the provider value when available. |
-| `EventError` | `Error` | Available to custom clients; built-in adapters report failures through the iterator's `error` value. |
+| `EventDone` | `Model`, `StopReason`, `RawStopReason`, `InputTokens`, `OutputTokens`, `ServerToolUse`, `Iterations`, `Parts`, `ContainerID` | Stream completed. Common stop reasons normalize to `end_turn`, `tool_use`, or `max_tokens`; provider-specific reasons can remain unchanged. `RawStopReason` preserves the provider value when available. |
+| `EventError` | `Error`, usage fields, `Parts`, `Model` | Yielded together with the iterator's `error` when an Anthropic stream breaks after `message_start`: the usage reported so far (input and cache tokens) and the content assembled so far, so the broken turn's cost can be recorded. Other failures yield an empty event with the error. |
 
 **Stream completion:** Require `EventDone` to recognize a completed turn. An unexpected connection close produces an error; iterator exhaustion alone does not prove the response completed. Token counts can use the sentinel `llm.TokensNotReported` (-1) when the provider did not report usage; compare against this constant to distinguish "not reported" from "zero tokens" (0).
+
+`llm.CollectStream(client.Stream(ctx, req))` folds a stream into a `*Response`
+(the same fold `Session.Stream` uses, exported as `llm.StreamAccumulator`). On a
+broken stream it returns the partial response with the usage seen so far together
+with the error; a stream that ends without `EventDone` returns
+`llm.ErrStreamIncomplete`. `EventDone.Model` (and so `Response.Model`) is the model
+that answered, the fallback model after a server-side refusal fallback. A
+mid-stream Anthropic `error` event becomes an `*llm.APIError` with the status the
+same error has outside a stream (`overloaded_error` = 529, retryable).
 
 **Malformed events:** If a provider sends an SSE event with invalid JSON, the iterator yields an error for that event and continues parsing subsequent events. Callers should check `err` on every iteration and decide whether to `break` or continue. This ensures data corruption is never silent.
 
@@ -271,7 +313,7 @@ req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, "location no
 Server tools run at the provider: you declare them, and the call and its result
 come back in the same assistant turn. `Request.ServerTools` (or
 `WithServerTools` on a `Session`) takes a typed `ServerTool`; adapters other than
-Anthropic return an error instead of silently dropping it.
+Anthropic return an error instead of silently dropping it, and so for a `ContainerID`.
 
 ```go
 search := llm.ServerTool{
@@ -340,6 +382,8 @@ Only a handoff to another provider drops them.
 **Refusals and server-side fallback.** A declined request stops with `llm.StopRefusal`;
 `Response.StopDetails` (also on `EventDone`) has `Category`, `Explanation`,
 `RecommendedModel`, the fallback-credit fields and `Raw`. Branch on `StopReason`.
+Gemini (`SAFETY`, `PROHIBITED_CONTENT`) and OpenAI (`content_filter`) safety stops map to
+`StopRefusal` too, with the provider value in `RawStopReason`.
 Server-side fallback is a body field plus a beta header:
 
 ```go
@@ -404,8 +448,27 @@ models do not advertise custom-temperature support, and Fable 5.1, Opus 5.5 and
 Sonnet 5.5 reject a forced `ToolChoice` (`Required`/`Tool`) before dispatch.
 Opus 4.6, Sonnet 4.6 and the 4.5 models keep manual budgets.
 
-**Note:** For Anthropic manual extended thinking, an explicit temperature other
-than `1.0` is rejected before dispatch. An omitted temperature stays omitted;
+With a `ThinkingLevel` on these models the adapter asks for `display: "summarized"`, so
+`resp.Thinking` holds readable text. `ReasoningSummary: llm.ReasoningSummaryOmitted` sends
+`"omitted"`; `llm.ReasoningSummaryAuto` leaves `display` off and gets the API default, which is
+`"omitted"` on Claude 4.7 and later (thinking blocks with empty text, a shorter
+pause before the answer when streaming). Display changes only what comes back:
+thinking is billed the same either way. `ResponseFormat` is sent as
+`output_config.format` beside the effort.
+
+**Effort without thinking.** `Request.Effort` (`llm.EffortLow` ... `llm.EffortMax`) sets
+Anthropic `output_config.effort` and OpenAI Responses `reasoning.effort` without asking for
+thinking. With a `ThinkingLevel` that already sets the effort, the two must agree. The
+adapter refuses what the API rejects: effort above `high` with thinking `disabled` (Haiku
+5.5, Opus 5) or `between_tools` (Sonnet 5.5), effort on Sonnet 4.5 and Haiku 4.5, `xhigh` on
+Opus/Sonnet 4.6, `xhigh`/`max` on Opus 4.5. Gemini and OpenAI-compatible adapters refuse
+`Effort`. The adapter owns `output_config`: pass effort here. `SamplingParams["output_config"]` for
+effort is deprecated; it still passes through when the adapter builds no `output_config`.
+
+**Note:** On the default Anthropic API version `2026-10-21` an explicit temperature
+(or `top_p` / `top_k` in `SamplingParams`) is refused on every model before dispatch. With
+`Config.AnthropicVersion = llm.AnthropicVersion20230601` the Claude 4.6 and 4.5 models take
+it, and for manual extended thinking a temperature other than `1.0` is rejected. An omitted temperature stays omitted;
 the library does not rewrite an application's sampling value.
 
 If extended thinking is enabled, you can read it synchronously via `resp.Thinking` or asynchronously in a stream via `llm.EventThinking` and `event.Thinking`.
@@ -513,7 +576,9 @@ for event, err := range client.Stream(ctx, req) {
 **1-hour TTL.** Each cache marker takes an optional TTL: `CacheTTL: llm.CacheTTL1h` on a
 content part, tool or server tool, `SystemCacheTTL` for the system prompt (empty or
 `llm.CacheTTL5m` is the default five minutes). The API requires 1-hour markers to come
-before 5-minute ones. `Response.CacheCreation1hTokens` is the 1-hour share of
+before 5-minute ones. The adapter checks both rules before sending: a `CacheTTL` without
+`CacheControl`, or a 1-hour marker after a 5-minute one (in render order: tools, server
+tools, system, messages), is an error. `Response.CacheCreation1hTokens` is the 1-hour share of
 `CacheCreationTokens`; `EstimateCost` prices it at `CacheWrite1hPricePer1M` (2x input on
 Anthropic; a model without one gets 2x its input price) and the rest at the 5-minute
 write rate.
@@ -707,7 +772,9 @@ fmt.Printf("STT: $%.6f / $%.6f\n", sttCost, whisperCost)
 // model's WebSearchPricePer1K ($10 per 1,000 on the Claude API), without the
 // batch discount. With Iterations set, each iteration is priced at its own
 // model (a refusal fallback at the fallback model's rates) and the top-level
-// token fields are ignored; an iteration on an unpriced model adds 0.
+// token fields are ignored; an iteration on an unpriced model adds 0. Each
+// iteration's 1-hour cache share is priced at the 1-hour rate. With an
+// unregistered top-level model, searches use the first priced iteration's rate.
 searchCost := llm.EstimateCost(llm.CostInput{
     Model:             resp.Model,
     InputTokens:       resp.InputTokens,
@@ -769,7 +836,7 @@ delay := p.Delay(attempt)
 
 ### Structured output (JSON mode)
 
-Set `Request.ResponseFormat` to constrain output to JSON. Wired for OpenAI-compatible providers (`response_format`) and Gemini (`responseMimeType`/`responseSchema`); Anthropic has no native JSON mode (use a tool).
+Set `Request.ResponseFormat` to constrain output to JSON. Wired for OpenAI-compatible providers (`response_format`), OpenAI Responses (`text.format`), Gemini (`responseMimeType`/`responseSchema`) and Anthropic (`output_config.format`, next to the effort a `ThinkingLevel` sets; also in Message Batches). Anthropic takes `json_schema` only: `json_object` or a schema-less request is refused, and the schema must set `additionalProperties: false` on objects. Citations cannot be combined with it.
 
 ```go
 req.ResponseFormat = &llm.ResponseFormat{
@@ -1174,8 +1241,8 @@ if err != nil {
 | MaxRetries | int | 10 (`DefaultConfig`), 0 (struct literal) | Cap on retry/rotation iterations (min effective: 3); 0 = 3 attempts for single-key and modality/batch calls |
 | RetryBudget | Duration | 0 | Total wall-clock bound across one call's retries (0 = none) |
 | DisableRetries | bool | false | Exactly one transport attempt (caller owns retry) |
-| BetaFeatures | []string | ["interleaved-thinking-..."] | Provider beta flags (Anthropic: anthropic-beta header, sent on every request; the interleaved-thinking flag only with budget thinking) |
-| AnthropicVersion | string | "2023-06-01" | Override Anthropic API version header |
+| BetaFeatures | []string | ["interleaved-thinking-..."] | Provider beta flags (Anthropic: anthropic-beta header, sent on every request and on Message Batch creation; the interleaved-thinking flag only with budget thinking) |
+| AnthropicVersion | string | "2026-10-21" | Anthropic API version header; `llm.AnthropicVersion20230601` keeps temperature/top_p/top_k on the Claude 4.6 and 4.5 models |
 | MaxErrorBodyBytes | int | 1 MB | Cap on error response body reads |
 | MaxSSELineBytes | int | 256 KB | Cap on per-line SSE buffer |
 | MaxResponseBodyBytes | int | 32 MB | Cap on success response body reads |

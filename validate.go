@@ -158,3 +158,55 @@ func enumContains(enum []any, v any) bool {
 	}
 	return false
 }
+
+// ValidateCacheMarkers checks a request's prompt-cache markers in the order
+// Anthropic renders them (tools, system, messages): a CacheTTL needs its
+// CacheControl, and 1-hour entries must come before 5-minute ones, which the
+// API otherwise rejects with a 400.
+func ValidateCacheMarkers(req Request) error {
+	seen5m := false
+	check := func(where string, marked bool, ttl string) error {
+		if !marked {
+			if ttl != "" {
+				return fmt.Errorf("llm: %s sets CacheTTL %q without CacheControl", where, ttl)
+			}
+			return nil
+		}
+		switch ttl {
+		case CacheTTL1h:
+			if seen5m {
+				return fmt.Errorf("llm: %s has a 1h cache marker after a 5m one; 1h entries must come first (tools, system, messages)", where)
+			}
+		case "", CacheTTL5m:
+			seen5m = true
+		}
+		return nil
+	}
+	for _, tool := range req.Tools {
+		if err := check("tool "+tool.Name, tool.CacheControl, tool.CacheTTL); err != nil {
+			return err
+		}
+	}
+	for _, tool := range req.ServerTools {
+		if err := check("server tool "+tool.Name, tool.CacheControl, tool.CacheTTL); err != nil {
+			return err
+		}
+	}
+	if err := check("the system prompt", req.SystemCacheControl, req.SystemCacheTTL); err != nil {
+		return err
+	}
+	for i, msg := range req.Messages {
+		for _, part := range msg.Content {
+			where := fmt.Sprintf("message %d", i)
+			if err := check(where, part.CacheControl, part.CacheTTL); err != nil {
+				return err
+			}
+			for _, sub := range part.ToolResultParts {
+				if err := check(where+" tool result", sub.CacheControl, sub.CacheTTL); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}

@@ -276,7 +276,7 @@ func splitPrompt(promptTokens, cachedTokens int) (input, cacheRead int) {
 }
 
 // normalizeStopReason maps OpenAI finish reasons to the unified set
-// (end_turn, tool_use, max_tokens) used by the library interface.
+// (end_turn, tool_use, max_tokens, refusal) used by the library interface.
 func normalizeStopReason(reason string) string {
 	switch reason {
 	case "stop":
@@ -285,6 +285,8 @@ func normalizeStopReason(reason string) string {
 		return "tool_use"
 	case "length":
 		return "max_tokens"
+	case "content_filter":
+		return llm.StopRefusal
 	default:
 		return reason
 	}
@@ -378,6 +380,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 				case llm.ContentDocument:
 					if err := llm.ValidateDocumentSource(part); err != nil {
 						return openaiRequest{}, err
+					}
+					if llm.IsTextDocument(part) {
+						return openaiRequest{}, fmt.Errorf("%s: text documents are Anthropic-only; send the text as a text part", c.providerName)
 					}
 					docParts = append(docParts, part)
 				}
@@ -487,6 +492,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 			"%s adapter does not support ThinkingLevel (set on model %q); "+
 				"ThinkingLevel is only supported by anthropic and gemini providers",
 			c.providerName, apiReq.Model)
+	}
+	if req.Effort != "" {
+		return openaiRequest{}, fmt.Errorf("%s adapter does not support Effort (Chat Completions has no effort control here)", c.providerName)
 	}
 
 	// Configure stop sequences

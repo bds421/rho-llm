@@ -180,16 +180,22 @@ type UsageIteration struct {
 	OutputTokens        int    `json:"output_tokens"`
 	CacheCreationTokens int    `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadTokens     int    `json:"cache_read_input_tokens,omitempty"`
+	// CacheCreation1hTokens is the 1-hour share of CacheCreationTokens.
+	CacheCreation1hTokens int `json:"cache_creation_1h_input_tokens,omitempty"`
 }
 
-// UnsupportedServerTools returns an error when req sets ServerTools. Adapters
+// UnsupportedServerTools returns an error when req sets ServerTools or a
+// ContainerID (the container those tools run in). Adapters
 // without server tools call it so a request never silently loses a tool the
 // caller depends on (and pays for).
 func UnsupportedServerTools(provider string, req Request) error {
-	if len(req.ServerTools) == 0 {
-		return nil
+	if len(req.ServerTools) > 0 {
+		return fmt.Errorf("llm: provider %q does not support server tools (%s)", provider, req.ServerTools[0].Name)
 	}
-	return fmt.Errorf("llm: provider %q does not support server tools (%s)", provider, req.ServerTools[0].Name)
+	if req.ContainerID != "" {
+		return fmt.Errorf("llm: provider %q does not support ContainerID (an Anthropic server-tool container)", provider)
+	}
+	return nil
 }
 
 // Prompt-cache lifetimes for the CacheTTL fields (Anthropic). The 1-hour

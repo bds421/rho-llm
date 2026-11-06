@@ -24,7 +24,13 @@ const (
 	DefaultMaxBatchDownloadBytes = 256 << 20 // 256 MB — caps batch result-file downloads
 	DefaultMaxToolInputBytes     = 1 << 20   // 1 MB — caps accumulated tool input JSON
 	DefaultMaxErrorMessageLen    = 4096      // bytes — caps stored error message length
-	DefaultAnthropicVersion      = "2023-06-01"
+	// DefaultAnthropicVersion is the anthropic-version header sent unless
+	// Config.AnthropicVersion pins another. 2026-10-21 rejects temperature,
+	// top_p and top_k on every model, documents in assistant messages and
+	// citations on user text; AnthropicVersion20230601 keeps the old rules.
+	DefaultAnthropicVersion  = AnthropicVersion20261021
+	AnthropicVersion20261021 = "2026-10-21"
+	AnthropicVersion20230601 = "2023-06-01"
 )
 
 // Backward-compatible package-level vars — used as the process-wide fallback when
@@ -423,7 +429,9 @@ type Config struct {
 	BetaFeatures []string `json:"beta_features,omitempty"`
 
 	// AnthropicVersion overrides the Anthropic API version header.
-	// Default: DefaultAnthropicVersion ("2023-06-01").
+	// Default: DefaultAnthropicVersion ("2026-10-21"). Pin
+	// AnthropicVersion20230601 to keep temperature on the Claude 4.6 and 4.5
+	// models.
 	AnthropicVersion string `json:"anthropic_version,omitempty"`
 
 	// Safety limits — zero values use the corresponding Default* constants.
@@ -556,6 +564,12 @@ func (c Config) EffectiveAnthropicVersion() string {
 		return c.AnthropicVersion
 	}
 	return DefaultAnthropicVersion
+}
+
+// AnthropicStrictVersion reports whether the effective Anthropic API version
+// is 2026-10-21 or later (versions are dates, so they compare as strings).
+func (c Config) AnthropicStrictVersion() bool {
+	return c.EffectiveAnthropicVersion() >= AnthropicVersion20261021
 }
 
 // redactURLCredentials scrubs a credential embedded in a URL — userinfo

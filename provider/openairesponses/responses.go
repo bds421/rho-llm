@@ -466,7 +466,7 @@ type responsesRequest struct {
 }
 
 type responsesReasoning struct {
-	Effort  string `json:"effort"`
+	Effort  string `json:"effort,omitempty"`
 	Summary string `json:"summary,omitempty"`
 }
 
@@ -620,21 +620,18 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 			"provider", c.providerName, "model", model)
 	}
 
-	// Set reasoning effort and optional summary
-	if thinkingLevel != llm.ThinkingNone {
-		effort := string(thinkingLevel)
-		if thinkingLevel == llm.ThinkingMax {
-			// The Responses API has no "max" effort; xhigh is its deepest.
-			effort = string(llm.ThinkingXHigh)
-		}
-		reasoning := &responsesReasoning{Effort: effort}
-		if req.ReasoningSummary != llm.ReasoningSummaryNone {
-			reasoning.Summary = string(req.ReasoningSummary)
-		}
-		apiReq.Reasoning = reasoning
-	} else if req.ReasoningSummary != llm.ReasoningSummaryNone {
-		// Summary can be set even without an explicit effort level
-		apiReq.Reasoning = &responsesReasoning{Summary: string(req.ReasoningSummary)}
+	// Set reasoning effort and optional summary. ReasoningSummaryOmitted asks
+	// for no summary, the same as leaving it unset.
+	effort, err := reasoningEffort(thinkingLevel, req.Effort)
+	if err != nil {
+		return responsesRequest{}, err
+	}
+	summary := req.ReasoningSummary
+	if summary == llm.ReasoningSummaryOmitted {
+		summary = llm.ReasoningSummaryNone
+	}
+	if effort != "" || summary != llm.ReasoningSummaryNone {
+		apiReq.Reasoning = &responsesReasoning{Effort: effort, Summary: string(summary)}
 	}
 
 	// Add system message
@@ -866,6 +863,9 @@ func responseStopReasons(resp *responsesResponse) (normalized, raw string) {
 	case "incomplete":
 		if resp.IncompleteDetails != nil && resp.IncompleteDetails.Reason != "" {
 			raw = resp.IncompleteDetails.Reason
+			if raw == "content_filter" {
+				return llm.StopRefusal, raw
+			}
 			if raw != "max_output_tokens" {
 				return raw, raw
 			}
@@ -930,4 +930,27 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 	}
 
 	return resp
+}
+
+// reasoningEffort returns reasoning.effort from the ThinkingLevel or
+// Request.Effort; both set must agree. The Responses API has no "max"
+// effort, so max sends xhigh, its deepest.
+func reasoningEffort(level llm.ThinkingLevel, effort llm.Effort) (string, error) {
+	if !effort.Valid() {
+		return "", fmt.Errorf("openairesponses: unknown Effort %q", effort)
+	}
+	fromLevel := ""
+	if level != llm.ThinkingNone {
+		fromLevel = string(level)
+	}
+	if effort != "" {
+		if fromLevel != "" && fromLevel != string(effort) {
+			return "", fmt.Errorf("openairesponses: ThinkingLevel %q conflicts with Effort %q; set one", level, effort)
+		}
+		fromLevel = string(effort)
+	}
+	if fromLevel == string(llm.ThinkingMax) {
+		fromLevel = string(llm.ThinkingXHigh)
+	}
+	return fromLevel, nil
 }

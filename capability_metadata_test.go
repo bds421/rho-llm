@@ -183,7 +183,7 @@ func TestTemperatureCapabilityIsRequiredOnlyWhenExplicit(t *testing.T) {
 
 func TestAnthropicReasoningRejectsIncompatibleExplicitTemperature(t *testing.T) {
 	cfg := Config{
-		Provider: "anthropic", Model: "tenant/claude",
+		Provider: "anthropic", Model: "tenant/claude", AnthropicVersion: AnthropicVersion20230601,
 		ModelCapabilities: Capabilities(CapabilityChat, CapabilityReasoning, CapabilityTemperature),
 	}
 	for _, tc := range []struct {

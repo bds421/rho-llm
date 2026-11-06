@@ -264,6 +264,11 @@ func ValidateRequestCapabilities(cfg Config, req Request, stream bool) error {
 	if err != nil {
 		return err
 	}
+	if profile.Protocol == "anthropic" {
+		if err := AnthropicSamplingError(cfg, req); err != nil {
+			return err
+		}
+	}
 	if profile.Protocol == "anthropic" &&
 		effectiveReq.ThinkingLevel != ThinkingNone &&
 		req.Temperature != nil && *req.Temperature != 1.0 {
@@ -287,7 +292,7 @@ func appendCapability(values []Capability, value Capability) []Capability {
 func protocolCapabilityEnvelope(protocol string) CapabilitySet {
 	switch protocol {
 	case "anthropic":
-		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityVision, CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature, CapabilityBatch)
+		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature, CapabilityBatch)
 	case "gemini":
 		return Capabilities(
 			CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput,
@@ -346,8 +351,9 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 	}
 	switch canonicalProvider(info.Provider) {
 	case "anthropic":
-		// Native PDF + vision; Message Batches for chat. Structured JSON is tool-shaped.
-		set |= Capabilities(CapabilityVision, CapabilityDocumentInput, CapabilityBatch)
+		// Native PDF + vision, JSON-schema output (output_config.format) on every
+		// current Claude model; Message Batches for chat.
+		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch)
 	case "gemini":
 		// Multimodal chat + batch; dedicated embedding/image models set their own bits.
 		// Gemini chat models accept audio natively, so they transcribe via generateContent.
@@ -374,6 +380,8 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 func supportsSamplingTemperature(info ModelInfo) bool {
 	// Claude 4.7+ reject temperature/top_p/top_k (Sonnet 5.5 and Haiku 5.5
 	// reject non-default values), so no explicit temperature can be honored.
+	// This is the model side; API version 2026-10-21 rejects them on every
+	// model (ValidateRequestCapabilities checks the version).
 	if _, denied := anthropicWithoutSamplingControls[info.ID]; denied {
 		return false
 	}
@@ -417,4 +425,32 @@ var geminiWithoutSamplingControls = map[string]struct{}{
 	"gemini-3.6-flash":      {},
 	"gemini-3.7-flash":      {},
 	"gemini-3.8-flash":      {},
+}
+
+// errAnthropicSampling is the error for a sampling setting that Anthropic API
+// version 2026-10-21 rejects on every model.
+func errAnthropicSampling(field string) error {
+	return fmt.Errorf(
+		"llm: Anthropic API version %s rejects %s on every model; leave it unset, "+
+			"or pin Config.AnthropicVersion = llm.AnthropicVersion20230601 (Claude 4.6 and 4.5 accept it there)",
+		AnthropicVersion20261021, field,
+	)
+}
+
+// AnthropicSamplingError returns the error for a sampling setting (Temperature,
+// or temperature / top_p / top_k in SamplingParams) under cfg's Anthropic API
+// version, or nil when that version still accepts it.
+func AnthropicSamplingError(cfg Config, req Request) error {
+	if !cfg.AnthropicStrictVersion() {
+		return nil
+	}
+	if req.Temperature != nil {
+		return errAnthropicSampling("Temperature")
+	}
+	for _, key := range []string{"temperature", "top_p", "top_k"} {
+		if _, ok := req.SamplingParams[key]; ok {
+			return errAnthropicSampling("SamplingParams[" + key + "]")
+		}
+	}
+	return nil
 }

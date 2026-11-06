@@ -378,6 +378,9 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				if err := llm.ValidateDocumentSource(part); err != nil {
 					return geminiRequest{}, err
 				}
+				if llm.IsTextDocument(part) {
+					return geminiRequest{}, fmt.Errorf("gemini: text documents are Anthropic-only; send the text as a text part")
+				}
 				content.Parts = append(content.Parts, geminiPart{
 					InlineData: &geminiInlineData{
 						MimeType: part.Document.MediaType,
@@ -430,6 +433,9 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	}
 
 	// Configure thinking
+	if req.Effort != "" {
+		return geminiRequest{}, fmt.Errorf("gemini: Effort is not supported; use ThinkingLevel")
+	}
 	thinkingLevel := req.ThinkingLevel
 	if thinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
 		thinkingLevel = c.config.ThinkingLevel
@@ -714,7 +720,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 }
 
 // normalizeStopReason maps Gemini finish reasons to the unified set
-// (end_turn, tool_use, max_tokens) used by the library interface.
+// (end_turn, tool_use, max_tokens, refusal) used by the library interface.
 func normalizeStopReason(reason string) string {
 	switch reason {
 	case "STOP":
@@ -723,6 +729,8 @@ func normalizeStopReason(reason string) string {
 		return "tool_use"
 	case "MAX_TOKENS":
 		return "max_tokens"
+	case "SAFETY", "PROHIBITED_CONTENT":
+		return llm.StopRefusal
 	default:
 		return reason
 	}

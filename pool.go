@@ -612,8 +612,10 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 
 			for event, err := range rc.client.Stream(ctx, req) {
 				if err != nil {
-					if firstEvent && (IsRetryable(err) || IsAuthError(err)) {
-						// Connection failed before any data — safe to retry
+					if firstEvent && event.Type == "" && (IsRetryable(err) || IsAuthError(err)) {
+						// Connection failed before any data — safe to retry. An
+						// error event with usage (the provider started and billed the
+						// attempt) is passed on instead, so that cost is not lost.
 						lastErr = err
 						retryable = true
 						break
@@ -639,7 +641,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 						pc.breaker.ReleaseProbe(probeTok)
 					}
 					rc.Release()
-					yield(StreamEvent{}, err)
+					yield(event, err)
 					return
 				}
 				firstEvent = false

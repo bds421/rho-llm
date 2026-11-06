@@ -298,3 +298,230 @@ func wireTypes(t *testing.T, cfg *llm.Config) {
 	t.Cleanup(srv.Close)
 	cfg.BaseURL = srv.URL + "/v1"
 }
+
+var livePersonSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"domain":  map[string]any{"type": "string"},
+		"purpose": map[string]any{"type": "string"},
+	},
+	"required":             []any{"domain", "purpose"},
+	"additionalProperties": false,
+}
+
+// ResponseFormat as output_config.format: with adaptive thinking and effort,
+// without thinking, on Sonnet 5.5 (between_tools) and on a budget model.
+func TestLiveAnthropicStructuredOutput(t *testing.T) {
+	cases := []struct {
+		model string
+		level llm.ThinkingLevel
+	}{
+		{liveHaiku, llm.ThinkingLow},
+		{liveHaiku, llm.ThinkingNone},
+		{liveSonnet, llm.ThinkingNone},
+		{"claude-haiku-4-5", llm.ThinkingNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.model+"/"+string(tc.level), func(t *testing.T) {
+			c := liveClient(t, tc.model, 400)
+			resp, err := c.Complete(liveCtx(t), llm.Request{
+				ThinkingLevel:  tc.level,
+				ResponseFormat: &llm.ResponseFormat{Type: llm.ResponseFormatJSONSchema, Schema: livePersonSchema},
+				Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "What is example.com for? One short phrase.")},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			logResponse(t, tc.model, resp)
+			var out struct{ Domain, Purpose string }
+			if err := json.Unmarshal([]byte(resp.Content), &out); err != nil || out.Purpose == "" {
+				t.Errorf("not schema JSON: %q (%v)", resp.Content, err)
+			}
+		})
+	}
+}
+
+// A plain-text document with title, context and a cache marker.
+func TestLiveAnthropicTextDocument(t *testing.T) {
+	c := liveClient(t, liveHaiku, 200)
+	doc := llm.NewTextDocument("Reserved names", "The domains example.com, example.net and example.org are reserved for use in documentation (RFC 2606).")
+	doc.Context = "A public registry note."
+	doc.CacheControl = true
+	resp, err := c.Complete(liveCtx(t), llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{
+		doc, {Type: llm.ContentText, Text: "According to the document, which RFC reserves these names? Answer with the RFC only."},
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logResponse(t, "text document", resp)
+	if !strings.Contains(resp.Content, "2606") {
+		t.Errorf("answer %q does not use the document", resp.Content)
+	}
+}
+
+// display: unset sends "summarized" (readable thinking), ReasoningSummaryAuto
+// leaves it off and gets the API default ("omitted": empty thinking text).
+func TestLiveAnthropicThinkingDisplay(t *testing.T) {
+	for _, summary := range []llm.ReasoningSummary{llm.ReasoningSummaryNone, llm.ReasoningSummaryAuto, llm.ReasoningSummaryOmitted} {
+		t.Run("summary="+string(summary), func(t *testing.T) {
+			c := liveClient(t, liveHaiku, 3000)
+			resp, err := c.Complete(liveCtx(t), llm.Request{
+				ThinkingLevel: llm.ThinkingHigh, ReasoningSummary: summary,
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "Think it through, then answer with the number only: 17 * 23 - 4 * 19.")},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			logResponse(t, "display", resp)
+			blocks := 0
+			for _, p := range resp.Parts {
+				if p.Type == llm.ContentThinking {
+					blocks++
+				}
+			}
+			t.Logf("thinking blocks=%d thinking chars=%d", blocks, len(resp.Thinking))
+		})
+	}
+}
+
+// EventDone names the answering model; CollectStream folds the stream.
+func TestLiveAnthropicStreamModel(t *testing.T) {
+	c := liveClient(t, liveHaiku, 32)
+	resp, err := llm.CollectStream(c.Stream(liveCtx(t), llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "Reply with the single word: ok")},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logResponse(t, "stream", resp)
+	if resp.Model == "" || resp.InputTokens <= 0 {
+		t.Errorf("stream response lacks model or usage: %+v", resp)
+	}
+}
+
+// Typed Effort without thinking: Haiku 5.5 (thinking disabled), Sonnet 5.5
+// (between_tools), Opus 5.5 (thinking always on), with a schema on Haiku.
+func TestLiveAnthropicEffort(t *testing.T) {
+	for _, tc := range []struct {
+		model  string
+		effort llm.Effort
+		format bool
+	}{
+		{liveHaiku, llm.EffortLow, true},
+		{liveSonnet, llm.EffortMedium, false},
+		{liveOpus, llm.EffortLow, false},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			c := liveClient(t, tc.model, 200)
+			req := llm.Request{Effort: tc.effort,
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "What is example.com for? One short phrase.")}}
+			if tc.format {
+				req.ResponseFormat = &llm.ResponseFormat{Type: llm.ResponseFormatJSONSchema, Schema: livePersonSchema}
+			}
+			resp, err := c.Complete(liveCtx(t), req)
+			if err != nil {
+				t.Fatalf("rejected: %v", err)
+			}
+			logResponse(t, tc.model, resp)
+		})
+	}
+}
+
+// API version 2023-06-01 pinned: temperature still reaches Haiku 4.5.
+func TestLiveAnthropicPinnedOldVersion(t *testing.T) {
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key == "" {
+		t.Skip("ANTHROPIC_API_KEY not set")
+	}
+	c, err := anthropic.New(llm.Config{Provider: "anthropic", Model: "claude-haiku-4-5", APIKey: key, MaxTokens: 16,
+		Timeout: time.Minute, AnthropicVersion: llm.AnthropicVersion20230601})
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := 0.2
+	resp, err := c.Complete(liveCtx(t), llm.Request{Temperature: &temp,
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "Reply with the single word: ok")}})
+	if err != nil {
+		t.Fatalf("rejected: %v", err)
+	}
+	logResponse(t, "pinned 2023-06-01", resp)
+}
+
+// Message Batch creation on the default version with a schema and a beta;
+// waits up to four minutes for the one item, then cancels.
+func TestLiveAnthropicBatch(t *testing.T) {
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key == "" {
+		t.Skip("ANTHROPIC_API_KEY not set")
+	}
+	bc, err := llm.NewBatchClient(llm.Config{Provider: "anthropic", Model: liveHaiku, APIKey: key, Timeout: time.Minute,
+		BetaFeatures: []string{"server-side-fallback-2026-07-01"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	h, err := bc.Submit(ctx, []llm.BatchItem{{ItemID: "item-1", Request: &llm.Request{Model: liveHaiku, MaxTokens: 200, Effort: llm.EffortLow,
+		ResponseFormat: &llm.ResponseFormat{Type: llm.ResponseFormatJSONSchema, Schema: livePersonSchema},
+		Messages:       []llm.Message{llm.NewTextMessage(llm.RoleUser, "What is example.com for? One short phrase.")}}}},
+		llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("batch rejected: %v", err)
+	}
+	t.Logf("batch %s created, status %s", h.ID, h.Status)
+	deadline := time.Now().Add(4 * time.Minute)
+	for time.Now().Before(deadline) {
+		got, err := bc.Get(ctx, *h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status == llm.BatchCompleted {
+			results, err := bc.Results(ctx, *got)
+			if err != nil || len(results) != 1 || results[0].Response == nil {
+				t.Fatalf("results %+v, %v", results, err)
+			}
+			var u llm.Usage
+			u.AddBatchResponse(results[0].Response)
+			t.Logf("batch result: %q in=%d out=%d cost=$%.6f", results[0].Response.Content,
+				results[0].Response.InputTokens, results[0].Response.OutputTokens, u.Cost)
+			return
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(15 * time.Second):
+		}
+	}
+	if _, err := bc.Cancel(ctx, *h); err != nil {
+		t.Logf("cancel: %v", err)
+	}
+	t.Log("batch still running after four minutes; cancelled (creation was the check)")
+}
+
+// Streamed web search through a Session: server tool events, citations and
+// usage on EventDone, and the streamed turn accepted as history.
+func TestLiveAnthropicStreamedWebSearch(t *testing.T) {
+	c := liveClient(t, liveHaiku, 500)
+	s := llm.NewSession(c, llm.WithServerTools(liveSearch))
+	var serverEvents, citations int
+	for ev, err := range s.Stream(liveCtx(t), "Search the web once: what is example.org reserved for, according to IANA? One sentence.") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch ev.Type {
+		case llm.EventServerTool:
+			serverEvents++
+		case llm.EventCitation:
+			citations++
+		case llm.EventDone:
+			t.Logf("done: model=%s stop=%s in=%d out=%d searches=%d parts=%d", ev.Model, ev.StopReason, ev.InputTokens, ev.OutputTokens, ev.ServerToolUse.WebSearchRequests, len(ev.Parts))
+		}
+	}
+	t.Logf("server tool events=%d citations=%d", serverEvents, citations)
+	next, err := s.Send(liveCtx(t), "In at most five words: which organisation?")
+	if err != nil {
+		t.Fatalf("streamed turn rejected as history: %v", err)
+	}
+	logResponse(t, "after stream", next)
+	t.Logf("session total cost=$%.6f", s.Usage().Cost)
+}

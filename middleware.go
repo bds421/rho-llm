@@ -145,7 +145,7 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 		for event, err := range l.inner.Stream(ctx, req) {
 			if err != nil {
 				streamErr = err
-				yield(StreamEvent{}, err)
+				yield(event, err)
 				return
 			}
 			switch event.Type {

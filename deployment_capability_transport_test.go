@@ -110,6 +110,7 @@ func TestAnthropicReasoningTemperatureConflictFailsBeforeTransport(t *testing.T)
 
 	client, err := llm.NewClient(llm.Config{
 		Provider: "anthropic", Model: "tenant/claude", APIKey: "test",
+		AnthropicVersion: llm.AnthropicVersion20230601,
 		ModelCapabilities: llm.Capabilities(
 			llm.CapabilityChat, llm.CapabilityReasoning, llm.CapabilityTemperature,
 		),

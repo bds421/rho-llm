@@ -215,7 +215,36 @@ type anthropicUsage struct {
 		WebFetchRequests      int `json:"web_fetch_requests"`
 		CodeExecutionRequests int `json:"code_execution_requests"`
 	} `json:"server_tool_use"`
-	Iterations []llm.UsageIteration `json:"iterations,omitempty"`
+	Iterations []anthropicIteration `json:"iterations,omitempty"`
+}
+
+// anthropicIteration is one usage.iterations entry; its cache_creation split
+// is flattened into the neutral UsageIteration.
+type anthropicIteration struct {
+	Type                string `json:"type"`
+	Model               string `json:"model,omitempty"`
+	InputTokens         int    `json:"input_tokens"`
+	OutputTokens        int    `json:"output_tokens"`
+	CacheCreationTokens int    `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadTokens     int    `json:"cache_read_input_tokens,omitempty"`
+	CacheCreation       struct {
+		Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
+}
+
+func (u anthropicUsage) iterations() []llm.UsageIteration {
+	if len(u.Iterations) == 0 {
+		return nil
+	}
+	out := make([]llm.UsageIteration, len(u.Iterations))
+	for i, it := range u.Iterations {
+		out[i] = llm.UsageIteration{
+			Type: it.Type, Model: it.Model, InputTokens: it.InputTokens, OutputTokens: it.OutputTokens,
+			CacheCreationTokens: it.CacheCreationTokens, CacheReadTokens: it.CacheReadTokens,
+			CacheCreation1hTokens: it.CacheCreation.Ephemeral1h,
+		}
+	}
+	return out
 }
 
 func (u anthropicUsage) serverToolUse() llm.ServerToolUsage {

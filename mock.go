@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"iter"
-	"strings"
 	"sync"
 )
 
@@ -229,31 +228,14 @@ func mockResponseToEvents(r *Response) []StreamEvent {
 // assembleMockResponse folds a scripted event stream into a Response, mirroring
 // how Session.Stream reassembles a turn.
 func assembleMockResponse(events []StreamEvent, model string) *Response {
-	r := &Response{Model: model}
-	var text, thinking strings.Builder
+	var acc StreamAccumulator
 	for _, ev := range events {
-		switch ev.Type {
-		case EventContent:
-			text.WriteString(ev.Text)
-		case EventThinking:
-			thinking.WriteString(ev.Thinking)
-		case EventToolUse:
-			if ev.ToolCall != nil {
-				r.ToolCalls = append(r.ToolCalls, *ev.ToolCall)
-			}
-		case EventDone:
-			r.StopReason = ev.StopReason
-			r.InputTokens = ev.InputTokens
-			r.OutputTokens = ev.OutputTokens
-			r.ThinkingTokens = ev.ThinkingTokens
-			r.ThinkingSignature = ev.ThinkingSignature
-			r.ThinkingRedacted = ev.ThinkingRedacted
-			r.CacheCreationTokens = ev.CacheCreationTokens
-			r.CacheReadTokens = ev.CacheReadTokens
-		}
+		acc.Add(ev)
 	}
-	r.Content = text.String()
-	r.Thinking = thinking.String()
+	r := acc.Response()
+	if r.Model == "" {
+		r.Model = model
+	}
 	if r.StopReason == "" {
 		r.StopReason = StopEndTurn
 	}

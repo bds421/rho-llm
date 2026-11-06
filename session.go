@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"iter"
-	"strings"
 	"sync"
 )
 
@@ -213,65 +212,25 @@ func (s *Session) stream(ctx context.Context, msgs []Message, continuation bool)
 			return
 		}
 
-		var (
-			text, thinking   strings.Builder
-			thinkingSig      string
-			thinkingRedacted bool
-			toolCalls        []ToolCall
-			final            StreamEvent
-			sawDone          bool
-		)
+		var acc StreamAccumulator
 		for ev, err := range client.Stream(ctx, req) {
 			if err != nil {
-				yield(StreamEvent{}, err)
-				return // do not record a partial/failed turn
+				// Pass the event on: after a provider reported usage it carries
+				// what the broken turn cost. The turn itself is not recorded.
+				yield(ev, err)
+				return
 			}
-			switch ev.Type {
-			case EventContent:
-				text.WriteString(ev.Text)
-			case EventThinking:
-				thinking.WriteString(ev.Thinking)
-			case EventToolUse:
-				if ev.ToolCall != nil {
-					toolCalls = append(toolCalls, *ev.ToolCall)
-				}
-			case EventDone:
-				final, sawDone = ev, true
-				if ev.ThinkingSignature != "" {
-					thinkingSig = ev.ThinkingSignature
-				}
-				if ev.ThinkingRedacted {
-					thinkingRedacted = true
-				}
-			}
+			acc.Add(ev)
 			if !yield(ev, nil) {
 				return // caller broke; leave the conversation unchanged
 			}
 		}
-		if !sawDone {
+		if !acc.Done() {
 			return // stream ended without a clean completion; don't record it
 		}
-
-		resp := &Response{
-			Model:                 req.Model,
-			Content:               text.String(),
-			Thinking:              thinking.String(),
-			ThinkingSignature:     thinkingSig,
-			ThinkingRedacted:      thinkingRedacted,
-			ToolCalls:             toolCalls,
-			StopReason:            final.StopReason,
-			RawStopReason:         final.RawStopReason,
-			InputTokens:           final.InputTokens,
-			OutputTokens:          final.OutputTokens,
-			ThinkingTokens:        final.ThinkingTokens,
-			CacheCreationTokens:   final.CacheCreationTokens,
-			CacheReadTokens:       final.CacheReadTokens,
-			CacheCreation1hTokens: final.CacheCreation1hTokens,
-			StopDetails:           final.StopDetails,
-			ServerToolUse:         final.ServerToolUse,
-			Iterations:            final.Iterations,
-			Parts:                 final.Parts,
-			ContainerID:           final.ContainerID,
+		resp := acc.Response()
+		if resp.Model == "" {
+			resp.Model = req.Model
 		}
 		s.commitTurn(msgs, provider, resp)
 	}
@@ -304,8 +263,8 @@ func (s *Session) prepareTurn(msgs []Message, continuation bool) (Request, Clien
 		req.Model = client.Model()
 	}
 	req.Messages = NormalizeForModel(combined, provider, req.Model)
-	if continuation && req.ContainerID == "" {
-		req.ContainerID = container
+	if continuation {
+		keepContainer(&req, container)
 	}
 	return req, client, provider, nil
 }

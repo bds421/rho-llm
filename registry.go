@@ -103,6 +103,10 @@ var modelRegistry = map[string]ModelInfo{
 	// page sets it per model (Fable 5.1 $0.25, Opus 5.5 $0.20, Sonnet 5.5 $0.10).
 	// 1-hour cache writes: 2× input (same page, 2026-11-06).
 	// Web search: $10 per 1,000 searches, on top of tokens (same page, 2026-11-06).
+	// Sampling: API version 2026-10-21 (DefaultAnthropicVersion) rejects
+	// temperature, top_p and top_k on every model; on a pinned 2023-06-01 only
+	// the 4.6 and 4.5 rows accept them (anthropicWithoutSamplingControls).
+	// Structured output (output_config.format) and documents: every row.
 	// Claude 5 family (no minor segment in major-version IDs).
 	"claude-fable-5-1":  {ID: "claude-fable-5-1", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheWrite1hPricePer1M: 20.00, CacheReadPricePer1M: 0.25, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Fable 5.1"},
 	"claude-opus-5-5":   {ID: "claude-opus-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 4.00, OutputPricePer1M: 20.00, CacheWritePricePer1M: 5.00, CacheWrite1hPricePer1M: 8.00, CacheReadPricePer1M: 0.20, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 5.5"},
@@ -890,6 +894,10 @@ type CostInput struct {
 // would overflow saturates at math.MaxFloat64.
 func EstimateCost(input CostInput) float64 {
 	info, ok := pricingFor(input.Model)
+	// Searches are billed per request at the top-level model's rate, or at
+	// the first priced iteration model's when the top-level model is
+	// unregistered.
+	searchInfo, searchPriced := info, ok
 	var total float64
 	if len(input.Iterations) > 0 {
 		for _, it := range input.Iterations {
@@ -901,19 +909,23 @@ func EstimateCost(input CostInput) float64 {
 			if !known {
 				continue
 			}
+			if !searchPriced {
+				searchInfo, searchPriced = itInfo, true
+			}
 			total += tokenCost(itInfo, CostInput{
-				InputTokens:       it.InputTokens,
-				OutputTokens:      it.OutputTokens,
-				CacheCreateTokens: it.CacheCreationTokens,
-				CacheReadTokens:   it.CacheReadTokens,
-				Batch:             input.Batch,
+				InputTokens:         it.InputTokens,
+				OutputTokens:        it.OutputTokens,
+				CacheCreateTokens:   it.CacheCreationTokens,
+				CacheReadTokens:     it.CacheReadTokens,
+				CacheCreate1hTokens: it.CacheCreation1hTokens,
+				Batch:               input.Batch,
 			})
 		}
 	} else if ok {
 		total = tokenCost(info, input)
 	}
-	if ok && input.WebSearchRequests > 0 {
-		total += float64(input.WebSearchRequests) * sanitizePrice(info.WebSearchPricePer1K) / 1000
+	if searchPriced && input.WebSearchRequests > 0 {
+		total += float64(input.WebSearchRequests) * sanitizePrice(searchInfo.WebSearchPricePer1K) / 1000
 	}
 	return saturateCost(total)
 }

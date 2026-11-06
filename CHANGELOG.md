@@ -7,6 +7,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-06
+
+Anthropic API version `2026-10-21` by default, following the migration guide
+(platform.claude.com/docs/en/api/migration-2026-10-21), and the Anthropic
+adapter checked field by field against the generic `Request` / `Response` and
+the current API (structured outputs, citations and documents, adaptive thinking
+and effort, prompt caching, streaming; 2026-11-06), plus the gaps a review of
+v0.12.0/0.12.1 found. Live-tested on `2026-10-21` (Haiku 5.5 mostly; Sonnet 5.5,
+Opus 5.5 and Haiku 4.5 where the behaviour needs them): streaming, tools, web
+search streamed and not, caching, structured output, effort, text documents,
+refusal fallback, Message Batch creation and results, and a pinned `2023-06-01`.
+See "Upgrading to v0.13.0" in the README.
+The guide's Admin and Analytics API changes do not apply (rho-llm calls none of
+those endpoints), nor its SDK changes: the adapter is raw HTTP and keeps
+`x-api-key`.
+
+### Breaking
+
+- **`anthropic-version: 2026-10-21` is the default** (`DefaultAnthropicVersion`;
+  `AnthropicVersion20261021`, `AnthropicVersion20230601`). On it the adapter
+  refuses, before sending, what the version rejects with a 400:
+  `Request.Temperature` and `temperature` / `top_p` / `top_k` in
+  `SamplingParams` (every model), a document in an assistant message, and
+  citations on user text (also inside a tool result). `Config.AnthropicVersion =
+  AnthropicVersion20230601` keeps the old rules; Claude 4.6 and 4.5 then take a
+  temperature again. `ValidateRequestCapabilities` checks the version.
+  Batches created before the switch finish under their old version.
+- **`ResponseFormat` `json_object` on Anthropic is refused** (and a json_schema
+  without a schema); the API constrains output only to a schema.
+- **Direct clients check capabilities.** `anthropic.New` and the Anthropic batch
+  client run `ValidateRequestCapabilities`; an unregistered model needs
+  `Config.ModelCapabilities`.
+- **`Effort` and `ThinkingLevel` must agree** where the level sets the effort
+  (Claude 4.7 and later).
+- **`ContainerID`** is refused by adapters without server tools, and
+  **`CachedContent`** (a Gemini cache name) by Anthropic: a fallback chain that
+  reuses one `Request` across Gemini and Anthropic with either set now fails.
+- **`CacheTTL` without `CacheControl`** is an error, and so is a 1-hour cache
+  marker after a 5-minute one.
+- **`ReasoningSummaryAuto` no longer sends `display: "summarized"`** on
+  Anthropic: Claude 4.7 and later then return empty thinking text (the API
+  default). Leave `ReasoningSummary` unset for readable summaries.
+- **Gemini and OpenAI refusals arrive as `StopRefusal`** (`SAFETY`,
+  `PROHIBITED_CONTENT`, `content_filter`); read `RawStopReason` for the
+  provider value.
+- **`Session` records the answering model** (`EventDone.Model`) as a streamed
+  turn's model, the fallback model after a server-side refusal fallback.
+
+### Deprecated
+
+- `SamplingParams["output_config"]` for Anthropic effort: use `Request.Effort`.
+  It still passes through when the adapter builds no `output_config`.
+
+### Added
+
+- **Structured output on Anthropic.** `Request.ResponseFormat` (json_schema) is
+  sent as `output_config.format`, next to the effort a `ThinkingLevel` sets, on
+  the live and the Message Batch path. `json_object` and a schema-less request
+  are refused (the API has no schema-less JSON mode). Anthropic models now
+  advertise `CapabilityStructuredOutput`. Before, the schema was dropped on the
+  direct `anthropic.New` and batch paths and refused through the factory.
+- **`Request.Effort`** (`EffortLow` ... `EffortMax`): Anthropic
+  `output_config.effort` and OpenAI Responses `reasoning.effort` without asking
+  for thinking. It must agree with a `ThinkingLevel` that sets the effort.
+  Refused where the API returns a 400: above `high` with thinking `disabled`
+  (Haiku 5.5, Opus 5) or `between_tools` (Sonnet 5.5), on Sonnet 4.5 and
+  Haiku 4.5, `xhigh` on the 4.6 models, `xhigh`/`max` on Opus 4.5. Gemini and
+  OpenAI-compatible adapters refuse it.
+- **Plain-text documents.** `DocumentSourceText` (`text/plain`, the text as
+  `Data`), `NewTextDocument`, `IsTextDocument`, and optional `ContentPart.Title`
+  / `Context` on any Anthropic document; cache markers as on other parts.
+  Gemini and OpenAI-compatible adapters refuse text documents.
+- **Thinking display choice.** `ReasoningSummaryOmitted` sends `display:
+  "omitted"`, `ReasoningSummaryAuto` leaves it off (the API default, "omitted"
+  on Claude 4.7 and later); unset keeps "summarized". Display changes what
+  comes back, not what is billed (live: 31 output tokens in all three cases).
+  OpenAI Responses treats `Omitted` as no summary.
+- **`StreamEvent.Model`** on `EventDone`: the model that answered (from
+  `message_start`; the fallback model after a server-side refusal fallback).
+  `Session.Stream` records it as the turn's model.
+- **`StreamAccumulator` and `CollectStream`.** The one fold from stream events
+  to a `Response`, used by `Session.Stream`, the mock and callers.
+  `ErrStreamIncomplete` when a stream ends without `EventDone`.
+- **`Response.SetParts`** derives `Content`, `Thinking`, its signature and
+  `ToolCalls` from `Parts`, so the two views cannot disagree; the Anthropic
+  parser and the stream fold use it.
+- **`ValidateCacheMarkers`**: a `CacheTTL` without `CacheControl`, or a 1-hour
+  marker after a 5-minute one (tools, server tools, system, messages), is
+  refused before the request instead of being dropped or returning a 400.
+- **`UsageIteration.CacheCreation1hTokens`**, parsed from each iteration's
+  `cache_creation`.
+
+### Fixed
+
+- **Streamed input tokens with server tools.** `message_delta` usage is
+  cumulative and carries every sampling step's input and cache counts; the
+  stream took them from `message_start` (the first step only). Live, a streamed
+  web search reported 2,850 input tokens where the turn had 20,846.
+- **A billed attempt is not retried away.** When a stream fails after the
+  provider reported usage but before any content, the auth pool no longer
+  retries silently: the `EventError` with the usage reaches the caller with the
+  error.
+### Fixed
+
+- **Usage on a broken stream.** An Anthropic stream that breaks after
+  `message_start` (read error, early EOF, oversized tool input, a mid-stream
+  `error` event) now yields its error together with an `EventError` carrying
+  the input and cache tokens, `message_start`'s output count and the content so
+  far. `Session.Stream`, the auth pool, logging and `StreamWithBoundaries` pass
+  that event on; the turn is still not recorded.
+- **Mid-stream `error` events** were ignored and surfaced as "stream ended
+  without completion". They are now an `*APIError` with the status the same
+  error has outside a stream (`overloaded_error` = 529, retryable), its message scrubbed of the API key like an HTTP error body.
+- **HTTP 529** (Anthropic overloaded) is retryable and `IsOverloaded`; 504 is
+  retryable.
+- **Capabilities on every path.** The direct `anthropic.New` client and the
+  Anthropic batch client now run `ValidateRequestCapabilities` (and the batch
+  capability per item), like the factory and the OpenAI batch client. A
+  direct client with an unregistered model now needs `Config.ModelCapabilities`.
+- **Batch betas.** Message Batch creation sends `Config.BetaFeatures` as
+  `anthropic-beta` (interleaved thinking only when an item uses budget
+  thinking).
+- **Pricing.** Each usage iteration's 1-hour cache share is priced at the
+  1-hour rate; web searches are priced at the first priced iteration's model
+  when the top-level model is unregistered.
+- **Refusals across providers.** Gemini `SAFETY` / `PROHIBITED_CONTENT` and
+  OpenAI `content_filter` (Chat Completions and Responses) map to
+  `StopRefusal`; `RawStopReason` keeps the provider value.
+- **`ContainerID`** is refused by adapters without server tools, like
+  `ServerTools`.
+- **`CachedContent`** (a Gemini cache name) is refused by the Anthropic
+  adapter instead of being dropped.
+- A v0.12.0 test sent a 1-hour marker after a 5-minute one; corrected.
+
+### Not changed
+
+- `RoleSystem` messages are still hoisted into the top-level `system`. Sending
+  them in place as `{"role":"system"}` (accepted by the API on Opus 4.8/5/5.5,
+  Fable, Sonnet 5.5, Haiku 5.5) was tried and dropped: live, Haiku 5.5 declined
+  an instruction placed there three times out of three and followed the same
+  instruction in the top-level system prompt.
 ## [0.12.1] - 2026-11-06
 
 ### Fixed

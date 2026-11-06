@@ -108,6 +108,7 @@ func (c *Client) Submit(ctx context.Context, items []llm.BatchItem, opts llm.Bat
 		Params   json.RawMessage `json:"params"`
 	}
 	requests := make([]batchReq, 0, len(items))
+	budgetThinking := false
 	digestParts := make([][]byte, 0, len(items))
 	for _, item := range items {
 		if err := item.Validate(); err != nil {
@@ -123,10 +124,17 @@ func (c *Client) Submit(ctx context.Context, items []llm.BatchItem, opts llm.Bat
 			return nil, fmt.Errorf("anthropicbatch: duplicate item_id %q", item.ItemID)
 		}
 		seen[item.ItemID] = struct{}{}
+		if err := llm.ValidateRequestCapabilities(c.cfg, *item.Request, false); err != nil {
+			return nil, fmt.Errorf("anthropicbatch: item %q: %w", item.ItemID, err)
+		}
+		if err := llm.RequireCapabilitiesForModel(c.cfg, item.Request.Model, llm.CapabilityBatch); err != nil {
+			return nil, fmt.Errorf("anthropicbatch: item %q: %w", item.ItemID, err)
+		}
 		params, err := c.translator.BuildMessageBatchParams(*item.Request)
 		if err != nil {
 			return nil, fmt.Errorf("anthropicbatch: item %q: %w", item.ItemID, err)
 		}
+		budgetThinking = budgetThinking || usesBudgetThinking(params)
 		requests = append(requests, batchReq{CustomID: item.ItemID, Params: params})
 		digestParts = append(digestParts, append([]byte(item.ItemID+"\n"), params...))
 	}
@@ -136,7 +144,7 @@ func (c *Client) Submit(ctx context.Context, items []llm.BatchItem, opts llm.Bat
 	}
 	digest := "sha256:" + hex.EncodeToString(sha256Sum(body))
 
-	resp, err := c.doJSONWithOptions(ctx, http.MethodPost, c.baseURL+"/messages/batches", body, llm.HTTPCallOptions{NonIdempotent: true})
+	resp, err := c.doJSONWithOptions(ctx, http.MethodPost, c.baseURL+"/messages/batches", body, anthropic.BetaFeatures(c.cfg.BetaFeatures, budgetThinking), llm.HTTPCallOptions{NonIdempotent: true})
 	if err != nil {
 		return nil, err
 	}
@@ -406,20 +414,23 @@ func (c *Client) parseResults(r io.Reader) ([]llm.BatchResult, error) {
 	return out, nil
 }
 
-func (c *Client) setHeaders(req *http.Request) {
+func (c *Client) setHeaders(req *http.Request, betas []string) {
 	req.Header.Set("x-api-key", c.cfg.APIKey)
 	req.Header.Set("anthropic-version", c.cfg.EffectiveAnthropicVersion())
 	req.Header.Set("Content-Type", "application/json")
+	if len(betas) > 0 {
+		req.Header.Set("anthropic-beta", strings.Join(betas, ","))
+	}
 }
 
 func (c *Client) doJSON(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
-	return c.doJSONWithOptions(ctx, method, url, body, llm.HTTPCallOptions{})
+	return c.doJSONWithOptions(ctx, method, url, body, nil, llm.HTTPCallOptions{})
 }
 
 // doJSONWithOptions lets batch creation mark its POST non-idempotent (H5):
 // a resend after a 5xx the provider already committed would submit — and
 // bill — a duplicate batch.
-func (c *Client) doJSONWithOptions(ctx context.Context, method, url string, body []byte, opts llm.HTTPCallOptions) (*http.Response, error) {
+func (c *Client) doJSONWithOptions(ctx context.Context, method, url string, body []byte, betas []string, opts llm.HTTPCallOptions) (*http.Response, error) {
 	return llm.DoHTTPWithOptions(ctx, c.cfg, c.httpClient, func(ctx context.Context) (*http.Request, error) {
 		var rdr io.Reader
 		if body != nil {
@@ -429,7 +440,7 @@ func (c *Client) doJSONWithOptions(ctx context.Context, method, url string, body
 		if err != nil {
 			return nil, err
 		}
-		c.setHeaders(req)
+		c.setHeaders(req, betas)
 		return req, nil
 	}, opts)
 }
@@ -459,4 +470,15 @@ func copyMetadata(in map[string]string) map[string]string {
 func sha256Sum(b []byte) []byte {
 	sum := sha256.Sum256(b)
 	return sum[:]
+}
+
+// usesBudgetThinking reports whether built params enable budget thinking, the
+// one case the interleaved-thinking beta is sent for.
+func usesBudgetThinking(params json.RawMessage) bool {
+	var p struct {
+		Thinking *struct {
+			Type string `json:"type"`
+		} `json:"thinking"`
+	}
+	return json.Unmarshal(params, &p) == nil && p.Thinking != nil && p.Thinking.Type == "enabled"
 }

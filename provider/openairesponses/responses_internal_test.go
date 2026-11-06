@@ -772,7 +772,7 @@ func TestParseResponseStopReasons(t *testing.T) {
 	}{
 		{"completed", "", "end_turn"},
 		{"incomplete", "max_output_tokens", "max_tokens"},
-		{"incomplete", "content_filter", "content_filter"},
+		{"incomplete", "content_filter", "refusal"},
 		{"incomplete", "", "max_tokens"},
 		{"failed", "", "error"},
 	}

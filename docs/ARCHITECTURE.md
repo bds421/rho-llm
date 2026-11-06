@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of November 2026 (v0.12.1).
+> **Status:** Reflects the current implementation as of November 2026 (v0.13.0).
 
 ---
 
@@ -16,7 +16,7 @@
 - Document/PDF support (`ContentDocument`: native on Gemini/Anthropic, data URI on OpenAI-compatible)
 - Extended thinking (Anthropic extended thinking, Gemini `thought_signature`)
 - Serializable conversations (`Conversation`) + a stateful `Session` driver with **cross-provider handoff** (`SwitchProvider`, `NormalizeForModel`); pluggable persistence (`Store`: `MemoryStore`/`FileStore`)
-- Structured output (JSON mode / JSON schema) on OpenAI-compatible + Gemini; tool-call validation; fine-grained streaming boundaries (`StreamWithBoundaries`)
+- Structured output (JSON mode / JSON schema) on OpenAI-compatible, OpenAI Responses, Gemini and Anthropic (`output_config.format`, json_schema only); typed `Request.Effort` (Anthropic `output_config.effort`, Responses `reasoning.effort`); tool-call validation; fine-grained streaming boundaries (`StreamWithBoundaries`)
 - Registered `ModalityClient` adapters for embeddings, image generation, speech,
   and transcription; OpenAI-compatible and Gemini modality drivers
 - Multi-vendor `BatchClient` (OpenAI Files+Batches, Anthropic Message Batches, Gemini Batch)
@@ -203,11 +203,13 @@ Gemini uses `inlineData` parts; OpenAI-compatible uses `image_url` data URIs; an
 OpenAI Responses uses `input_image`. Supported media types: `image/jpeg`,
 `image/png`, `image/gif`, `image/webp`.
 
-`ContentDocument` parts carry inline PDFs (base64), validated via `ValidateDocumentSource()`. Gemini serializes them as `inlineData` and Anthropic as native `document` blocks (both parse the PDF text layer); OpenAI-compatible adapters emit an `image_url` data URI for vision models such as xAI Grok. The OpenAI Responses adapter returns an explicit error for documents rather than dropping them silently. Supported media types: `application/pdf`.
+`ContentDocument` parts carry inline PDFs (base64), validated via `ValidateDocumentSource()`. Gemini serializes them as `inlineData` and Anthropic as native `document` blocks (both parse the PDF text layer); OpenAI-compatible adapters emit an `image_url` data URI for vision models such as xAI Grok. The OpenAI Responses adapter returns an explicit error for documents rather than dropping them silently. Supported media types: `application/pdf`. Anthropic also takes plain-text documents (`DocumentSourceText`, `text/plain`, the text as `Data`) with optional `ContentPart.Title` / `Context`; the other adapters refuse them.
 
 `ThoughtSignature` on `tool_use` parts is a Gemini 3 requirement — the model returns an opaque signature that must be echoed back in the corresponding `tool_result` message. The adapters handle this automatically.
 
 ### Stream Events
+
+An Anthropic stream that breaks after `message_start` yields its error together with an `EventError` carrying the usage and content received so far; `Session.Stream` passes it on without recording the turn. `StreamAccumulator` is the one fold from events to a `Response` (used by `Session.Stream`, the mock and `CollectStream`).
 
 ```go
 type StreamEvent struct {
@@ -232,6 +234,7 @@ type StreamEvent struct {
     ContainerID   string           // done: provider container (code execution)
     Part          *ContentPart     // EventServerTool: server tool call or result
     Citation      *Citation        // EventCitation: a citation on the current text block
+    Model         string           // done: the answering model (Anthropic message_start); also on a partial EventError
 
     Error        string // error
 }
@@ -576,7 +579,7 @@ Classification helpers use `errors.As()`:
 | Helper | Condition |
 |---|---|
 | `IsRateLimited(err)` | StatusCode == 429 |
-| `IsOverloaded(err)` | StatusCode == 503 |
+| `IsOverloaded(err)` | StatusCode == 503 or 529 (Anthropic `overloaded_error`) |
 | `IsAuthError(err)` | StatusCode == 401 or 403 |
 | `IsContextLength(err)` | StatusCode == 400 + context-length keywords in body |
 | `IsRetryable(err)` | `APIError.Retryable == true` (429, 503, 500, 502, 408) |
@@ -692,7 +695,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 ### Anthropic (`provider/anthropic/`)
 
 - Endpoint: `https://api.anthropic.com/v1/messages`
-- Auth: `x-api-key: <key>` + `anthropic-version: 2023-06-01`
+- Auth: `x-api-key: <key>` + `anthropic-version: 2026-10-21` (`Config.AnthropicVersion` pins another; on 2026-10-21 the adapter refuses temperature/top_p/top_k, documents in assistant messages and citations on user text before sending)
 - Streaming: SSE with `event: content_block_delta` / `event: message_delta`
 - Manual extended thinking uses `thinking: {type: enabled, budget_tokens: N}`,
   with a budget mapped from `ThinkingLevel` — only for Opus 4.6, Sonnet 4.6 and

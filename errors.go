@@ -96,8 +96,11 @@ func NewAPIErrorFromStatusWithLimit(provider string, status int, body string, ma
 	switch {
 	case status == 429:
 		return NewRateLimitError(provider, body)
-	case status == 503:
-		return NewOverloadedError(provider, body)
+	case status == 503 || status == 529:
+		// 529 is Anthropic's "overloaded_error".
+		overloaded := NewOverloadedError(provider, body)
+		overloaded.StatusCode = status
+		return overloaded
 	case status == 401 || status == 403:
 		return NewAuthError(provider, body, status)
 	case status == 400 && isContextLengthMessage(body):
@@ -107,7 +110,7 @@ func NewAPIErrorFromStatusWithLimit(provider string, status int, body string, ma
 			StatusCode: status,
 			Message:    body,
 			Provider:   provider,
-			Retryable:  status == 500 || status == 502 || status == 408,
+			Retryable:  status == 500 || status == 502 || status == 504 || status == 408,
 		}
 	}
 }
@@ -121,11 +124,12 @@ func IsRateLimited(err error) bool {
 	return false
 }
 
-// IsOverloaded reports whether err is a server overloaded (503) error.
+// IsOverloaded reports whether err is a server overloaded error (503, or
+// Anthropic's 529).
 func IsOverloaded(err error) bool {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		return apiErr.StatusCode == 503
+		return apiErr.StatusCode == 503 || apiErr.StatusCode == 529
 	}
 	return false
 }

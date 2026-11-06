@@ -44,7 +44,8 @@ func TestFixedPathAdaptersIgnoreHostileModelInURL(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c, err := tc.newC(llm.Config{Provider: tc.name, Model: hostile, APIKey: "k", BaseURL: srv.URL, Timeout: 10 * time.Second})
+			c, err := tc.newC(llm.Config{Provider: tc.name, Model: hostile, APIKey: "k", BaseURL: srv.URL, Timeout: 10 * time.Second,
+				ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityStream)})
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}

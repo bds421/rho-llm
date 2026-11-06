@@ -230,7 +230,7 @@ func TestCacheTTLWire(t *testing.T) {
 	req := llm.Request{
 		System: "sys", SystemCacheControl: true, SystemCacheTTL: llm.CacheTTL1h,
 		Tools:       []llm.Tool{{Name: "t", Description: "d", CacheControl: true, CacheTTL: llm.CacheTTL1h}},
-		ServerTools: []llm.ServerTool{{Type: llm.WebSearch20250305, Name: "web_search", CacheControl: true, CacheTTL: llm.CacheTTL5m}},
+		ServerTools: []llm.ServerTool{{Type: llm.WebSearch20250305, Name: "web_search", CacheControl: true, CacheTTL: llm.CacheTTL1h}},
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{
 			{Type: llm.ContentText, Text: "long", CacheControl: true, CacheTTL: llm.CacheTTL1h},
 			{Type: llm.ContentText, Text: "tail", CacheControl: true},
@@ -244,7 +244,7 @@ func TestCacheTTLWire(t *testing.T) {
 	for _, want := range []string{
 		`"system":[{"cache_control":{"type":"ephemeral","ttl":"1h"},"text":"sys","type":"text"}]`,
 		`{"name":"t","description":"d","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral","ttl":"1h"}}`,
-		`{"cache_control":{"type":"ephemeral"},"name":"web_search","type":"web_search_20250305"}`,
+		`{"cache_control":{"type":"ephemeral","ttl":"1h"},"name":"web_search","type":"web_search_20250305"}`,
 		`{"cache_control":{"type":"ephemeral","ttl":"1h"},"text":"long","type":"text"}`,
 		`{"cache_control":{"type":"ephemeral"},"text":"tail","type":"text"}`,
 	} {
@@ -254,10 +254,13 @@ func TestCacheTTLWire(t *testing.T) {
 	}
 
 	for name, r := range map[string]llm.Request{
-		"system":      {System: "s", SystemCacheControl: true, SystemCacheTTL: "2h"},
-		"tool":        {Tools: []llm.Tool{{Name: "t", CacheControl: true, CacheTTL: "1H"}}},
-		"server tool": {ServerTools: []llm.ServerTool{{Type: llm.WebSearch20250305, Name: "web_search", CacheControl: true, CacheTTL: "60m"}}},
-		"part":        {Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "x", CacheControl: true, CacheTTL: " 1h"}}}}},
+		"system":              {System: "s", SystemCacheControl: true, SystemCacheTTL: "2h"},
+		"tool":                {Tools: []llm.Tool{{Name: "t", CacheControl: true, CacheTTL: "1H"}}},
+		"server tool":         {ServerTools: []llm.ServerTool{{Type: llm.WebSearch20250305, Name: "web_search", CacheControl: true, CacheTTL: "60m"}}},
+		"part":                {Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "x", CacheControl: true, CacheTTL: " 1h"}}}}},
+		"ttl without marker":  {Tools: []llm.Tool{{Name: "t", CacheTTL: llm.CacheTTL1h}}},
+		"1h after 5m":         {Tools: []llm.Tool{{Name: "t", CacheControl: true}}, System: "s", SystemCacheControl: true, SystemCacheTTL: llm.CacheTTL1h},
+		"1h message after 5m": {Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "a", CacheControl: true}, {Type: llm.ContentText, Text: "b", CacheControl: true, CacheTTL: llm.CacheTTL1h}}}}},
 	} {
 		if _, err := c.buildRequest(r, false); err == nil {
 			t.Errorf("%s: bad TTL accepted", name)

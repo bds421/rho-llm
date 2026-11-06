@@ -32,10 +32,16 @@ func ContinuePausedTurn(req Request, resp *Response) (Request, error) {
 	msgs = append(msgs, req.Messages...)
 	msgs = append(msgs, NewAssistantMessage(resp))
 	req.Messages = msgs
-	if req.ContainerID == "" {
-		req.ContainerID = resp.ContainerID
-	}
+	keepContainer(&req, resp.ContainerID)
 	return req, nil
+}
+
+// keepContainer sets the paused turn's container on a continuation unless
+// req already names one.
+func keepContainer(req *Request, container string) {
+	if req.ContainerID == "" {
+		req.ContainerID = container
+	}
 }
 
 // pausedTurn reports whether msgs ends with a paused assistant turn, and the

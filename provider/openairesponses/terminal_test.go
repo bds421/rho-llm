@@ -12,7 +12,7 @@ func TestTerminalEventsAndRawReasons(t *testing.T) {
 	for _, tc := range []struct{ status, detail, want, raw string }{
 		{"completed", "", llm.StopEndTurn, "completed"},
 		{"incomplete", "max_output_tokens", llm.StopMaxTokens, "max_output_tokens"},
-		{"incomplete", "content_filter", "content_filter", "content_filter"},
+		{"incomplete", "content_filter", llm.StopRefusal, "content_filter"},
 		{"incomplete", "", llm.StopMaxTokens, "incomplete"},
 		{"failed", "", "error", "failed"},
 	} {

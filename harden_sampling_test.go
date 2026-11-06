@@ -89,11 +89,11 @@ func TestSamplingParamsReachesTheWire(t *testing.T) {
 	for i, p := range tcProtocols {
 		t.Run(p.name, func(t *testing.T) {
 			got := tcDo(t, i, llm.Request{SamplingParams: map[string]any{
-				"top_p":    0.5,
+				"metadata": map[string]any{"user_id": "u-1"},
 				"seed":     42,
 				"provider": map[string]any{"order": []string{"a", "b"}},
 			}}, false)
-			for _, k := range []string{"top_p", "seed", "provider"} {
+			for _, k := range []string{"metadata", "seed", "provider"} {
 				if _, ok := got[k]; !ok {
 					t.Errorf("%s: SamplingParams key %q never reached the wire: %v", p.name, k, got)
 				}
@@ -262,7 +262,8 @@ func TestRawStopReasonSurvivesNormalization(t *testing.T) {
 		{"stop", llm.StopEndTurn},
 		{"length", llm.StopMaxTokens},
 		{"tool_calls", llm.StopToolUse},
-		{"content_filter", "content_filter"}, // unmapped: passes through verbatim
+		{"content_filter", llm.StopRefusal},    // RawStopReason keeps "content_filter"
+		{"some_new_reason", "some_new_reason"}, // unmapped: passes through verbatim
 	}
 	for _, c := range cases {
 		t.Run(c.raw, func(t *testing.T) {

@@ -11,9 +11,12 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ## Current state (2026-11-06)
 
-`v0.12.1` is the latest release (v0.12.0: Anthropic server tools with web search,
+`v0.13.0` is the latest release (v0.12.0: Anthropic server tools with web search,
 `pause_turn` continuation, per-iteration usage and search pricing; v0.12.1: refuse
-thinking disabled at effort xhigh/max on Haiku 5.5 and Opus 5 — see `CHANGELOG.md`).
+thinking disabled at effort xhigh/max on Haiku 5.5 and Opus 5; v0.13.0: Anthropic API
+version 2026-10-21 by default, structured output, typed Effort, text documents,
+partial usage on broken streams —
+see `CHANGELOG.md`).
 
 ---
 
@@ -45,13 +48,15 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
 2. **Chat fallback + per-attempt usage — M** [review M2]. `OperationChat` usage events
    for `Complete`/`Stream` via an `observeModality`-style wrapper, and a
    `NewFallbackClient` for chat reusing `tryEach`/`FailoverPolicy`.
-3. **Anthropic API version decision — S** [registry]. `2026-10-21` removes
-   `temperature`/`top_p`/`top_k` on every model; the adapter defaults to `2023-06-01`
-   (`Config.AnthropicVersion` overrides). Message threads (1) may need the new version.
+3. **Bedrock / Vertex note — S** [docs]. `2026-10-21` (the default since v0.13.0) works on
+   Bedrock only for Claude 4.7+; rho-llm has no Bedrock client, but a gateway in front of
+   one needs `Config.AnthropicVersion = AnthropicVersion20230601` for older models.
 
 ### Reasoning & conversation state
 - 🟡 **xAI on the Responses API with encrypted reasoning replay — M** [pi].
 - 🟡 **Mid-conversation effort/system/tool changes that keep the cache — L** [pi].
+  In-place `{"role":"system"}` messages were tried in v0.12.2 and dropped: Haiku 5.5
+  declined instructions placed there (live, 3 of 3) that it followed in `system`.
 - 🟢 Deferred tool loading [pi].
 
 ### Caching & cost
@@ -77,8 +82,6 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
   (`geminiWithoutSamplingControls`, `anthropicWithoutSamplingControls`,
   `adaptiveThinkingModels`) into registry metadata. pi generates its catalog from
   models.dev — worth comparing before building our own tooling.
-- 🟢 Anthropic in-stream `error` events are not surfaced as errors (only as a truncated
-  stream); Responses redacts/truncates them — align Anthropic [review].
 - 🟢 Anthropic client-side refusal fallback (retry on another model with fallback
   credit) [pi]. Server-side `fallbacks` works since v0.12.0.
 - 🟢 Anthropic server tools: typed web fetch results; a turn that mixes server and

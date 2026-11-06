@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // redactSecret removes the literal API key from a free-text message (e.g. a
@@ -157,6 +158,27 @@ const (
 	ThinkingMax ThinkingLevel = "max"
 )
 
+// Effort is a provider effort level (see Request.Effort).
+type Effort string
+
+// Effort levels.
+const (
+	EffortLow    Effort = "low"
+	EffortMedium Effort = "medium"
+	EffortHigh   Effort = "high"
+	EffortXHigh  Effort = "xhigh"
+	EffortMax    Effort = "max"
+)
+
+// Valid reports whether e is empty or one of the effort levels.
+func (e Effort) Valid() bool {
+	switch e {
+	case "", EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
+		return true
+	}
+	return false
+}
+
 // ReasoningSummary controls whether reasoning summary text is included in responses.
 type ReasoningSummary string
 
@@ -165,6 +187,10 @@ const (
 	ReasoningSummaryAuto     ReasoningSummary = "auto"     // provider decides
 	ReasoningSummaryDetailed ReasoningSummary = "detailed" // detailed summary
 	ReasoningSummaryConcise  ReasoningSummary = "concise"  // concise summary
+	// ReasoningSummaryOmitted asks for no thinking text: Anthropic display
+	// "omitted" (thinking blocks with empty text, billed the same); OpenAI
+	// Responses sends no summary.
+	ReasoningSummaryOmitted ReasoningSummary = "omitted"
 )
 
 // ThinkingBudgetTokens returns the default token budget for a thinking level.
@@ -256,8 +282,12 @@ type ContentPart struct {
 	// Image content
 	Source *ImageSource `json:"source,omitempty"`
 
-	// Document content (e.g. PDFs passed inline as base64)
+	// Document content: a base64 PDF, or plain text (Anthropic). Title and
+	// Context are optional and passed to the model alongside the document
+	// (Anthropic); other providers ignore them.
 	Document *DocumentSource `json:"document,omitempty"`
+	Title    string          `json:"title,omitempty"`
+	Context  string          `json:"context,omitempty"`
 
 	// Thinking / extended-reasoning content (from assistant). Carried in the
 	// neutral model so a conversation can replay it to the SAME provider on the
@@ -374,11 +404,33 @@ func NewImageMessage(role Role, mediaType, base64Data string) Message {
 	}
 }
 
-// DocumentSource represents an inline document (e.g. a PDF) passed as base64.
+// DocumentSource represents an inline document: a base64 PDF
+// (DocumentSourceBase64, application/pdf) or plain text (DocumentSourceText,
+// text/plain, Data holds the text itself; Anthropic only).
 type DocumentSource struct {
-	Type      string `json:"type"`       // base64
-	MediaType string `json:"media_type"` // application/pdf, etc.
-	Data      string `json:"data"`       // base64 encoded data
+	Type      string `json:"type"`       // DocumentSourceBase64 or DocumentSourceText
+	MediaType string `json:"media_type"` // application/pdf or text/plain
+	Data      string `json:"data"`       // base64 PDF bytes, or the text
+}
+
+// Document source types.
+const (
+	DocumentSourceBase64 = "base64"
+	DocumentSourceText   = "text"
+)
+
+// IsTextDocument reports whether part is a plain-text document.
+func IsTextDocument(part ContentPart) bool {
+	return part.Type == ContentDocument && part.Document != nil && part.Document.Type == DocumentSourceText
+}
+
+// NewTextDocument returns a plain-text document part. title may be empty.
+func NewTextDocument(title, text string) ContentPart {
+	return ContentPart{
+		Type:     ContentDocument,
+		Document: &DocumentSource{Type: DocumentSourceText, MediaType: "text/plain", Data: text},
+		Title:    title,
+	}
 }
 
 // validDocumentMediaTypes lists the MIME types accepted for document content.
@@ -394,6 +446,9 @@ var validDocumentMediaTypes = map[string]bool{
 func ValidateDocumentSource(part ContentPart) error {
 	if part.Document == nil {
 		return fmt.Errorf("document source must not be nil")
+	}
+	if part.Document.Type == DocumentSourceText {
+		return validateTextDocument(part.Document)
 	}
 	if part.Document.Data == "" {
 		return fmt.Errorf("document data must not be empty")
@@ -682,8 +737,13 @@ type Request struct {
 	ToolChoice       *ToolChoice      `json:"tool_choice,omitempty"`       // constrain tool use; nil = provider default (auto)
 	ThinkingLevel    ThinkingLevel    `json:"thinking_level,omitempty"`    // low, medium, high (zero value = none)
 	ThinkingBudget   int              `json:"thinking_budget,omitempty"`   // custom token budget; overrides ThinkingLevel default when > 0
-	ReasoningSummary ReasoningSummary `json:"reasoning_summary,omitempty"` // OpenAI Responses API: auto, detailed, concise
-	StopSequences    []string         `json:"stop_sequences,omitempty"`
+	ReasoningSummary ReasoningSummary `json:"reasoning_summary,omitempty"` // OpenAI Responses: auto, detailed, concise. Anthropic adaptive thinking: unset/detailed/concise = display "summarized", omitted = "omitted", auto = the API default
+	// Effort sets the provider's effort without asking for thinking: Anthropic
+	// output_config.effort, OpenAI Responses reasoning.effort. With a
+	// ThinkingLevel on a model where the level already sets the effort, the two
+	// must agree. Adapters without an effort control refuse it.
+	Effort        Effort   `json:"effort,omitempty"`
+	StopSequences []string `json:"stop_sequences,omitempty"`
 
 	// ServerTools are tools the provider runs itself (Anthropic web search).
 	// They are sent after Tools. Adapters without server tools return an
@@ -699,8 +759,9 @@ type Request struct {
 
 	// ResponseFormat requests structured output (JSON mode / JSON schema). Wired
 	// for OpenAI-compatible providers (response_format), OpenAI Responses
-	// (text.format), and Gemini (responseMimeType/responseSchema). Anthropic has
-	// no native JSON mode (use a tool or prompt). Nil = free text.
+	// (text.format), Gemini (responseMimeType/responseSchema) and Anthropic
+	// (output_config.format, json_schema only: json_object is refused). Nil =
+	// free text.
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 
 	// SamplingParams passes provider-specific request-body fields straight through
@@ -717,6 +778,11 @@ type Request struct {
 	//
 	// Values must marshal to JSON. This is an escape hatch, not the neutral
 	// currency: anything expressible as a typed Request field belongs there.
+	//
+	// Deprecated for Anthropic effort: SamplingParams["output_config"] still
+	// passes through when the adapter builds no output_config, but use the typed
+	// Effort. On Anthropic API version 2026-10-21 "temperature", "top_p" and
+	// "top_k" are refused.
 	SamplingParams map[string]any `json:"sampling_params,omitempty"`
 }
 
@@ -814,6 +880,10 @@ type StreamEvent struct {
 	InputTokens    int `json:"input_tokens,omitempty"`
 	OutputTokens   int `json:"output_tokens,omitempty"`
 	ThinkingTokens int `json:"thinking_tokens,omitempty"` // Gemini, openai_responses: reasoning tokens, separate from OutputTokens
+
+	// Done event: the model that answered (Anthropic message_start; with a
+	// refusal fallback, the fallback model).
+	Model string `json:"model,omitempty"`
 
 	// Done event
 	StopReason    string `json:"stop_reason,omitempty"`
@@ -937,4 +1007,17 @@ func (p AuthProfile) MarshalJSON() ([]byte, error) {
 	}
 	tmp.BaseURL = redactURLCredentials(tmp.BaseURL)
 	return json.Marshal(tmp)
+}
+
+func validateTextDocument(doc *DocumentSource) error {
+	if doc.MediaType != "text/plain" {
+		return fmt.Errorf("text document media type must be text/plain, got %q", doc.MediaType)
+	}
+	if strings.TrimSpace(doc.Data) == "" {
+		return fmt.Errorf("text document data must not be empty")
+	}
+	if !utf8.ValidString(doc.Data) {
+		return fmt.Errorf("text document data is not valid UTF-8")
+	}
+	return nil
 }

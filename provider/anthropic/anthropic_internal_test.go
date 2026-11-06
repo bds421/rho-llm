@@ -84,7 +84,7 @@ func TestBuildRequestThinkingBudgetNotClampedWhenWithinLimit(t *testing.T) {
 
 func TestBuildRequestThinkingDoesNotChooseOrRewriteTemperature(t *testing.T) {
 	c := &Client{
-		config:       llm.Config{Model: "claude-opus-4-6"},
+		config:       llm.Config{Model: "claude-opus-4-6", AnthropicVersion: llm.AnthropicVersion20230601},
 		providerName: "anthropic",
 	}
 
