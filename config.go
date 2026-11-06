@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -80,6 +81,13 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
+	dialer := &net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second}
+	dial := dialer.DialContext
+	if cfg.BlockPrivateBaseURL {
+		proxies := &proxyAddrs{}
+		proxy = proxies.record(proxy)
+		dial = blockPrivateDialContext(dialer, proxies)
+	}
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
@@ -88,7 +96,7 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 			// Phase bounds that also protect streaming requests, whose client
 			// (NewStreamingHTTPClient) has no overall Timeout. Each is capped
 			// by the configured Timeout so a non-stream call is unchanged.
-			DialContext:           (&net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second}).DialContext,
+			DialContext:           dial,
 			TLSHandshakeTimeout:   min(timeout, 10*time.Second),
 			ResponseHeaderTimeout: timeout,
 			IdleConnTimeout:       90 * time.Second,
@@ -242,13 +250,17 @@ func sameOrigin(a, b *url.URL) bool {
 	return a.Scheme == b.Scheme && a.Host == b.Host
 }
 
-// CheckBaseURL enforces Config.BlockPrivateBaseURL: when set, it rejects a BaseURL
-// whose host is a loopback, private, link-local, or unspecified IP (e.g. the cloud
-// metadata endpoint 169.254.169.254, or 127.0.0.1), or the literal "localhost".
-// This is opt-in SSRF hardening for deployments that only talk to public provider
-// endpoints; it is incompatible with local providers. Best-effort: it checks IP
-// literals and "localhost" only — hostname DNS resolution and DNS-rebinding are
-// out of scope. It is a no-op when BlockPrivateBaseURL is false or BaseURL is empty.
+// CheckBaseURL enforces Config.BlockPrivateBaseURL at construction: it rejects a
+// BaseURL whose host is "localhost" or an IP literal that is loopback, private,
+// link-local, unspecified or otherwise reserved (rho-kit's netutil.IsPrivateIP,
+// e.g. the cloud metadata endpoint 169.254.169.254), including IPv6 forms that
+// carry such an IPv4 address (IPv4-mapped and -compatible, 6to4, Teredo; in the
+// NAT64 well-known prefix 64:ff9b::/96 the embedded IPv4 address decides). Host
+// names are not resolved here, so construction stays offline; the client's
+// dialer checks every resolved address at connect time (ErrPrivateAddress).
+// This is opt-in SSRF hardening for deployments that only talk to public
+// provider endpoints; it is incompatible with local providers. It is a no-op
+// when BlockPrivateBaseURL is false or BaseURL is empty.
 func CheckBaseURL(cfg Config) error {
 	if !cfg.BlockPrivateBaseURL || cfg.BaseURL == "" {
 		return nil
@@ -264,10 +276,8 @@ func CheckBaseURL(cfg Config) error {
 	if strings.EqualFold(host, "localhost") {
 		return fmt.Errorf("base URL host %q is not allowed (BlockPrivateBaseURL)", host)
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return fmt.Errorf("base URL host %q is a private/loopback/link-local address (BlockPrivateBaseURL)", host)
-		}
+	if addr, err := netip.ParseAddr(host); err == nil && privateAddr(addr) {
+		return fmt.Errorf("base URL host %q: %w", host, ErrPrivateAddress)
 	}
 	return nil
 }
@@ -329,11 +339,11 @@ type Config struct {
 	DisableProxy bool `json:"disable_proxy,omitempty"`
 
 	// BlockPrivateBaseURL is opt-in SSRF hardening: when true, client construction
-	// rejects a BaseURL whose host is a loopback, private, link-local, or
-	// unspecified IP, or "localhost". Incompatible with local providers
-	// (ollama/vllm/lmstudio, which use localhost). Best-effort — it checks IP
-	// literals and "localhost"; hostname DNS resolution and DNS-rebinding are out
-	// of scope. See CheckBaseURL.
+	// rejects a BaseURL that is "localhost" or a private or reserved IP literal
+	// (CheckBaseURL), and the client refuses at connect time every resolved
+	// address that is private or reserved (ErrPrivateAddress), except the
+	// configured or ambient proxy. Incompatible with local providers
+	// (ollama/vllm/lmstudio, which use localhost).
 	BlockPrivateBaseURL bool `json:"block_private_base_url,omitempty"`
 
 	// AuthHeader overrides the authorization header format.

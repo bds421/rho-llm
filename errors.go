@@ -138,7 +138,7 @@ func IsOverloaded(err error) bool {
 // Treats both API-level transient errors (429, 502, 503) and
 // pure network dial/timeout errors (e.g. proxy unreachable) as retryable.
 //
-// Two classes are explicitly NOT retryable even though they surface as
+// Three classes are explicitly NOT retryable even though they surface as
 // net.Error through net/http's *url.Error wrapper:
 //   - context.Canceled: the caller aborted — retrying with a dead context
 //     cannot succeed, and counting it as a provider failure would poison
@@ -146,11 +146,16 @@ func IsOverloaded(err error) bool {
 //     HTTP client's own timeout surfaces as it.)
 //   - TLS certificate verification failures: an endpoint-identity /
 //     configuration problem that no retry or key rotation can fix.
+//   - ErrPrivateAddress: BlockPrivateBaseURL refused the address; a retry
+//     dials the same address.
 func IsRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
 	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, ErrPrivateAddress) {
 		return false
 	}
 	var certErr *tls.CertificateVerificationError

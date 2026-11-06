@@ -1,6 +1,6 @@
 # rho-llm
 
-Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), an async **Batch API** (~50% cheaper bulk processing), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports only the Go standard library (the `examples/` use `joho/godotenv`).
+Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), an async **Batch API** (~50% cheaper bulk processing), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports the Go standard library and one rho-kit package (`security/v2/netutil`, for the private-address check); the `examples/` use `joho/godotenv`.
 
 **Requires Go 1.26.10+** (the minimum toolchain in `go.mod`, including the standard-library security updates described in the changelog).
 
@@ -1209,7 +1209,7 @@ if err != nil {
 
 ### SSRF hardening
 
-`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) pointing at a loopback/private/link-local host (e.g. the cloud metadata IP) — opt-in, off by default so local providers keep working. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
+`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) whose host is `localhost` or a private or reserved IP literal (e.g. the cloud metadata IP), including IPv6 forms that carry one (IPv4-mapped and -compatible, 6to4, Teredo, NAT64; in `64:ff9b::/96` the embedded IPv4 address decides), and refuses at connect time every resolved address that is private or reserved (`ErrPrivateAddress`, not retryable), so host names and DNS rebinding are covered too; the configured or ambient proxy is exempt — opt-in, off by default so local providers keep working. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
 
 ## Config Reference
 
@@ -1248,7 +1248,7 @@ if err != nil {
 | MaxResponseBodyBytes | int | 32 MB | Cap on success response body reads |
 | MaxToolInputBytes | int | 1 MB | Cap on accumulated tool input JSON |
 | MaxErrorMessageLen | int | 4096 | Cap on stored error message length |
-| BlockPrivateBaseURL | bool | false | Opt-in SSRF guard: reject loopback/private/link-local BaseURL hosts |
+| BlockPrivateBaseURL | bool | false | Opt-in SSRF guard: reject private or reserved BaseURL hosts and dial targets |
 
 Structured output is selected per call with `Request.ResponseFormat`; it is not a
 client `Config` field.

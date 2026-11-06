@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`BlockPrivateBaseURL` covers IPv6 forms, host names and DNS rebinding**
+  (audit G3). `CheckBaseURL` accepted IPv6 forms of private addresses, such as
+  `[64:ff9b::a9fe:a9fe]` (NAT64 of 169.254.169.254), 6to4 (`2002::/16`) and
+  IPv4-compatible (`[::a9fe:a9fe]`), and never resolved names. It now uses
+  rho-kit's `netutil.IsPrivateIP` (`security/v2` v2.38.0); in the NAT64
+  well-known prefix `64:ff9b::/96` the embedded IPv4 address decides, so
+  IPv6-only hosts behind DNS64 still reach public providers. With the option
+  set, the client also refuses at connect time every resolved address that is
+  private or reserved; the configured or ambient proxy is exempt. Refusals
+  wrap the new `ErrPrivateAddress`, which `IsRetryable` reports as not
+  retryable.
+
+### Changed
+
+- The library now imports one rho-kit module (`github.com/bds421/rho-kit/security/v2`,
+  package `netutil`); before it imported only the standard library.
+
 ## [0.13.0] - 2026-11-06
 
 Anthropic API version `2026-10-21` by default, following the migration guide
