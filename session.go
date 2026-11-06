@@ -45,6 +45,12 @@ func WithTools(tools ...Tool) SessionOption {
 	return func(s *Session) { s.conv.Tools = tools }
 }
 
+// WithServerTools sets the provider-run tools (web search) for the
+// conversation. They are sent unchanged with every turn and continuation.
+func WithServerTools(tools ...ServerTool) SessionOption {
+	return func(s *Session) { s.conv.ServerTools = tools }
+}
+
 // WithBaseRequest sets a template Request whose generation settings (Model,
 // MaxTokens, ThinkingLevel, Temperature, StopSequences, …) apply to every turn.
 // Its Messages/System/Tools are overwritten by the conversation each turn.
@@ -134,10 +140,28 @@ func (s *Session) Send(ctx context.Context, prompt string) (*Response, error) {
 // the response. On failure nothing is recorded — input and reply are committed
 // to the transcript together, only after the turn succeeds.
 func (s *Session) SendMessages(ctx context.Context, msgs ...Message) (*Response, error) {
+	return s.send(ctx, msgs, false)
+}
+
+// Continue continues a paused turn (StopPauseTurn): it sends the transcript,
+// which ends with the paused assistant message, unchanged as the next
+// request, with the same system prompt, tools and server tools, and the
+// paused turn's container. The reply is appended as a further assistant
+// message and can pause again; check StopReason and cap the rounds. It
+// returns ErrNotPaused, without sending a request, when the last message is
+// not a paused assistant turn.
+func (s *Session) Continue(ctx context.Context) (*Response, error) {
+	return s.send(ctx, nil, true)
+}
+
+func (s *Session) send(ctx context.Context, msgs []Message, continuation bool) (*Response, error) {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 
-	req, client, provider := s.prepareTurn(msgs)
+	req, client, provider, err := s.prepareTurn(msgs, continuation)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Complete(ctx, req)
 	if err != nil {
 		return nil, err // nothing was appended — the transcript is untouched
@@ -169,11 +193,25 @@ func (s *Session) Stream(ctx context.Context, prompt string) iter.Seq2[StreamEve
 
 // StreamMessages is the streaming counterpart of SendMessages.
 func (s *Session) StreamMessages(ctx context.Context, msgs ...Message) iter.Seq2[StreamEvent, error] {
+	return s.stream(ctx, msgs, false)
+}
+
+// StreamContinue is the streaming counterpart of Continue. It yields
+// ErrNotPaused when the last message is not a paused assistant turn.
+func (s *Session) StreamContinue(ctx context.Context) iter.Seq2[StreamEvent, error] {
+	return s.stream(ctx, nil, true)
+}
+
+func (s *Session) stream(ctx context.Context, msgs []Message, continuation bool) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
 		s.turnMu.Lock()
 		defer s.turnMu.Unlock()
 
-		req, client, provider := s.prepareTurn(msgs)
+		req, client, provider, err := s.prepareTurn(msgs, continuation)
+		if err != nil {
+			yield(StreamEvent{}, err)
+			return
+		}
 
 		var (
 			text, thinking   strings.Builder
@@ -215,19 +253,25 @@ func (s *Session) StreamMessages(ctx context.Context, msgs ...Message) iter.Seq2
 		}
 
 		resp := &Response{
-			Model:               req.Model,
-			Content:             text.String(),
-			Thinking:            thinking.String(),
-			ThinkingSignature:   thinkingSig,
-			ThinkingRedacted:    thinkingRedacted,
-			ToolCalls:           toolCalls,
-			StopReason:          final.StopReason,
-			RawStopReason:       final.RawStopReason,
-			InputTokens:         final.InputTokens,
-			OutputTokens:        final.OutputTokens,
-			ThinkingTokens:      final.ThinkingTokens,
-			CacheCreationTokens: final.CacheCreationTokens,
-			CacheReadTokens:     final.CacheReadTokens,
+			Model:                 req.Model,
+			Content:               text.String(),
+			Thinking:              thinking.String(),
+			ThinkingSignature:     thinkingSig,
+			ThinkingRedacted:      thinkingRedacted,
+			ToolCalls:             toolCalls,
+			StopReason:            final.StopReason,
+			RawStopReason:         final.RawStopReason,
+			InputTokens:           final.InputTokens,
+			OutputTokens:          final.OutputTokens,
+			ThinkingTokens:        final.ThinkingTokens,
+			CacheCreationTokens:   final.CacheCreationTokens,
+			CacheReadTokens:       final.CacheReadTokens,
+			CacheCreation1hTokens: final.CacheCreation1hTokens,
+			StopDetails:           final.StopDetails,
+			ServerToolUse:         final.ServerToolUse,
+			Iterations:            final.Iterations,
+			Parts:                 final.Parts,
+			ContainerID:           final.ContainerID,
 		}
 		s.commitTurn(msgs, provider, resp)
 	}
@@ -237,10 +281,17 @@ func (s *Session) StreamMessages(ctx context.Context, msgs ...Message) iter.Seq2
 // this turn's input messages, normalized for the current provider, and captures
 // the client the turn will run against. The stored transcript is not mutated —
 // input is committed together with the reply only after the turn succeeds.
-// The caller must hold turnMu (but NOT stateMu).
-func (s *Session) prepareTurn(msgs []Message) (Request, Client, string) {
+// A continuation sends no new input: the transcript must end with a paused
+// assistant turn, whose container the request reuses unless the base request
+// names one. The caller must hold turnMu (but NOT stateMu).
+func (s *Session) prepareTurn(msgs []Message, continuation bool) (Request, Client, string, error) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
+
+	paused, container := pausedTurn(s.conv.Messages)
+	if continuation && !paused {
+		return Request{}, nil, "", ErrNotPaused
+	}
 
 	client := s.client
 	provider := client.Provider()
@@ -253,7 +304,10 @@ func (s *Session) prepareTurn(msgs []Message) (Request, Client, string) {
 		req.Model = client.Model()
 	}
 	req.Messages = NormalizeForModel(combined, provider, req.Model)
-	return req, client, provider
+	if continuation && req.ContainerID == "" {
+		req.ContainerID = container
+	}
+	return req, client, provider, nil
 }
 
 // commitTurn atomically records a completed turn: the input messages and the

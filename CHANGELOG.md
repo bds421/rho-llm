@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-06
+
+Anthropic server tools (web search first), `pause_turn` continuations,
+per-iteration usage, `stop_details`, the 1-hour cache TTL and unchanged replay
+of empty signed thinking blocks, checked against platform.claude.com (web search, server
+tools, citations, prompt caching, pricing, refusals and fallback, and the
+preserved-thinking guidance; 2026-11-06). Tested with
+hand-built fixtures in the documented shapes; no live calls.
+
+### Added
+
+- **Server tools.** `Request.ServerTools` / `Conversation.ServerTools` /
+  `WithServerTools` take a `ServerTool` (`Type`, `Name`, `MaxUses`,
+  `AllowedDomains` / `BlockedDomains`, `UserLocation`, `AllowedCallers`,
+  `CacheControl`, plus `Params` for version-specific fields). Constants
+  `WebSearch20250305`, `WebSearch20260209`, `WebSearch20260318`,
+  `ServerToolWebSearch`, `CallerDirect`; `NewWebSearchTool`. The Anthropic
+  adapter appends them after `Tools` as sorted-key objects, so the encoding is
+  byte-identical on every request. The other adapters return an error
+  (`UnsupportedServerTools`) instead of dropping them, and
+  `RequestCapabilities` requires `CapabilityTools`.
+- **Ordered assistant content.** `Response.Parts` (and `EventDone.Parts`) hold one
+  part per Anthropic content block, in order: text with `Citations`, each
+  thinking block with its own signature, tool calls, `ContentServerToolUse`,
+  `ContentServerToolResult` (`BlockType`, `WebSearchResults` or
+  `ServerToolError`) and `ContentProviderBlock` for any other block type.
+  Server parts keep the block as received in `ProviderBlock`, citations in
+  `Citation.Raw`; the adapter replays both verbatim, so `encrypted_content` and
+  `encrypted_index` survive, also through `LoadConversation`.
+  `NewAssistantMessage` uses `Parts` when set. Citation types:
+  `char_location`, `page_location`, `content_block_location`,
+  `search_result_location`, `web_search_result_location` (unknown types kept in
+  `Raw`).
+- **Streaming:** `EventServerTool` (`Part`) per server tool call and result,
+  `EventCitation` (`Citation`) per `citations_delta`.
+- **`pause_turn`:** `StopPauseTurn` (and `StopRefusal`) constants;
+  `ContinuePausedTurn(req, resp)` appends the paused content unchanged and
+  leaves every other request field alone; `Session.Continue` /
+  `StreamContinue` do the same for a session and return `ErrNotPaused` without
+  a request when the last turn did not pause. The paused turn's container
+  (`Response.ContainerID` → `Request.ContainerID`, Anthropic `container`) is sent
+  back.
+- **Usage:** `Response.ServerToolUse` (`WebSearchRequests`, `WebFetchRequests`,
+  `CodeExecutionRequests`) and `Response.Iterations` (Anthropic
+  `usage.iterations`), also on `EventDone`; `Usage.ServerToolUse` sums them.
+- **Cost:** `ModelInfo.WebSearchPricePer1K` ($10 per 1,000 searches on every
+  Anthropic model) and `CostInput.WebSearchRequests`, priced without the batch
+  discount (searches cost the same in a batch). `CostInput.Iterations` prices
+  each iteration at its own model, a fallback at the fallback model's rates,
+  and replaces the top-level token fields, which cover only the attempt that
+  produced the message. An iteration on an unpriced model adds 0. A refusal
+  before any output is counted although it is not always billed, so the
+  estimate is an upper bound there.
+- **`stop_details`:** `Response.StopDetails` and `EventDone.StopDetails`
+  (`Type`, `Category`, `Explanation`, `RecommendedModel`,
+  `FallbackCreditToken`, `FallbackHasPrefillClaim`, and `Raw` with the object
+  as received); nil when the API sends null. `StopDetailsFromRaw`.
+- **1-hour cache TTL:** `CacheTTL` on `ContentPart`, `Tool` and `ServerTool`,
+  `Request.SystemCacheTTL` (`CacheTTL1h`; empty or `CacheTTL5m` is the default),
+  sent as `cache_control: {"type":"ephemeral","ttl":"1h"}`; any other value is
+  an error. `Response.CacheCreation1hTokens` (from
+  `usage.cache_creation.ephemeral_1h_input_tokens`, also on `EventDone` and
+  `Usage`) is the 1-hour share of `CacheCreationTokens`.
+  `ModelInfo.CacheWrite1hPricePer1M` (2x input, set on every Anthropic model)
+  and `CostInput.CacheCreate1hTokens` price it; a model without a registered
+  1-hour price gets the documented 2x input price, or 0 when its input price is
+  unknown too.
+
+### Changed
+
+- `NewAssistantMessage` builds the message from `Response.Parts` when set (every
+  Anthropic response now sets it). Edits to `Response.Content` or `ToolCalls`
+  made before the call no longer reach the message; edit `Parts`, or clear it.
+  Multiple thinking blocks now replay as separate blocks with their own
+  signatures instead of one merged block.
+- `NormalizeForProvider` / `NormalizeForModel` drop server tool parts and
+  provider blocks and strip citations when a message goes to a different
+  provider.
+- Anthropic `tool_choice` is also sent when only server tools are defined.
+- **Anthropic `anthropic-beta`** is sent on every request when
+  `Config.BetaFeatures` is set, not only with a `ThinkingLevel`, so server-side
+  fallback (`SamplingParams{"fallbacks": "default"}`) and other betas work
+  without thinking. The deprecated `interleaved-thinking-2025-05-14` flag
+  (`DefaultConfig`'s default) is the exception: it goes out only with budget
+  thinking (Claude 4.5 and older), the only case where it does anything.
+- **Signed thinking blocks with empty text** (the default `display: "omitted"`
+  on Claude 4.7+) are kept for the same provider and sent back unchanged,
+  signature included, by `NormalizeForProvider` / `NormalizeForModel` and the
+  Anthropic adapter; before they were dropped. The API docs say to keep them
+  (an empty block is still a block; dropping it fails the preserved-thinking
+  check and the continuation). Thinking blocks from the API are replayed as
+  received. Without a `ThinkingLevel`, models whose thinking is always on
+  (Fable 5.1, Opus 5.5) and Sonnet 5.5, which is sent `between_tools` and still
+  writes thinking blocks between tool calls, replay them too; a model sent
+  `{"type":"disabled"}` drops them. A handoff to another provider still drops
+  empty blocks.
+
+### Fixed
+
+- Anthropic stream parser: removed a dead `doneEmitted` assignment
+  (ineffassign).
+
 ## [0.11.0] - 2026-11-04
 
 First two items from the consolidated backlog (`tasks/todo.md`), both taken

@@ -25,3 +25,6 @@ coverage.html
 .DS_Store
 Thumbs.db
 
+
+# Local worktrees
+.worktrees/

@@ -218,7 +218,7 @@ func RequestCapabilities(req Request, stream bool) []Capability {
 	if stream {
 		required = append(required, CapabilityStream)
 	}
-	if len(req.Tools) > 0 {
+	if len(req.Tools) > 0 || len(req.ServerTools) > 0 {
 		required = append(required, CapabilityTools)
 	}
 	if req.ResponseFormat != nil {

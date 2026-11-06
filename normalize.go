@@ -28,6 +28,9 @@ import (
 //   - Orphaned tool calls repaired: a tool_use with no following tool_result gets
 //     a synthetic error tool_result, because every provider rejects an
 //     unanswered tool call in history.
+//   - Server tools stay with their provider: server tool calls, their results
+//     and opaque provider blocks are dropped, and citations stripped from text,
+//     when the message goes to a provider other than the one that produced it.
 //   - Empty messages dropped: a message left with no content is removed.
 //
 // Sessions apply NormalizeForModel automatically each turn; direct Client users
@@ -103,14 +106,26 @@ func normalize(msgs []Message, provider, model string) []Message {
 				}
 				sameProvider := m.Provider != "" && m.Provider == provider
 				// Replay verbatim only when it would be valid: a redacted block, or
-				// a signed block that actually has reasoning text. A signed-but-empty
-				// thinking block has nothing to preserve and a provider rejects it.
-				if sameProvider && (p.Redacted || (p.ThinkingSignature != "" && p.Thinking != "")) {
+				// a signed block — also with empty text, which is what Claude 4.7+
+				// return by default (display "omitted"); dropping it breaks the
+				// continuation. Elsewhere a signed-but-empty block has nothing to
+				// preserve and is dropped.
+				if sameProvider && (p.Redacted || p.ThinkingSignature != "") {
 					nm.Content = append(nm.Content, p)
 				} else if p.Thinking != "" && !p.Redacted {
 					nm.Content = append(nm.Content, ContentPart{Type: ContentText, Text: p.Thinking})
 				}
 				// else: empty (incl. signed-but-no-text) or redacted-without-replay → drop
+			case ContentServerToolUse, ContentServerToolResult, ContentProviderBlock:
+				if foreignProvider(m.Provider, provider) {
+					continue // provider-run calls and opaque blocks mean nothing elsewhere
+				}
+				nm.Content = append(nm.Content, p)
+			case ContentText:
+				if len(p.Citations) > 0 && foreignProvider(m.Provider, provider) {
+					p.Citations = nil // citation locations point into provider-held results
+				}
+				nm.Content = append(nm.Content, p)
 			default:
 				nm.Content = append(nm.Content, p)
 			}
@@ -184,4 +199,10 @@ func uniqueToolID(base string, used map[string]bool) string {
 // replayed (it never produced a usable assistant message).
 func isIncompleteTurn(stopReason string) bool {
 	return stopReason == StopError || stopReason == StopAborted
+}
+
+// foreignProvider reports whether a message produced by from goes to a
+// different provider. A message with no recorded provider is not foreign.
+func foreignProvider(from, to string) bool {
+	return from != "" && from != to
 }

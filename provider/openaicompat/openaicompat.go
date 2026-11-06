@@ -294,6 +294,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 	if err := req.ToolChoice.Validate(); err != nil {
 		return openaiRequest{}, err
 	}
+	if err := llm.UnsupportedServerTools(c.Provider(), req); err != nil {
+		return openaiRequest{}, err
+	}
 	model := req.Model
 	if model == "" {
 		model = c.config.Model

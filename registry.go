@@ -16,23 +16,25 @@ var registryMu sync.RWMutex
 
 // ModelInfo holds per-model metadata used to adapt API requests and UI.
 type ModelInfo struct {
-	ID                   string        // Full model identifier
-	Provider             string        // anthropic, xai, gemini, openai, groq, etc.
-	MaxTokens            int           // Model-specific output limit (0 = use config default)
-	ContextWindow        int           // Max input tokens (0 = unknown)
-	InputPricePer1M      float64       // USD per 1M input tokens (0 = unknown/free)
-	OutputPricePer1M     float64       // USD per 1M output tokens (0 = unknown/free)
-	CacheWritePricePer1M float64       // Anthropic: price per 1M cache creation tokens (0 = not applicable: cache writes cost nothing extra)
-	CacheReadPricePer1M  float64       // price per 1M cache-read input tokens (0 = unknown: cache reads are billed at InputPricePer1M)
-	AudioInputPricePer1M float64       // USD per 1M audio input tokens (0 = unknown: audio tokens are not priced)
-	AudioPricePerMinute  float64       // USD per minute of input audio for duration-billed speech-to-text (0 = unknown/not duration-billed)
-	SupportsThinking     bool          // Adapter/model supports explicit thinking-level control
-	ThoughtSignature     bool          // Gemini 3 models require thought_signature in function call responses
-	Thinking             bool          // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
-	ResponsesAPI         bool          // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
-	NoToolSupport        bool          // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
-	Capabilities         CapabilitySet // Reviewed model operations and request features.
-	Label                string        // Short display name
+	ID                     string        // Full model identifier
+	Provider               string        // anthropic, xai, gemini, openai, groq, etc.
+	MaxTokens              int           // Model-specific output limit (0 = use config default)
+	ContextWindow          int           // Max input tokens (0 = unknown)
+	InputPricePer1M        float64       // USD per 1M input tokens (0 = unknown/free)
+	OutputPricePer1M       float64       // USD per 1M output tokens (0 = unknown/free)
+	CacheWritePricePer1M   float64       // Anthropic: price per 1M cache creation tokens (0 = not applicable: cache writes cost nothing extra)
+	CacheWrite1hPricePer1M float64       // Anthropic: price per 1M 1-hour cache writes (0 = unknown: billed at the documented 2× InputPricePer1M, 0 if that is unknown too)
+	CacheReadPricePer1M    float64       // price per 1M cache-read input tokens (0 = unknown: cache reads are billed at InputPricePer1M)
+	AudioInputPricePer1M   float64       // USD per 1M audio input tokens (0 = unknown: audio tokens are not priced)
+	AudioPricePerMinute    float64       // USD per minute of input audio for duration-billed speech-to-text (0 = unknown/not duration-billed)
+	WebSearchPricePer1K    float64       // USD per 1,000 server-side web searches (0 = unknown: searches are not priced)
+	SupportsThinking       bool          // Adapter/model supports explicit thinking-level control
+	ThoughtSignature       bool          // Gemini 3 models require thought_signature in function call responses
+	Thinking               bool          // Model uses internal chain-of-thought reasoning (e.g. qwen3, deepseek-r1) — consumes output tokens invisibly
+	ResponsesAPI           bool          // Model requires OpenAI Responses API (/v1/responses) for reasoning effort control (GPT-5 family)
+	NoToolSupport          bool          // Model does not support tool/function calling (e.g. deepseek-r1, gemma)
+	Capabilities           CapabilitySet // Reviewed model operations and request features.
+	Label                  string        // Short display name
 }
 
 // retiredModels maps IDs the provider has sunset to the recommended
@@ -99,25 +101,27 @@ var modelRegistry = map[string]ModelInfo{
 	// Anthropic — from platform.claude.com/docs/en/about-claude/pricing (2026-10-31)
 	// Cache pricing: write = 1.25× input; read is usually 0.1× input but the
 	// page sets it per model (Fable 5.1 $0.25, Opus 5.5 $0.20, Sonnet 5.5 $0.10).
+	// 1-hour cache writes: 2× input (same page, 2026-11-06).
+	// Web search: $10 per 1,000 searches, on top of tokens (same page, 2026-11-06).
 	// Claude 5 family (no minor segment in major-version IDs).
-	"claude-fable-5-1":  {ID: "claude-fable-5-1", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheReadPricePer1M: 0.25, SupportsThinking: true, Label: "Fable 5.1"},
-	"claude-opus-5-5":   {ID: "claude-opus-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 4.00, OutputPricePer1M: 20.00, CacheWritePricePer1M: 5.00, CacheReadPricePer1M: 0.20, SupportsThinking: true, Label: "Opus 5.5"},
-	"claude-sonnet-5-5": {ID: "claude-sonnet-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Sonnet 5.5"},
+	"claude-fable-5-1":  {ID: "claude-fable-5-1", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheWrite1hPricePer1M: 20.00, CacheReadPricePer1M: 0.25, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Fable 5.1"},
+	"claude-opus-5-5":   {ID: "claude-opus-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 4.00, OutputPricePer1M: 20.00, CacheWritePricePer1M: 5.00, CacheWrite1hPricePer1M: 8.00, CacheReadPricePer1M: 0.20, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 5.5"},
+	"claude-sonnet-5-5": {ID: "claude-sonnet-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheWrite1hPricePer1M: 4.00, CacheReadPricePer1M: 0.10, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Sonnet 5.5"},
 	// Haiku 5.5 prompts over 100K tokens cost 5× (not modeled; short-prompt rates).
-	"claude-haiku-5-5":           {ID: "claude-haiku-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 0.10, OutputPricePer1M: 0.50, CacheWritePricePer1M: 0.125, CacheReadPricePer1M: 0.01, SupportsThinking: true, Label: "Haiku 5.5"},
-	"claude-fable-5":             {ID: "claude-fable-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheReadPricePer1M: 1.00, SupportsThinking: true, Label: "Fable 5"},
-	"claude-opus-5":              {ID: "claude-opus-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 5"},
-	"claude-sonnet-5":            {ID: "claude-sonnet-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheReadPricePer1M: 0.20, SupportsThinking: true, Label: "Sonnet 5"},
-	"claude-opus-4-8":            {ID: "claude-opus-4-8", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.8"},
-	"claude-opus-4-7":            {ID: "claude-opus-4-7", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.7"},
-	"claude-opus-4-6":            {ID: "claude-opus-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.6"},
-	"claude-opus-4-5":            {ID: "claude-opus-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5"},
-	"claude-opus-4-5-20251101":   {ID: "claude-opus-4-5-20251101", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheReadPricePer1M: 0.50, SupportsThinking: true, Label: "Opus 4.5 (Nov)"},
-	"claude-sonnet-4-6":          {ID: "claude-sonnet-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.6"},
-	"claude-sonnet-4-5":          {ID: "claude-sonnet-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.5"},
-	"claude-sonnet-4-5-20250929": {ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Sonnet 4.5 (Sep)"},
-	"claude-haiku-4-5-20251001":  {ID: "claude-haiku-4-5-20251001", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Haiku 4.5"},
-	"claude-haiku-4-5":           {ID: "claude-haiku-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Haiku 4.5"},
+	"claude-haiku-5-5":           {ID: "claude-haiku-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 0.10, OutputPricePer1M: 0.50, CacheWritePricePer1M: 0.125, CacheWrite1hPricePer1M: 0.20, CacheReadPricePer1M: 0.01, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Haiku 5.5"},
+	"claude-fable-5":             {ID: "claude-fable-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheWrite1hPricePer1M: 20.00, CacheReadPricePer1M: 1.00, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Fable 5"},
+	"claude-opus-5":              {ID: "claude-opus-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheWrite1hPricePer1M: 10.00, CacheReadPricePer1M: 0.50, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 5"},
+	"claude-sonnet-5":            {ID: "claude-sonnet-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheWrite1hPricePer1M: 4.00, CacheReadPricePer1M: 0.20, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Sonnet 5"},
+	"claude-opus-4-8":            {ID: "claude-opus-4-8", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheWrite1hPricePer1M: 10.00, CacheReadPricePer1M: 0.50, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 4.8"},
+	"claude-opus-4-7":            {ID: "claude-opus-4-7", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheWrite1hPricePer1M: 10.00, CacheReadPricePer1M: 0.50, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 4.7"},
+	"claude-opus-4-6":            {ID: "claude-opus-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheWrite1hPricePer1M: 10.00, CacheReadPricePer1M: 0.50, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 4.6"},
+	"claude-opus-4-5":            {ID: "claude-opus-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheWrite1hPricePer1M: 10.00, CacheReadPricePer1M: 0.50, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 4.5"},
+	"claude-opus-4-5-20251101":   {ID: "claude-opus-4-5-20251101", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 5.00, OutputPricePer1M: 25.00, CacheWritePricePer1M: 6.25, CacheWrite1hPricePer1M: 10.00, CacheReadPricePer1M: 0.50, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 4.5 (Nov)"},
+	"claude-sonnet-4-6":          {ID: "claude-sonnet-4-6", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheWrite1hPricePer1M: 6.00, CacheReadPricePer1M: 0.30, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Sonnet 4.6"},
+	"claude-sonnet-4-5":          {ID: "claude-sonnet-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheWrite1hPricePer1M: 6.00, CacheReadPricePer1M: 0.30, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Sonnet 4.5"},
+	"claude-sonnet-4-5-20250929": {ID: "claude-sonnet-4-5-20250929", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.75, CacheWrite1hPricePer1M: 6.00, CacheReadPricePer1M: 0.30, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Sonnet 4.5 (Sep)"},
+	"claude-haiku-4-5-20251001":  {ID: "claude-haiku-4-5-20251001", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheWrite1hPricePer1M: 2.00, CacheReadPricePer1M: 0.10, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Haiku 4.5"},
+	"claude-haiku-4-5":           {ID: "claude-haiku-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheWrite1hPricePer1M: 2.00, CacheReadPricePer1M: 0.10, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Haiku 4.5"},
 
 	// xAI / Grok — from docs.x.ai/developers/models (2026-10-31)
 	// Short-context rates; long-context (≥200k prompt) is 2× and not modeled here.
@@ -843,10 +847,14 @@ type CostInput struct {
 	Model             string
 	InputTokens       int // uncached input tokens only (excludes CacheReadTokens and CacheCreateTokens)
 	OutputTokens      int
-	ThinkingTokens    int  // Gemini, openai_responses: separate from output; Anthropic: 0 (bundled in OutputTokens)
-	CacheCreateTokens int  // tokens written to cache (Anthropic); disjoint from InputTokens
-	CacheReadTokens   int  // tokens read from cache (Anthropic/Gemini/OpenAI-style); disjoint from InputTokens
-	Batch             bool // request was processed via the Batch API (billed at 50% of the sync rate)
+	ThinkingTokens    int // Gemini, openai_responses: separate from output; Anthropic: 0 (bundled in OutputTokens)
+	CacheCreateTokens int // tokens written to cache (Anthropic); disjoint from InputTokens
+	CacheReadTokens   int // tokens read from cache (Anthropic/Gemini/OpenAI-style); disjoint from InputTokens
+	// CacheCreate1hTokens is the share of CacheCreateTokens written with the
+	// 1-hour TTL, priced at CacheWrite1hPricePer1M (the rest at
+	// CacheWritePricePer1M). Capped at CacheCreateTokens.
+	CacheCreate1hTokens int
+	Batch               bool // request was processed via the Batch API (billed at 50% of the sync rate)
 	// AudioInputTokens is the audio share of InputTokens. It is priced at
 	// AudioInputPricePer1M (0 when unknown — never at the text rate) and the
 	// rest of InputTokens at InputPricePer1M.
@@ -854,6 +862,13 @@ type CostInput struct {
 	// AudioSeconds is input audio duration for duration-billed speech-to-text,
 	// priced at AudioPricePerMinute. Negative or non-finite values count as 0.
 	AudioSeconds float64
+	// WebSearchRequests is the number of billed web searches
+	// (Response.ServerToolUse.WebSearchRequests), priced at
+	// WebSearchPricePer1K.
+	WebSearchRequests int
+	// Iterations, when set, replaces the token fields above: each iteration is
+	// priced at its own model (Response.Iterations).
+	Iterations []UsageIteration
 }
 
 // EstimateCost returns the estimated cost in USD for a request/response.
@@ -861,25 +876,63 @@ type CostInput struct {
 // Returns 0 if the model is not in the registry or has no pricing data —
 // register unlisted models via RegisterModel to get real estimates.
 //
+// When Iterations is set (Anthropic usage.iterations), the tokens are priced
+// per iteration at that iteration's model — a fallback attempt at the
+// fallback model's prices — and the top-level token fields are ignored; an
+// iteration whose model has no registry entry adds 0. WebSearchRequests are
+// priced at the model's WebSearchPricePer1K, without the batch discount
+// (searches cost the same in a batch).
+//
 // The result is always finite and >= 0, and monotonic in every count (more
 // tokens or seconds never cost less; AudioInputTokens is a share of
 // InputTokens, so raise both together). Negative counts count as 0, a
 // negative/NaN/Inf registered price counts as unknown (0), and a total that
 // would overflow saturates at math.MaxFloat64.
 func EstimateCost(input CostInput) float64 {
+	info, ok := pricingFor(input.Model)
+	var total float64
+	if len(input.Iterations) > 0 {
+		for _, it := range input.Iterations {
+			model := it.Model
+			if model == "" {
+				model = input.Model
+			}
+			itInfo, known := pricingFor(model)
+			if !known {
+				continue
+			}
+			total += tokenCost(itInfo, CostInput{
+				InputTokens:       it.InputTokens,
+				OutputTokens:      it.OutputTokens,
+				CacheCreateTokens: it.CacheCreationTokens,
+				CacheReadTokens:   it.CacheReadTokens,
+				Batch:             input.Batch,
+			})
+		}
+	} else if ok {
+		total = tokenCost(info, input)
+	}
+	if ok && input.WebSearchRequests > 0 {
+		total += float64(input.WebSearchRequests) * sanitizePrice(info.WebSearchPricePer1K) / 1000
+	}
+	return saturateCost(total)
+}
+
+// pricingFor looks up a model's registry entry, resolving an alias under the
+// same read lock (ResolveModelAlias takes the lock too, and RWMutex is not
+// re-entrant — so inline it).
+func pricingFor(model string) (ModelInfo, bool) {
 	registryMu.RLock()
-	// Resolve an alias to its target under the same read lock (ResolveModelAlias
-	// takes the lock too, and RWMutex is not re-entrant — so inline it).
-	model := input.Model
+	defer registryMu.RUnlock()
 	if full, isAlias := modelAliases[model]; isAlias {
 		model = full
 	}
 	info, ok := modelRegistry[model]
-	registryMu.RUnlock()
-	if !ok {
-		return 0
-	}
+	return info, ok
+}
 
+// tokenCost prices the token and audio fields of input at info's prices.
+func tokenCost(info ModelInfo, input CostInput) float64 {
 	// Clamp negatives to 0 (sentinels like TokensNotReported = -1)
 	clamp := func(n int) int {
 		if n < 0 {
@@ -926,7 +979,20 @@ func EstimateCost(input CostInput) float64 {
 	if cacheReadPrice == 0 {
 		cacheReadPrice = info.InputPricePer1M
 	}
-	cacheCost := perToken(cacheCreateTok, info.CacheWritePricePer1M) +
+	// The 1-hour share of the cache writes is priced at the 1-hour rate. With
+	// that rate unregistered it is the documented 2x input price (Anthropic
+	// pricing: "1-hour cache write: 2x base input price"), or 0 when the input
+	// price is unknown too.
+	write1hTok := clamp(input.CacheCreate1hTokens)
+	if write1hTok > cacheCreateTok {
+		write1hTok = cacheCreateTok
+	}
+	write1hPrice := sanitizePrice(info.CacheWrite1hPricePer1M)
+	if write1hPrice == 0 {
+		write1hPrice = 2 * sanitizePrice(info.InputPricePer1M)
+	}
+	cacheCost := perToken(cacheCreateTok-write1hTok, info.CacheWritePricePer1M) +
+		perToken(write1hTok, write1hPrice) +
 		perToken(cacheReadTok, cacheReadPrice)
 
 	total := inputCost + outputCost + cacheCost
@@ -937,7 +1003,7 @@ func EstimateCost(input CostInput) float64 {
 		total *= 0.5
 	}
 
-	return saturateCost(total)
+	return total
 }
 
 // sanitizePrice treats a negative, NaN or infinite registered price as unknown

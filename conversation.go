@@ -23,12 +23,16 @@ const ConversationSchemaVersion = 1
 // cache-token contract of Response: InputTokens counts uncached input only, so
 // total prompt tokens = InputTokens + CacheReadTokens + CacheCreationTokens.
 type Usage struct {
-	InputTokens         int     `json:"input_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-	ThinkingTokens      int     `json:"thinking_tokens,omitempty"`
-	CacheCreationTokens int     `json:"cache_creation_tokens,omitempty"`
-	CacheReadTokens     int     `json:"cache_read_tokens,omitempty"`
-	Cost                float64 `json:"cost,omitempty"` // estimated USD, summed per response
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	ThinkingTokens      int `json:"thinking_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
+	// CacheCreation1hTokens is the 1-hour share of CacheCreationTokens.
+	CacheCreation1hTokens int `json:"cache_creation_1h_tokens,omitempty"`
+	// ServerToolUse sums the billed server tool calls (web searches, …).
+	ServerToolUse ServerToolUsage `json:"server_tool_use,omitzero"`
+	Cost          float64         `json:"cost,omitempty"` // estimated USD, summed per response
 }
 
 // AddResponse folds one response's usage into the running totals, estimating its
@@ -68,14 +72,21 @@ func (u *Usage) add(resp *Response, batch bool) {
 	u.ThinkingTokens = saturatingAdd(u.ThinkingTokens, think)
 	u.CacheCreationTokens = saturatingAdd(u.CacheCreationTokens, cacheW)
 	u.CacheReadTokens = saturatingAdd(u.CacheReadTokens, cacheR)
+	u.CacheCreation1hTokens = saturatingAdd(u.CacheCreation1hTokens, nonNeg(resp.CacheCreation1hTokens))
+	u.ServerToolUse.WebSearchRequests = saturatingAdd(u.ServerToolUse.WebSearchRequests, nonNeg(resp.ServerToolUse.WebSearchRequests))
+	u.ServerToolUse.WebFetchRequests = saturatingAdd(u.ServerToolUse.WebFetchRequests, nonNeg(resp.ServerToolUse.WebFetchRequests))
+	u.ServerToolUse.CodeExecutionRequests = saturatingAdd(u.ServerToolUse.CodeExecutionRequests, nonNeg(resp.ServerToolUse.CodeExecutionRequests))
 	u.Cost = addCost(u.Cost, EstimateCost(CostInput{
-		Model:             resp.Model,
-		InputTokens:       in,
-		OutputTokens:      out,
-		ThinkingTokens:    think,
-		CacheCreateTokens: cacheW,
-		CacheReadTokens:   cacheR,
-		Batch:             batch,
+		Model:               resp.Model,
+		InputTokens:         in,
+		OutputTokens:        out,
+		ThinkingTokens:      think,
+		CacheCreateTokens:   cacheW,
+		CacheReadTokens:     cacheR,
+		CacheCreate1hTokens: resp.CacheCreation1hTokens,
+		Batch:               batch,
+		WebSearchRequests:   resp.ServerToolUse.WebSearchRequests,
+		Iterations:          resp.Iterations,
 	}))
 }
 
@@ -94,11 +105,13 @@ func nonNeg(n int) int {
 // just accumulates the history and usage. For an ergonomic, concurrency-safe
 // driver — including cross-provider handoff — wrap it in a Session.
 type Conversation struct {
-	SchemaVersion int       `json:"schema_version"`
-	System        string    `json:"system,omitempty"`
-	Tools         []Tool    `json:"tools,omitempty"`
-	Messages      []Message `json:"messages"`
-	Usage         Usage     `json:"usage,omitempty"`
+	SchemaVersion int    `json:"schema_version"`
+	System        string `json:"system,omitempty"`
+	Tools         []Tool `json:"tools,omitempty"`
+	// ServerTools are provider-run tools (web search) sent with every turn.
+	ServerTools []ServerTool `json:"server_tools,omitempty"`
+	Messages    []Message    `json:"messages"`
+	Usage       Usage        `json:"usage,omitempty"`
 }
 
 // NewConversation creates an empty conversation with an optional system prompt
@@ -139,6 +152,9 @@ func (c *Conversation) ToRequest(base Request) Request {
 	if len(c.Tools) > 0 {
 		req.Tools = c.Tools
 	}
+	if len(c.ServerTools) > 0 {
+		req.ServerTools = c.ServerTools
+	}
 	req.Messages = c.Messages
 	return req
 }
@@ -162,6 +178,7 @@ func (c *Conversation) Clone() *Conversation {
 	cp := *c
 	cp.Messages = cloneMessages(c.Messages)
 	cp.Tools = cloneTools(c.Tools)
+	cp.ServerTools = cloneServerTools(c.ServerTools)
 	return &cp
 }
 
@@ -200,6 +217,13 @@ func cloneParts(src []ContentPart) []ContentPart {
 		if p.ToolInput != nil {
 			p.ToolInput = deepCopyJSONValue(p.ToolInput)
 		}
+		p.Citations = cloneCitations(p.Citations)
+		p.WebSearchResults = append([]WebSearchResult(nil), p.WebSearchResults...)
+		if p.ServerToolError != nil {
+			e := *p.ServerToolError
+			p.ServerToolError = &e
+		}
+		p.ProviderBlock = append(json.RawMessage(nil), p.ProviderBlock...)
 		out[i] = p
 	}
 	return out
@@ -290,4 +314,44 @@ func LoadConversation(data []byte) (*Conversation, error) {
 		return nil, fmt.Errorf("llm: conversation schema_version %d is newer than supported %d", c.SchemaVersion, ConversationSchemaVersion)
 	}
 	return &c, nil
+}
+
+// cloneCitations deep-copies a citation slice, including each Raw.
+func cloneCitations(src []Citation) []Citation {
+	if src == nil {
+		return nil
+	}
+	out := make([]Citation, len(src))
+	for i, c := range src {
+		c.Raw = append(json.RawMessage(nil), c.Raw...)
+		out[i] = c
+	}
+	return out
+}
+
+// cloneServerTools deep-copies a server tool slice (domain lists, location,
+// callers and Params).
+func cloneServerTools(src []ServerTool) []ServerTool {
+	if src == nil {
+		return nil
+	}
+	out := make([]ServerTool, len(src))
+	for i, t := range src {
+		t.AllowedDomains = append([]string(nil), t.AllowedDomains...)
+		t.BlockedDomains = append([]string(nil), t.BlockedDomains...)
+		t.AllowedCallers = append([]string(nil), t.AllowedCallers...)
+		if t.UserLocation != nil {
+			loc := *t.UserLocation
+			t.UserLocation = &loc
+		}
+		if t.Params != nil {
+			m := make(map[string]any, len(t.Params))
+			for k, v := range t.Params {
+				m[k] = deepCopyJSONValue(v)
+			}
+			t.Params = m
+		}
+		out[i] = t
+	}
+	return out
 }

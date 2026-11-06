@@ -221,7 +221,9 @@ for event, err := range client.Stream(ctx, req) {
 | `EventContent` | `Text` | A chunk of generated text. Concatenate all chunks for the full response. |
 | `EventToolUse` | `ToolCall` (ID, Name, Input) | The model is invoking a tool. Handle it and continue the conversation with the result. |
 | `EventThinking` | `Thinking` | Thinking output returned by the provider, including models that reason by default. |
-| `EventDone` | `StopReason`, `RawStopReason`, `InputTokens`, `OutputTokens` | Stream completed. Common stop reasons normalize to `end_turn`, `tool_use`, or `max_tokens`; provider-specific reasons can remain unchanged. `RawStopReason` preserves the provider value when available. |
+| `EventServerTool` | `Part` | Anthropic: a server tool call (once its input is complete) or its result. |
+| `EventCitation` | `Citation` | Anthropic: a citation for the text block being streamed. |
+| `EventDone` | `StopReason`, `RawStopReason`, `InputTokens`, `OutputTokens`, `ServerToolUse`, `Iterations`, `Parts`, `ContainerID` | Stream completed. Common stop reasons normalize to `end_turn`, `tool_use`, or `max_tokens`; provider-specific reasons can remain unchanged. `RawStopReason` preserves the provider value when available. |
 | `EventError` | `Error` | Available to custom clients; built-in adapters report failures through the iterator's `error` value. |
 
 **Stream completion:** Require `EventDone` to recognize a completed turn. An unexpected connection close produces an error; iterator exhaustion alone does not prove the response completed. Token counts can use the sentinel `llm.TokensNotReported` (-1) when the provider did not report usage; compare against this constant to distinguish "not reported" from "zero tokens" (0).
@@ -263,6 +265,95 @@ If a tool execution fails, you can pass `isError: true` so the model knows the c
 ```go
 req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, "location not found", true))
 ```
+
+## Server Tools (Anthropic Web Search)
+
+Server tools run at the provider: you declare them, and the call and its result
+come back in the same assistant turn. `Request.ServerTools` (or
+`WithServerTools` on a `Session`) takes a typed `ServerTool`; adapters other than
+Anthropic return an error instead of silently dropping it.
+
+```go
+search := llm.ServerTool{
+    Type:           llm.WebSearch20260209, // or WebSearch20250305 / WebSearch20260318
+    Name:           llm.ServerToolWebSearch,
+    MaxUses:        5,                               // searches per turn (0 = no cap)
+    AllowedDomains: []string{"example.com"},         // or BlockedDomains, not both
+    UserLocation:   &llm.UserLocation{Country: "US", Timezone: "America/New_York"},
+    AllowedCallers: []string{llm.CallerDirect},      // no dynamic filtering (ZDR, older models)
+    CacheControl:   true,
+}
+s := llm.NewSession(client, llm.WithServerTools(search))
+```
+
+`Params` carries further version-specific fields (web fetch's
+`max_content_tokens`, web search's `response_inclusion`) without a new release;
+it cannot override a typed field.
+
+**Response.** `Response.Parts` holds the assistant content in provider order:
+
+| Part | Fields |
+|------|--------|
+| `ContentServerToolUse` | `ToolUseID`, `ToolName`, `ToolInput` |
+| `ContentServerToolResult` | `ToolResultID`, `BlockType` (`"web_search_tool_result"`, …), `WebSearchResults` or `ServerToolError` (`ErrorCode` such as `max_uses_exceeded`) |
+| `ContentText` | `Text`, `Citations` (`web_search_result_location`, `char_location`, `page_location`, `content_block_location`, `search_result_location`) |
+| `ContentProviderBlock` | `BlockType`, for blocks the neutral model does not describe |
+
+Each server part keeps the block exactly as received in `ProviderBlock` (and
+each citation in `Citation.Raw`), so `encrypted_content` and `encrypted_index`
+reach the API unchanged on the next request, also after the conversation was
+persisted and loaded. `NewAssistantMessage` uses `Parts` when set.
+`NormalizeForProvider` drops server parts and citations when a conversation
+moves to another provider. `Response.Content` still holds the concatenated
+text.
+
+**Streaming** emits `EventServerTool` (`Part`) for each call and result and
+`EventCitation` (`Citation`) per citation; `EventDone.Parts` has the assembled
+turn, the same as the non-streaming `Response.Parts`.
+
+**`pause_turn`.** A long server-tool turn can stop with `llm.StopPauseTurn`.
+Continue it by sending the paused content back unchanged, with the same tools:
+
+```go
+resp, err := s.Send(ctx, "When did the example widget ship?")
+for i := 0; err == nil && resp.StopReason == llm.StopPauseTurn && i < 5; i++ {
+    resp, err = s.Continue(ctx) // or StreamContinue
+}
+
+// Without a Session:
+next, err := llm.ContinuePausedTurn(req, resp) // appends the paused turn, nothing else
+resp, err = client.Complete(ctx, next)
+```
+
+The continuation leaves `Tools`, `ServerTools`, `System` and the cache flags
+untouched, so the tool definitions encode to the same bytes and the prompt cache
+stays valid. The container of the paused turn (`Response.ContainerID`, used by
+dynamic filtering) is sent back. `Continue` returns `llm.ErrNotPaused` without
+a request when the last turn did not pause.
+
+**Thinking in a continuation.** Thinking blocks go back unchanged with the rest of the
+turn, signature included, also when their text is empty (the default `display:
+"omitted"` on Claude 4.7+), also without a `ThinkingLevel` on always-thinking models and on
+Sonnet 5.5 (`between_tools`).
+Only a handoff to another provider drops them.
+
+**Refusals and server-side fallback.** A declined request stops with `llm.StopRefusal`;
+`Response.StopDetails` (also on `EventDone`) has `Category`, `Explanation`,
+`RecommendedModel`, the fallback-credit fields and `Raw`. Branch on `StopReason`.
+Server-side fallback is a body field plus a beta header:
+
+```go
+cfg.BetaFeatures = []string{"server-side-fallback-2026-07-01"} // sent on every request
+req.SamplingParams = map[string]any{"fallbacks": "default"}
+```
+
+The `fallback` block that marks the switch comes back as a `ContentProviderBlock` and is
+replayed in place, and `Response.Iterations` prices the attempts.
+
+**Usage.** `Response.ServerToolUse` counts `WebSearchRequests` (and web fetch and
+code execution requests). `Response.Iterations` is Anthropic's
+`usage.iterations` when the API sends it (compaction steps, refusal fallbacks);
+see [Cost Estimation](#cost-estimation).
 
 ## Thinking & Reasoning
 
@@ -418,6 +509,14 @@ for event, err := range client.Stream(ctx, req) {
     }
 }
 ```
+
+**1-hour TTL.** Each cache marker takes an optional TTL: `CacheTTL: llm.CacheTTL1h` on a
+content part, tool or server tool, `SystemCacheTTL` for the system prompt (empty or
+`llm.CacheTTL5m` is the default five minutes). The API requires 1-hour markers to come
+before 5-minute ones. `Response.CacheCreation1hTokens` is the 1-hour share of
+`CacheCreationTokens`; `EstimateCost` prices it at `CacheWrite1hPricePer1M` (2x input on
+Anthropic; a model without one gets 2x its input price) and the rest at the 5-minute
+write rate.
 
 ### Gemini (cached content reference)
 
@@ -603,6 +702,23 @@ sttCost := llm.EstimateCost(llm.CostInput{
 })
 whisperCost := llm.EstimateCost(llm.CostInput{Model: "whisper-1", AudioSeconds: 90})
 fmt.Printf("STT: $%.6f / $%.6f\n", sttCost, whisperCost)
+
+// Anthropic server tools and per-iteration usage. Searches are priced at the
+// model's WebSearchPricePer1K ($10 per 1,000 on the Claude API), without the
+// batch discount. With Iterations set, each iteration is priced at its own
+// model (a refusal fallback at the fallback model's rates) and the top-level
+// token fields are ignored; an iteration on an unpriced model adds 0.
+searchCost := llm.EstimateCost(llm.CostInput{
+    Model:             resp.Model,
+    InputTokens:       resp.InputTokens,
+    OutputTokens:      resp.OutputTokens,
+    CacheCreateTokens: resp.CacheCreationTokens,
+    CacheReadTokens:   resp.CacheReadTokens,
+    WebSearchRequests: resp.ServerToolUse.WebSearchRequests,
+    Iterations:        resp.Iterations,
+})
+// Conversation/Session Usage does the same per turn: Usage.Cost and
+// Usage.ServerToolUse.
 
 // Access pricing data directly
 info, _ := llm.GetModelInfo("claude-opus-4-6")
@@ -1058,7 +1174,7 @@ if err != nil {
 | MaxRetries | int | 10 (`DefaultConfig`), 0 (struct literal) | Cap on retry/rotation iterations (min effective: 3); 0 = 3 attempts for single-key and modality/batch calls |
 | RetryBudget | Duration | 0 | Total wall-clock bound across one call's retries (0 = none) |
 | DisableRetries | bool | false | Exactly one transport attempt (caller owns retry) |
-| BetaFeatures | []string | ["interleaved-thinking-..."] | Provider beta flags (Anthropic: anthropic-beta header) |
+| BetaFeatures | []string | ["interleaved-thinking-..."] | Provider beta flags (Anthropic: anthropic-beta header, sent on every request; the interleaved-thinking flag only with budget thinking) |
 | AnthropicVersion | string | "2023-06-01" | Override Anthropic API version header |
 | MaxErrorBodyBytes | int | 1 MB | Cap on error response body reads |
 | MaxSSELineBytes | int | 256 KB | Cap on per-line SSE buffer |
@@ -1295,6 +1411,8 @@ llm/
   conversation.go                        # Conversation + Usage + versioned serialization
   session.go                             # Session (stateful driver) + provider handoff
   normalize.go                           # NormalizeForProvider/NormalizeForModel() handoff pass
+  servertools.go                         # ServerTool, citations, server tool results + usage types
+  pauseturn.go                           # ContinuePausedTurn() (pause_turn continuation)
   store.go                               # Store interface + MemoryStore / FileStore
   streamevents.go                        # StreamWithBoundaries() fine-grained events
   mock.go                                # MockClient (test double) + faux builders

@@ -1,0 +1,37 @@
+{
+  "id": "msg_01",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5-5",
+  "content": [
+    {"type": "text", "text": "I'll search for that."},
+    {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "example widget release date"}},
+    {
+      "type": "web_search_tool_result",
+      "tool_use_id": "srvtoolu_01",
+      "content": [
+        {"type": "web_search_result", "url": "https://example.com/widgets", "title": "Widgets - Example", "encrypted_content": "EqgfCioIARgBIiQ3YTAw", "page_age": "April 30, 2026"},
+        {"type": "web_search_result", "url": "https://example.org/news", "title": "News - Example", "encrypted_content": "Eo8BCioIAhgBIiQyYjQ0"}
+      ]
+    },
+    {"type": "text", "text": "Based on the search results, "},
+    {
+      "type": "text",
+      "text": "the widget shipped on April 30, 2026",
+      "citations": [
+        {"type": "web_search_result_location", "url": "https://example.com/widgets", "title": "Widgets - Example", "encrypted_index": "Eo8BCioIAhgBIiQy", "cited_text": "The widget shipped on April 30, 2026, in three colors."}
+      ]
+    },
+    {"type": "server_tool_use", "id": "srvtoolu_02", "name": "web_search", "input": {"query": "example widget price"}}
+  ],
+  "stop_reason": "pause_turn",
+  "stop_details": null,
+  "container": {"id": "container_01", "expires_at": "2026-11-06T12:00:00Z"},
+  "usage": {
+    "input_tokens": 6039,
+    "output_tokens": 931,
+    "cache_creation_input_tokens": 1200,
+    "cache_read_input_tokens": 7123,
+    "server_tool_use": {"web_search_requests": 1}
+  }
+}

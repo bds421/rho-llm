@@ -307,6 +307,9 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	if err := req.ToolChoice.Validate(); err != nil {
 		return geminiRequest{}, err
 	}
+	if err := llm.UnsupportedServerTools(c.Provider(), req); err != nil {
+		return geminiRequest{}, err
+	}
 	apiReq := geminiRequest{
 		GenerationConfig: &geminiGenerationConfig{
 			Temperature:     req.Temperature, // nil = omit from wire (provider default)

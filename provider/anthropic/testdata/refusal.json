@@ -1,0 +1,10 @@
+{
+  "id": "msg_04",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5-5",
+  "content": [],
+  "stop_reason": "refusal",
+  "stop_details": {"type": "refusal", "category": "cyber", "explanation": "The request was declined by a safety classifier.", "recommended_model": "claude-opus-4-8", "x_future_field": {"k": 1}},
+  "usage": {"input_tokens": 535, "output_tokens": 0}
+}

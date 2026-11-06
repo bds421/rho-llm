@@ -587,6 +587,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 	if err := req.ToolChoice.Validate(); err != nil {
 		return responsesRequest{}, err
 	}
+	if err := llm.UnsupportedServerTools(c.Provider(), req); err != nil {
+		return responsesRequest{}, err
+	}
 	model := req.Model
 	if model == "" {
 		model = c.config.Model

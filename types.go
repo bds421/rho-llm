@@ -112,6 +112,16 @@ const (
 	ContentThinking   ContentType = "thinking"
 	ContentToolUse    ContentType = "tool_use"
 	ContentToolResult ContentType = "tool_result"
+
+	// ContentServerToolUse is a call the provider ran itself (ServerTool);
+	// ContentServerToolResult is its result, paired by ToolResultID. Both
+	// carry ProviderBlock and are replayed only to the provider that made them.
+	ContentServerToolUse    ContentType = "server_tool_use"
+	ContentServerToolResult ContentType = "server_tool_result"
+	// ContentProviderBlock is a provider content block the neutral model does
+	// not describe, kept in ProviderBlock (BlockType names it) so a turn can be
+	// sent back unchanged to the same provider.
+	ContentProviderBlock ContentType = "provider_block"
 )
 
 // EventType represents the type of a streaming event.
@@ -123,6 +133,12 @@ const (
 	EventThinking EventType = "thinking"
 	EventDone     EventType = "done"
 	EventError    EventType = "error"
+
+	// EventServerTool carries a server tool call (when its input is complete)
+	// or result in Part. EventCitation carries one citation for the text
+	// streamed so far in Citation.
+	EventServerTool EventType = "server_tool"
+	EventCitation   EventType = "citation"
 )
 
 // ThinkingLevel represents the extended thinking budget level.
@@ -200,6 +216,12 @@ const (
 	StopMaxTokens = "max_tokens" // output truncated at the token limit
 	StopError     = "error"      // the turn failed — NormalizeForProvider drops it on replay
 	StopAborted   = "aborted"    // the turn was aborted by the caller — dropped on replay
+	// StopPauseTurn: the provider paused a long server-tool turn. Send the
+	// paused assistant message back unchanged as the next request, with the
+	// same tools, to let it continue (ContinuePausedTurn, Session.Continue).
+	StopPauseTurn = "pause_turn"
+	// StopRefusal: the provider's safety classifiers declined the request.
+	StopRefusal = "refusal"
 )
 
 // =============================================================================
@@ -218,6 +240,10 @@ type Message struct {
 	Provider   string `json:"provider,omitempty"`    // producing provider (e.g. "anthropic")
 	Model      string `json:"model,omitempty"`       // producing model id
 	StopReason string `json:"stop_reason,omitempty"` // end_turn, tool_use, max_tokens, error
+	// ContainerID is the provider container the turn ran in (Anthropic code
+	// execution, also behind dynamic web search filtering). A pause_turn
+	// continuation sends it back so the turn keeps its container.
+	ContainerID string `json:"container_id,omitempty"`
 }
 
 // ContentPart represents a part of message content.
@@ -264,6 +290,28 @@ type ContentPart struct {
 
 	// Caching (Anthropic): mark this content block as cacheable
 	CacheControl bool `json:"cache_control,omitempty"`
+	// CacheTTL is the cache lifetime when CacheControl is set: CacheTTL1h, or
+	// empty / CacheTTL5m for the default five minutes.
+	CacheTTL string `json:"cache_ttl,omitempty"`
+
+	// Citations on a text part (Anthropic: web search, documents, search
+	// results). Replayed to the producing provider, stripped for others.
+	Citations []Citation `json:"citations,omitempty"`
+
+	// Server tools and provider blocks. A server tool call uses ToolUseID,
+	// ToolName and ToolInput; its result uses ToolResultID, BlockType (the
+	// provider's block type, e.g. "web_search_tool_result") and, for web
+	// search, WebSearchResults or ServerToolError.
+	BlockType        string            `json:"block_type,omitempty"`
+	WebSearchResults []WebSearchResult `json:"web_search_results,omitempty"`
+	ServerToolError  *ServerToolError  `json:"server_tool_error,omitempty"`
+
+	// ProviderBlock is the block exactly as the provider sent it (compact
+	// JSON). Adapters replay it verbatim to the same provider, so opaque
+	// fields such as encrypted_content survive unchanged; the typed fields
+	// above are for reading. Set on ContentServerToolUse,
+	// ContentServerToolResult and ContentProviderBlock parts.
+	ProviderBlock json.RawMessage `json:"provider_block,omitempty"`
 }
 
 // ImageSource represents an image source.
@@ -483,15 +531,22 @@ func NewSystemMessage(text string) Message {
 // NewAssistantMessage creates an assistant message from a Response, preserving
 // both text content and tool_use blocks. Use this instead of NewTextMessage
 // when the response contains tool calls — NewTextMessage would lose them.
-// Panics if resp is nil (caller bug — matches Go conventions for nil receivers).
+// When resp.Parts is set it is the message content as is (provider order,
+// server tool blocks and citations included), and the flat fields are not
+// consulted. Panics if resp is nil (caller bug — matches Go conventions for nil receivers).
 func NewAssistantMessage(resp *Response) Message {
 	if resp == nil {
 		panic("llm.NewAssistantMessage: resp must not be nil")
 	}
 	msg := Message{
-		Role:       RoleAssistant,
-		Model:      resp.Model,
-		StopReason: resp.StopReason,
+		Role:        RoleAssistant,
+		Model:       resp.Model,
+		StopReason:  resp.StopReason,
+		ContainerID: resp.ContainerID,
+	}
+	if len(resp.Parts) > 0 {
+		msg.Content = append([]ContentPart(nil), resp.Parts...)
+		return msg
 	}
 	// Thinking first — Anthropic requires the thinking block to precede tool_use
 	// when extended thinking is active, and to carry its signature for replay.
@@ -533,6 +588,8 @@ type Tool struct {
 
 	// Caching (Anthropic): mark this tool definition as cacheable
 	CacheControl bool `json:"cache_control,omitempty"`
+	// CacheTTL: CacheTTL1h, or empty for the default five minutes.
+	CacheTTL string `json:"cache_ttl,omitempty"`
 }
 
 // ToolChoiceMode selects how the model may use the tools in a Request.
@@ -628,8 +685,16 @@ type Request struct {
 	ReasoningSummary ReasoningSummary `json:"reasoning_summary,omitempty"` // OpenAI Responses API: auto, detailed, concise
 	StopSequences    []string         `json:"stop_sequences,omitempty"`
 
+	// ServerTools are tools the provider runs itself (Anthropic web search).
+	// They are sent after Tools. Adapters without server tools return an
+	// error when any is set.
+	ServerTools []ServerTool `json:"server_tools,omitempty"`
+	// ContainerID reuses a provider container (Anthropic "container").
+	ContainerID string `json:"container_id,omitempty"`
+
 	// Caching
 	SystemCacheControl bool   `json:"system_cache_control,omitempty"` // Anthropic: cache the system prompt
+	SystemCacheTTL     string `json:"system_cache_ttl,omitempty"`     // Anthropic: CacheTTL1h, or empty for 5 minutes
 	CachedContent      string `json:"cached_content,omitempty"`       // Gemini: pre-created cache name
 
 	// ResponseFormat requests structured output (JSON mode / JSON schema). Wired
@@ -696,6 +761,30 @@ type Response struct {
 	// Cache token usage — disjoint from InputTokens (see above).
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"` // tokens written to cache (Anthropic)
 	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`     // tokens read from cache (Anthropic, Gemini, OpenAI-style)
+	// CacheCreation1hTokens is the share of CacheCreationTokens written with
+	// the 1-hour TTL (Anthropic usage.cache_creation), priced at the 1-hour
+	// write rate; the rest of CacheCreationTokens is 5-minute writes.
+	CacheCreation1hTokens int `json:"cache_creation_1h_input_tokens,omitempty"`
+
+	// StopDetails explains a refusal (Anthropic stop_details); nil otherwise.
+	StopDetails *StopDetails `json:"stop_details,omitempty"`
+
+	// ServerToolUse counts billed server tool calls (Anthropic
+	// usage.server_tool_use). Iterations is Anthropic's usage.iterations, the
+	// per-attempt billing record when present (see UsageIteration).
+	ServerToolUse ServerToolUsage  `json:"server_tool_use,omitzero"`
+	Iterations    []UsageIteration `json:"iterations,omitempty"`
+
+	// Parts is the assistant content in provider order, one part per
+	// provider block (text with citations, thinking with its own signature,
+	// tool and server tool calls, server tool results, unknown blocks). Set by
+	// adapters whose content the flat fields above cannot carry faithfully
+	// (Anthropic); NewAssistantMessage uses it when set, so a turn — a paused
+	// one included — goes back to the provider unchanged.
+	Parts []ContentPart `json:"parts,omitempty"`
+
+	// ContainerID is the provider container the response ran in, if any.
+	ContainerID string `json:"container_id,omitempty"`
 }
 
 // =============================================================================
@@ -734,6 +823,23 @@ type StreamEvent struct {
 	// CacheReadTokens: Anthropic, Gemini, OpenAI-style; CacheCreationTokens: Anthropic.
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
+
+	// Done event: the 1-hour share of CacheCreationTokens and refusal details,
+	// as on Response.
+	CacheCreation1hTokens int          `json:"cache_creation_1h_input_tokens,omitempty"`
+	StopDetails           *StopDetails `json:"stop_details,omitempty"`
+
+	// Done event: server tool usage, usage iterations, the assembled
+	// assistant content and the container, as on Response.
+	ServerToolUse ServerToolUsage  `json:"server_tool_use,omitzero"`
+	Iterations    []UsageIteration `json:"iterations,omitempty"`
+	Parts         []ContentPart    `json:"parts,omitempty"`
+	ContainerID   string           `json:"container_id,omitempty"`
+
+	// EventServerTool: the server tool call or result.
+	Part *ContentPart `json:"part,omitempty"`
+	// EventCitation: a citation on the current text block.
+	Citation *Citation `json:"citation,omitempty"`
 
 	// Error event
 	Error string `json:"error,omitempty"`

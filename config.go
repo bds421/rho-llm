@@ -472,8 +472,10 @@ const (
 //
 // BetaFeatures defaults to the Anthropic interleaved-thinking flag even though
 // it is provider-specific: every other provider ignores the field, and losing
-// the flag would silently disable interleaved thinking for Anthropic users.
-// Set BetaFeatures explicitly (or nil) to opt out.
+// the flag would silently disable interleaved thinking for Anthropic users of
+// budget-thinking models (Claude 4.5 and older). The Anthropic adapter sends
+// this one flag only with budget thinking; every other BetaFeatures entry goes
+// out on every request. Set BetaFeatures explicitly (or nil) to opt out.
 func DefaultConfig() Config {
 	return Config{
 		Provider: "anthropic",

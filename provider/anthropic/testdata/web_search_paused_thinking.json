@@ -1,0 +1,23 @@
+{
+  "id": "msg_03",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5-5",
+  "content": [
+    {"type": "thinking", "thinking": "", "signature": "EuYBCkQYAiJAm3xQ+/sig/one=="},
+    {"type": "server_tool_use", "id": "srvtoolu_11", "name": "web_search", "input": {"query": "example gadget specs"}},
+    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_11", "content": [{"type": "web_search_result", "url": "https://example.net/gadget", "title": "Gadget - Example", "encrypted_content": "Eq0CCioIAhgB", "page_age": null}]},
+    {"type": "thinking", "thinking": "", "signature": "EuYBCkQYAiJAm3xQ+/sig/two=="},
+    {"type": "server_tool_use", "id": "srvtoolu_12", "name": "web_search", "input": {"query": "example gadget price"}}
+  ],
+  "stop_reason": "pause_turn",
+  "stop_details": null,
+  "usage": {
+    "input_tokens": 900,
+    "output_tokens": 120,
+    "cache_creation_input_tokens": 3000,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {"ephemeral_5m_input_tokens": 1000, "ephemeral_1h_input_tokens": 2000},
+    "server_tool_use": {"web_search_requests": 1}
+  }
+}

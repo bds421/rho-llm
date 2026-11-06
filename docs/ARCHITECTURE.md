@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of November 2026 (v0.11.0).
+> **Status:** Reflects the current implementation as of November 2026 (v0.12.0).
 
 ---
 
@@ -45,6 +45,8 @@ github.com/bds421/rho-llm/
 ├── conversation.go      # Conversation (serializable transcript) + Usage + versioned JSON
 ├── session.go           # Session (concurrency-safe driver) + provider handoff (SwitchProvider)
 ├── normalize.go         # NormalizeForProvider/NormalizeForModel() — transcript translation
+├── servertools.go       # ServerTool (web search), Citation, server tool results, ServerToolUsage, UsageIteration
+├── pauseturn.go         # ContinuePausedTurn() + ErrNotPaused (pause_turn continuation)
 ├── store.go             # Store interface + MemoryStore / FileStore (conversation persistence)
 ├── streamevents.go      # StreamWithBoundaries() — fine-grained block events
 ├── mock.go              # MockClient test double + faux builders
@@ -69,6 +71,9 @@ github.com/bds421/rho-llm/
 └── provider/                        # Provider adapters (database/sql driver pattern)
     ├── all.go                       # Blank-imports all sub-packages
     ├── anthropic/anthropic.go       # Native Anthropic API adapter
+    ├── anthropic/blocks.go          # Response blocks ⇄ parts (server tools, citations, raw replay)
+    ├── anthropic/streamblocks.go    # Streamed blocks assembled into the same ordered parts
+    ├── anthropic/servertools.go     # ServerTool wire encoding (sorted keys, cache-stable)
     ├── anthropicbatch/              # Anthropic Message Batches driver
     ├── gemini/gemini.go             # Native Google Gemini API adapter (+ modality)
     ├── geminibatch/                 # Gemini Batch driver (completion + embeddings)
@@ -168,8 +173,28 @@ Message
         ├── {Type: ContentImage, Source: ImageSource{base64, media_type}}
         ├── {Type: ContentDocument, Document: DocumentSource{base64, media_type}}
         ├── {Type: ContentToolUse, ToolUseID, ToolName, ToolInput, ThoughtSignature}
-        └── {Type: ContentToolResult, ToolResultID, ToolResultContent, IsError}
+        ├── {Type: ContentToolResult, ToolResultID, ToolResultContent, IsError}
+        ├── {Type: ContentServerToolUse, ToolUseID, ToolName, ToolInput, ProviderBlock}
+        ├── {Type: ContentServerToolResult, ToolResultID, BlockType, WebSearchResults | ServerToolError, ProviderBlock}
+        └── {Type: ContentProviderBlock, BlockType, ProviderBlock}
 ```
+
+**Server tools (v0.12.0, `servertools.go`).** `Request.ServerTools` declares
+provider-run tools (Anthropic web search). The Anthropic adapter returns the
+assistant content as `Response.Parts`, one part per wire block in order; each
+server part keeps the block as received in `ProviderBlock` (compact JSON), and
+each text citation its `Citation.Raw`, which the adapter replays verbatim, so a
+turn goes back unchanged — the documented `pause_turn` continuation
+(`ContinuePausedTurn`, `Session.Continue`). Server tool definitions encode as
+sorted-key objects, so the `tools` prefix is byte-identical across requests
+(prompt cache). Other adapters reject `ServerTools`; `NormalizeForProvider`
+drops server parts and citations on a handoff. `Usage.Cost` prices
+`ServerToolUse.WebSearchRequests` and, when present, `Response.Iterations` per
+iteration at each iteration's model.
+Thinking blocks are replayed as received (empty text included) to the same
+provider; `Response.StopDetails` carries Anthropic `stop_details`; cache markers
+take a `CacheTTL` (`1h`), and `CacheCreation1hTokens` is priced at the 1-hour
+write rate.
 
 `ContentImage` parts are fully implemented across all four protocol adapters.
 Each adapter validates images via `ValidateImageSource()` and serializes to its
@@ -200,6 +225,13 @@ type StreamEvent struct {
 
     CacheCreationTokens int // Anthropic: tokens written to cache (EventDone); disjoint from InputTokens
     CacheReadTokens     int // Anthropic/Gemini/OpenAI-style: tokens read from cache (EventDone); disjoint from InputTokens
+
+    ServerToolUse ServerToolUsage  // done: billed server tool calls (Anthropic)
+    Iterations    []UsageIteration // done: usage.iterations (Anthropic), when sent
+    Parts         []ContentPart    // done: the assembled turn, as Response.Parts
+    ContainerID   string           // done: provider container (code execution)
+    Part          *ContentPart     // EventServerTool: server tool call or result
+    Citation      *Citation        // EventCitation: a citation on the current text block
 
     Error        string // error
 }

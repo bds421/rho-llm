@@ -199,30 +199,32 @@ func TestNormalizeStripsThoughtSignatureCrossProvider(t *testing.T) {
 	}
 }
 
-// BUG 1: a thinking block that carries a signature but EMPTY text must not be
-// replayed verbatim (a provider rejects an empty thinking block) — it has no
-// reasoning to preserve, so it is dropped. The accompanying answer survives.
-func TestNormalizeDropsEmptyThinkingWithSignature(t *testing.T) {
+// A thinking block that carries a signature but EMPTY text is what Claude
+// 4.7+ return by default (display "omitted"). The API docs say to keep such a
+// block when the turn goes back to the same model ("a thinking block with
+// empty text is still a block"; dropping it fails the preserved-thinking
+// chain check), so it is kept for the same provider. For another provider it
+// has nothing to preserve and is dropped. The answer survives either way.
+// (Before v0.12.0 it was dropped for the same provider too.)
+func TestNormalizeEmptySignedThinking(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: llm.RoleAssistant, Provider: "anthropic", Content: []llm.ContentPart{
 			{Type: llm.ContentThinking, Thinking: "", ThinkingSignature: "sig"},
 			{Type: llm.ContentText, Text: "answer"},
 		}},
 	}
-	out := llm.NormalizeForProvider(msgs, "anthropic") // same provider
-	for _, p := range out[0].Content {
-		if p.Type == llm.ContentThinking && p.Thinking == "" {
-			t.Fatalf("empty thinking block (signed, no text) replayed verbatim: %+v", p)
+	same := llm.NormalizeForProvider(msgs, "anthropic")
+	if len(same[0].Content) != 2 || same[0].Content[0].Type != llm.ContentThinking || same[0].Content[0].ThinkingSignature != "sig" {
+		t.Fatalf("same provider: signed empty thinking not kept: %+v", same[0].Content)
+	}
+	other := llm.NormalizeForProvider(msgs, "gemini")
+	for _, p := range other[0].Content {
+		if p.Type == llm.ContentThinking || (p.Type == llm.ContentText && p.Text == "") {
+			t.Fatalf("other provider: empty thinking survived: %+v", p)
 		}
 	}
-	found := false
-	for _, p := range out[0].Content {
-		if p.Type == llm.ContentText && p.Text == "answer" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("answer text lost during normalization")
+	if len(other[0].Content) != 1 || other[0].Content[0].Text != "answer" {
+		t.Fatalf("answer text lost during normalization: %+v", other[0].Content)
 	}
 }
 

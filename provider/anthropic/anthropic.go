@@ -116,12 +116,13 @@ type anthropicRequest struct {
 	System        any                    `json:"system,omitempty"`
 	MaxTokens     int                    `json:"max_tokens"`
 	Temperature   *float64               `json:"temperature,omitempty"`
-	Tools         []anthropicTool        `json:"tools,omitempty"`
+	Tools         []any                  `json:"tools,omitempty"` // anthropicTool, then server tools
 	ToolChoice    any                    `json:"tool_choice,omitempty"`
 	Stream        bool                   `json:"stream,omitempty"`
 	Thinking      *anthropicThinking     `json:"thinking,omitempty"`
 	OutputConfig  *anthropicOutputConfig `json:"output_config,omitempty"`
 	StopSequences []string               `json:"stop_sequences,omitempty"`
+	Container     string                 `json:"container,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -137,9 +138,22 @@ type anthropicTool struct {
 }
 
 // anthropicCacheControl represents the cache_control annotation.
-// Anthropic currently only supports type "ephemeral".
+// Anthropic currently only supports type "ephemeral"; TTL is "1h" or omitted
+// (5 minutes).
 type anthropicCacheControl struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
+}
+
+// cacheControl returns the cache_control marker for a CacheTTL value.
+func cacheControl(ttl string) (*anthropicCacheControl, error) {
+	switch ttl {
+	case "", llm.CacheTTL5m:
+		return &anthropicCacheControl{Type: "ephemeral"}, nil
+	case llm.CacheTTL1h:
+		return &anthropicCacheControl{Type: "ephemeral", TTL: llm.CacheTTL1h}, nil
+	}
+	return nil, fmt.Errorf("anthropic: unsupported cache TTL %q (use %q or %q)", ttl, llm.CacheTTL5m, llm.CacheTTL1h)
 }
 
 type anthropicThinking struct {
@@ -154,36 +168,38 @@ type anthropicOutputConfig struct {
 
 // anthropicResponse is the Anthropic API response format.
 type anthropicResponse struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Role    string `json:"role"`
-	Model   string `json:"model"`
-	Content []struct {
-		Type      string `json:"type"`
-		Text      string `json:"text,omitempty"`
-		ID        string `json:"id,omitempty"`
-		Name      string `json:"name,omitempty"`
-		Input     any    `json:"input,omitempty"`
-		Thinking  string `json:"thinking,omitempty"`
-		Signature string `json:"signature,omitempty"` // thinking-block signature (for replay)
-		Data      string `json:"data,omitempty"`      // redacted_thinking payload
-	} `json:"content"`
-	StopReason string `json:"stop_reason"`
-	Usage      struct {
-		InputTokens         int `json:"input_tokens"`
-		OutputTokens        int `json:"output_tokens"`
-		CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
-		CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
-	} `json:"usage"`
+	ID          string           `json:"id"`
+	Type        string           `json:"type"`
+	Role        string           `json:"role"`
+	Model       string           `json:"model"`
+	Content     []anthropicBlock `json:"content"`
+	StopReason  string           `json:"stop_reason"`
+	StopDetails json.RawMessage  `json:"stop_details,omitempty"`
+	Usage       anthropicUsage   `json:"usage"`
+	Container   *struct {
+		ID string `json:"id"`
+	} `json:"container,omitempty"`
 }
 
-// setBetaHeader sets the anthropic-beta header from config when thinking is active.
-func (c *Client) setBetaHeader(httpReq *http.Request, req llm.Request) {
-	if req.ThinkingLevel == llm.ThinkingNone {
-		return
+// interleavedThinkingBeta is DefaultConfig's beta flag. It only does anything
+// with budget thinking (Claude 4.5 and older; adaptive models interleave on
+// their own), and it is deprecated, so it goes out only with such a request.
+const interleavedThinkingBeta = "interleaved-thinking-2025-05-14"
+
+// setBetaHeader sets the anthropic-beta header from Config.BetaFeatures on
+// every request (server-side fallback and other betas do not depend on
+// thinking), except the interleaved-thinking flag without budget thinking.
+func (c *Client) setBetaHeader(httpReq *http.Request, apiReq anthropicRequest) {
+	budgetThinking := apiReq.Thinking != nil && apiReq.Thinking.Type == "enabled"
+	var betas []string
+	for _, beta := range c.config.BetaFeatures {
+		if beta == interleavedThinkingBeta && !budgetThinking {
+			continue
+		}
+		betas = append(betas, beta)
 	}
-	if len(c.config.BetaFeatures) > 0 {
-		httpReq.Header.Set("anthropic-beta", strings.Join(c.config.BetaFeatures, ","))
+	if len(betas) > 0 {
+		httpReq.Header.Set("anthropic-beta", strings.Join(betas, ","))
 	}
 }
 
@@ -213,7 +229,7 @@ func (c *Client) doRequest(ctx context.Context, req llm.Request, stream bool) (*
 	httpReq.Header.Set("anthropic-version", c.config.EffectiveAnthropicVersion())
 
 	// Beta features from config (e.g., extended thinking).
-	c.setBetaHeader(httpReq, req)
+	c.setBetaHeader(httpReq, apiReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -263,7 +279,7 @@ func (c *Client) doStreamRequest(ctx context.Context, req llm.Request, yield fun
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	// Beta features from config.
-	c.setBetaHeader(httpReq, req)
+	c.setBetaHeader(httpReq, apiReq)
 
 	resp, err := c.streamHTTPClient().Do(httpReq)
 	if err != nil {
@@ -338,6 +354,13 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	if apiReq.MaxTokens == 0 {
 		apiReq.MaxTokens = c.config.MaxTokens
 	}
+	// Thinking is on for this request unless the model takes {"type":"disabled"}
+	// and no ThinkingLevel is set: always-on models omit the parameter, and
+	// between_tools (Sonnet 5.5) still writes thinking blocks between tool
+	// calls, which must be echoed back.
+	profile, adaptive := adaptiveThinkingModels[llm.ResolveModelAlias(apiReq.Model)]
+	thinkingOn := req.ThinkingLevel != llm.ThinkingNone ||
+		(adaptive && (profile.off == thinkingOffOmit || profile.off == thinkingOffBetweenTools))
 
 	// Build system prompt. Collect all system text first (from req.System and RoleSystem messages).
 	var systemTexts []string
@@ -368,8 +391,27 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 						"text": part.Text,
 					}
 					if part.CacheControl {
-						block["cache_control"] = map[string]string{"type": "ephemeral"}
+						cc, err := cacheControl(part.CacheTTL)
+						if err != nil {
+							return anthropicRequest{}, err
+						}
+						block["cache_control"] = cc
 					}
+					if len(part.Citations) > 0 {
+						citations, err := citationsWire(part.Citations)
+						if err != nil {
+							return anthropicRequest{}, err
+						}
+						block["citations"] = citations
+					}
+					apiMsg.Content = append(apiMsg.Content, block)
+				}
+			case llm.ContentServerToolUse, llm.ContentServerToolResult, llm.ContentProviderBlock:
+				block, ok, err := replayBlock(part)
+				if err != nil {
+					return anthropicRequest{}, err
+				}
+				if ok {
 					apiMsg.Content = append(apiMsg.Content, block)
 				}
 			case llm.ContentImage:
@@ -385,7 +427,11 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					},
 				}
 				if part.CacheControl {
-					block["cache_control"] = map[string]string{"type": "ephemeral"}
+					cc, err := cacheControl(part.CacheTTL)
+					if err != nil {
+						return anthropicRequest{}, err
+					}
+					block["cache_control"] = cc
 				}
 				apiMsg.Content = append(apiMsg.Content, block)
 			case llm.ContentDocument:
@@ -402,7 +448,11 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					},
 				}
 				if part.CacheControl {
-					block["cache_control"] = map[string]string{"type": "ephemeral"}
+					cc, err := cacheControl(part.CacheTTL)
+					if err != nil {
+						return anthropicRequest{}, err
+					}
+					block["cache_control"] = cc
 				}
 				apiMsg.Content = append(apiMsg.Content, block)
 			case llm.ContentThinking:
@@ -415,15 +465,25 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				// Thinking blocks are ONLY valid when extended thinking is enabled
 				// for this request — Anthropic rejects them otherwise. So when
 				// thinking is off this turn, drop historical thinking blocks.
-				if req.ThinkingLevel == llm.ThinkingNone {
+				// Models whose thinking is always on count as enabled.
+				if !thinkingOn {
 					continue
 				}
-				if part.Redacted && part.Thinking != "" {
+				// A signed block goes back unchanged even with empty text (the
+				// default display "omitted" returns exactly that): dropping or
+				// editing it breaks a continuation and the cached prefix.
+				if part.ProviderBlock != nil && (part.Redacted || part.ThinkingSignature != "") {
+					block, _, err := replayBlock(part)
+					if err != nil {
+						return anthropicRequest{}, err
+					}
+					apiMsg.Content = append(apiMsg.Content, block)
+				} else if part.Redacted && part.Thinking != "" {
 					apiMsg.Content = append(apiMsg.Content, map[string]any{
 						"type": "redacted_thinking",
 						"data": part.Thinking,
 					})
-				} else if part.ThinkingSignature != "" && part.Thinking != "" {
+				} else if part.ThinkingSignature != "" {
 					apiMsg.Content = append(apiMsg.Content, map[string]any{
 						"type":      "thinking",
 						"thinking":  part.Thinking,
@@ -497,7 +557,11 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				"text": text,
 			}
 			if i == len(systemTexts)-1 {
-				block["cache_control"] = map[string]string{"type": "ephemeral"}
+				cc, err := cacheControl(req.SystemCacheTTL)
+				if err != nil {
+					return anthropicRequest{}, err
+				}
+				block["cache_control"] = cc
 			}
 			blocks = append(blocks, block)
 		}
@@ -519,14 +583,28 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				InputSchema: schema,
 			}
 			if tool.CacheControl {
-				at.CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+				cc, err := cacheControl(tool.CacheTTL)
+				if err != nil {
+					return anthropicRequest{}, err
+				}
+				at.CacheControl = cc
 			}
 			apiReq.Tools = append(apiReq.Tools, at)
 		}
+	}
+	for _, st := range req.ServerTools {
+		wire, err := serverToolWire(st)
+		if err != nil {
+			return anthropicRequest{}, err
+		}
+		apiReq.Tools = append(apiReq.Tools, wire)
+	}
+	if len(apiReq.Tools) > 0 {
 		// Anthropic rejects tool_choice without a tools array, so it only rides
 		// along when tools were actually built.
 		apiReq.ToolChoice = toolChoiceWire(req.ToolChoice)
 	}
+	apiReq.Container = req.ContainerID
 
 	// Configure stop sequences
 	if len(req.StopSequences) > 0 {
@@ -638,17 +716,25 @@ func normalizeStopReason(reason string) string {
 
 func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 	resp := &llm.Response{
-		ID:                  apiResp.ID,
-		Model:               apiResp.Model,
-		StopReason:          normalizeStopReason(apiResp.StopReason),
-		RawStopReason:       apiResp.StopReason,
-		InputTokens:         apiResp.Usage.InputTokens,
-		OutputTokens:        apiResp.Usage.OutputTokens,
-		CacheCreationTokens: apiResp.Usage.CacheCreationTokens,
-		CacheReadTokens:     apiResp.Usage.CacheReadTokens,
+		ID:                    apiResp.ID,
+		Model:                 apiResp.Model,
+		StopReason:            normalizeStopReason(apiResp.StopReason),
+		RawStopReason:         apiResp.StopReason,
+		InputTokens:           apiResp.Usage.InputTokens,
+		OutputTokens:          apiResp.Usage.OutputTokens,
+		CacheCreationTokens:   apiResp.Usage.CacheCreationTokens,
+		CacheReadTokens:       apiResp.Usage.CacheReadTokens,
+		ServerToolUse:         apiResp.Usage.serverToolUse(),
+		CacheCreation1hTokens: apiResp.Usage.CacheCreation.Ephemeral1h,
+		StopDetails:           llm.StopDetailsFromRaw(apiResp.StopDetails),
+		Iterations:            apiResp.Usage.Iterations,
+	}
+	if apiResp.Container != nil {
+		resp.ContainerID = apiResp.Container.ID
 	}
 
 	for _, block := range apiResp.Content {
+		resp.Parts = append(resp.Parts, blockPart(block))
 		switch block.Type {
 		case "text":
 			resp.Content += block.Text
@@ -678,14 +764,17 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
 
 	var currentToolCall *llm.ToolCall
+	currentToolIndex := -1
 	var inputBuffer strings.Builder
 	// Token counts initialize to "not reported". If the stream ends before
 	// message_start/message_delta events, callers can distinguish "not reported"
 	// from "zero tokens" (0).
 	var inputTokens = llm.TokensNotReported
 	var cacheCreationTokens, cacheReadTokens int
+	var startUsage anthropicUsage
+	var containerID string
 	var thinkingSignature string
-	doneEmitted := false
+	blocks := newStreamBlocks()
 
 	// flushToolCall emits any accumulated tool call and clears the buffer.
 	// Returns false if the caller broke iteration. Called both on
@@ -703,9 +792,20 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		}
 		currentToolCall.Input = input
 		tc := currentToolCall
+		blocks.setToolUse(currentToolIndex, *tc)
 		currentToolCall = nil
+		currentToolIndex = -1
 		inputBuffer.Reset()
 		return yield(llm.StreamEvent{Type: llm.EventToolUse, ToolCall: tc}, nil)
+	}
+
+	// flushServerToolUse completes a streamed server tool call and emits it.
+	flushServerToolUse := func(index int) bool {
+		part, ok := blocks.finishServerToolUse(index)
+		if !ok {
+			return true
+		}
+		return yield(llm.StreamEvent{Type: llm.EventServerTool, Part: &part}, nil)
 	}
 
 	for scanner.Scan() {
@@ -721,32 +821,28 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			Type  string `json:"type"`
 			Index int    `json:"index"`
 			Delta struct {
-				Type        string `json:"type"`
-				Text        string `json:"text"`
-				PartialJSON string `json:"partial_json"`
-				Thinking    string `json:"thinking"`
-				Signature   string `json:"signature"`
-				StopReason  string `json:"stop_reason"`
+				Type        string          `json:"type"`
+				Text        string          `json:"text"`
+				PartialJSON string          `json:"partial_json"`
+				Thinking    string          `json:"thinking"`
+				Signature   string          `json:"signature"`
+				StopReason  string          `json:"stop_reason"`
+				Citation    json.RawMessage `json:"citation"`
+				StopDetails json.RawMessage `json:"stop_details"`
+				Container   *struct {
+					ID string `json:"id"`
+				} `json:"container"`
 			} `json:"delta"`
-			ContentBlock struct {
-				Type  string `json:"type"`
-				ID    string `json:"id"`
-				Name  string `json:"name"`
-				Input any    `json:"input"`
-			} `json:"content_block"`
-			Message struct {
-				StopReason string `json:"stop_reason"`
-				Usage      struct {
-					InputTokens         int `json:"input_tokens"`
-					OutputTokens        int `json:"output_tokens"`
-					CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
-					CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
-				} `json:"usage"`
+			ContentBlock json.RawMessage `json:"content_block"`
+			Message      struct {
+				StopReason string         `json:"stop_reason"`
+				Usage      anthropicUsage `json:"usage"`
+				Container  *struct {
+					ID string `json:"id"`
+				} `json:"container"`
 			} `json:"message"`
 			// message_delta puts usage at top level (not inside message)
-			Usage struct {
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
+			Usage anthropicUsage `json:"usage"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -758,26 +854,53 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 		switch event.Type {
 		case "content_block_start":
-			if event.ContentBlock.Type == "tool_use" {
-				// Flush a still-open tool call first (defends against a missing
-				// content_block_stop), then begin the new one.
-				if !flushToolCall() {
+			var block anthropicBlock
+			if len(event.ContentBlock) > 0 {
+				if err := json.Unmarshal(event.ContentBlock, &block); err != nil {
+					if !yield(llm.StreamEvent{}, fmt.Errorf("malformed content block from anthropic: %w", err)) {
+						return
+					}
+					continue
+				}
+			}
+			// Flush a still-open tool call first (defends against a missing
+			// content_block_stop), then begin the new block.
+			if !flushToolCall() || !flushServerToolUse(blocks.openServerToolUse()) {
+				return
+			}
+			if result, done := blocks.start(event.Index, block); done && result.Type == llm.ContentServerToolResult {
+				if !yield(llm.StreamEvent{Type: llm.EventServerTool, Part: &result}, nil) {
 					return
 				}
+			}
+			if block.Type == "tool_use" {
 				currentToolCall = &llm.ToolCall{
-					ID:   event.ContentBlock.ID,
-					Name: event.ContentBlock.Name,
+					ID:   block.ID,
+					Name: block.Name,
 				}
+				currentToolIndex = event.Index
 				inputBuffer.Reset()
 			}
 
 		case "content_block_delta":
 			switch event.Delta.Type {
 			case "text_delta":
+				blocks.appendText(event.Index, event.Delta.Text)
 				if !yield(llm.StreamEvent{Type: llm.EventContent, Text: event.Delta.Text}, nil) {
 					return
 				}
+			case "citations_delta":
+				citation, ok := citationOf(event.Delta.Citation)
+				if !ok {
+					slog.Debug("dropping a citation that is not a JSON object", "provider", "anthropic")
+					break
+				}
+				blocks.appendCitation(event.Index, citation)
+				if !yield(llm.StreamEvent{Type: llm.EventCitation, Citation: &citation}, nil) {
+					return
+				}
 			case "thinking_delta":
+				blocks.appendThinking(event.Index, event.Delta.Thinking)
 				if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: event.Delta.Thinking}, nil) {
 					return
 				}
@@ -785,7 +908,15 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				// Authenticates the thinking block; surfaced on EventDone so a
 				// streamed turn can be reassembled with a replayable thinking block.
 				thinkingSignature += event.Delta.Signature
+				blocks.appendSignature(event.Index, event.Delta.Signature)
 			case "input_json_delta":
+				if blocks.isServerToolUse(event.Index) {
+					if !blocks.appendServerInput(event.Index, event.Delta.PartialJSON, maxToolInput) {
+						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
+						return
+					}
+					break
+				}
 				if inputBuffer.Len()+len(event.Delta.PartialJSON) > maxToolInput {
 					yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
 					return // stop parsing — continuing would corrupt the tool call
@@ -794,7 +925,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 
 		case "content_block_stop":
-			if !flushToolCall() {
+			if !flushToolCall() || !flushServerToolUse(event.Index) {
 				return
 			}
 
@@ -805,23 +936,39 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// accumulated call would otherwise be silently lost while Done still
 			// reports a clean tool_use turn. The new-content_block_start flush
 			// only covers a *following* block; this covers the terminal one.
-			if !flushToolCall() {
+			if !flushToolCall() || !flushServerToolUse(blocks.openServerToolUse()) {
 				return
+			}
+			if event.Delta.Container != nil {
+				containerID = event.Delta.Container.ID
+			}
+			serverToolUse := event.Usage.serverToolUse()
+			if serverToolUse == (llm.ServerToolUsage{}) {
+				serverToolUse = startUsage.serverToolUse()
+			}
+			iterations := event.Usage.Iterations
+			if len(iterations) == 0 {
+				iterations = startUsage.Iterations
 			}
 			// The terminal event: emit Done and stop. Returning here means any
 			// trailing bytes the server sends after the turn is complete
 			// (including malformed lines) can't surface as a spurious error that
 			// would mask the completed turn.
-			doneEmitted = true
 			yield(llm.StreamEvent{
-				Type:                llm.EventDone,
-				StopReason:          normalizeStopReason(event.Delta.StopReason),
-				RawStopReason:       event.Delta.StopReason,
-				InputTokens:         inputTokens,
-				OutputTokens:        event.Usage.OutputTokens,
-				ThinkingSignature:   thinkingSignature,
-				CacheCreationTokens: cacheCreationTokens,
-				CacheReadTokens:     cacheReadTokens,
+				Type:                  llm.EventDone,
+				StopReason:            normalizeStopReason(event.Delta.StopReason),
+				RawStopReason:         event.Delta.StopReason,
+				InputTokens:           inputTokens,
+				OutputTokens:          event.Usage.OutputTokens,
+				ThinkingSignature:     thinkingSignature,
+				CacheCreationTokens:   cacheCreationTokens,
+				CacheReadTokens:       cacheReadTokens,
+				ServerToolUse:         serverToolUse,
+				CacheCreation1hTokens: startUsage.CacheCreation.Ephemeral1h,
+				StopDetails:           llm.StopDetailsFromRaw(event.Delta.StopDetails),
+				Iterations:            iterations,
+				Parts:                 blocks.parts(),
+				ContainerID:           containerID,
 			}, nil)
 			return
 
@@ -833,12 +980,16 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			inputTokens = event.Message.Usage.InputTokens
 			cacheCreationTokens = event.Message.Usage.CacheCreationTokens
 			cacheReadTokens = event.Message.Usage.CacheReadTokens
+			startUsage = event.Message.Usage
+			if event.Message.Container != nil {
+				containerID = event.Message.Container.ID
+			}
 		}
 	}
 
-	// Only report scanner errors if the stream did not already complete
-	// successfully. A trailing read error after EventDone is noise.
-	if err := scanner.Err(); err != nil && !doneEmitted {
+	// Reaching this point means no message_delta arrived (that case returns
+	// right after EventDone, so a trailing read error after it is never seen).
+	if err := scanner.Err(); err != nil {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
 		return
 	}
@@ -847,7 +998,5 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// explicit error — otherwise a half-accumulated tool call or missing stop
 	// reason would be indistinguishable from a complete turn. Wrapping
 	// io.ErrUnexpectedEOF lets the pool classify the failure as retryable.
-	if !doneEmitted {
-		yield(llm.StreamEvent{}, fmt.Errorf("anthropic: stream ended without completion: %w", io.ErrUnexpectedEOF))
-	}
+	yield(llm.StreamEvent{}, fmt.Errorf("anthropic: stream ended without completion: %w", io.ErrUnexpectedEOF))
 }

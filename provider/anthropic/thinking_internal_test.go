@@ -12,16 +12,7 @@ func TestParseResponseCapturesThinkingSignature(t *testing.T) {
 	c := &Client{config: llm.Config{Model: "claude-opus-4-5"}, providerName: "anthropic"}
 
 	apiResp := &anthropicResponse{Model: "claude-opus-4-5", StopReason: "end_turn"}
-	apiResp.Content = append(apiResp.Content, struct {
-		Type      string `json:"type"`
-		Text      string `json:"text,omitempty"`
-		ID        string `json:"id,omitempty"`
-		Name      string `json:"name,omitempty"`
-		Input     any    `json:"input,omitempty"`
-		Thinking  string `json:"thinking,omitempty"`
-		Signature string `json:"signature,omitempty"`
-		Data      string `json:"data,omitempty"`
-	}{Type: "thinking", Thinking: "step by step", Signature: "sig-xyz"})
+	apiResp.Content = append(apiResp.Content, anthropicBlock{Type: "thinking", Thinking: "step by step", Signature: "sig-xyz"})
 
 	resp := c.parseResponse(apiResp)
 	if resp.Thinking != "step by step" {

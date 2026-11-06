@@ -136,7 +136,9 @@ Layered decorator stack over a stateless `Client` interface (`Complete`/`Stream`
   conversations survive refactors).
 - **Thinking replay requires thinking enabled.** Anthropic rejects replayed thinking blocks unless
   extended thinking is on for the request — keep `ThinkingLevel` set across turns (`WithBaseRequest`
-  or `Config`), or historical thinking blocks are silently dropped (no error).
+  or `Config`), or historical thinking blocks are silently dropped (no error). Models whose
+  thinking is always on (Fable 5.1, Opus 5.5) and Sonnet 5.5 (`between_tools`) count as enabled. Signed blocks go back unchanged,
+  also with empty text (the default `display: "omitted"`); only a provider handoff drops them.
 - **Mind the `TokensNotReported` (-1) sentinel.** A streamed turn may carry it when the provider
   omits usage; clamp token counts to `>= 0` before accumulating or estimating cost (negatives
   corrupt `Usage`).

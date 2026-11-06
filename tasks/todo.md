@@ -9,10 +9,10 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ---
 
-## Current state (2026-11-04)
+## Current state (2026-11-06)
 
-`v0.11.0` is the latest release (`ThinkingMax`, dropping other models' thinking on a
-model switch, Gemini `thinkingBudget` cap — see `CHANGELOG.md` `[0.11.0]`).
+`v0.12.0` is the latest release (Anthropic server tools with web search, `pause_turn`
+continuation, per-iteration usage and search pricing — see `CHANGELOG.md` `[0.12.0]`).
 
 ---
 
@@ -54,7 +54,6 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
 - 🟢 Deferred tool loading [pi].
 
 ### Caching & cost
-- 🟡 **1h prompt-cache TTL — S** [pi] (only ephemeral `CacheControl` today).
 - 🟡 **Long-context price tiers — S** [pi][registry]. Not modeled; `EstimateCost` uses
   the short tier (Haiku 5.5 >100K, GPT >272K, Grok/Gemini >200K, MiniMax >512K, Qwen >256K).
 - 🟡 **Gemini `store` default — S** [registry]. `store=true` is the default for new paid
@@ -79,7 +78,11 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
   models.dev — worth comparing before building our own tooling.
 - 🟢 Anthropic in-stream `error` events are not surfaced as errors (only as a truncated
   stream); Responses redacts/truncates them — align Anthropic [review].
-- 🟢 Anthropic refusal fallback [pi].
+- 🟢 Anthropic client-side refusal fallback (retry on another model with fallback
+  credit) [pi]. Server-side `fallbacks` works since v0.12.0.
+- 🟢 Anthropic server tools: typed web fetch results; a turn that mixes server and
+  client tool calls (works through the normal tool loop, not modeled); which
+  refusals are billed (`EstimateCost` counts every iteration) [own].
 - 🟢 `durationMs` on responses, telemetry spans + User-Agent, raw provider stream-event
   hook [pi].
 
