@@ -194,7 +194,7 @@ func TestHTTPClientIsUsedThroughACopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	_, _ = client.Complete(t.Context(), llm.Request{Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")}})
 	if len(recorder.hosts) == 0 || recorder.hosts[0] != "api.example.com" {
 		t.Fatalf("caller's client saw %v, want a request to api.example.com", recorder.hosts)
@@ -285,5 +285,21 @@ func TestHTTPClientCopyRefusesPrivateRedirectsWithBlockPrivateBaseURL(t *testing
 	}
 	if hits.Load() != 0 {
 		t.Fatal("private redirect target reached")
+	}
+}
+
+func TestHTTPClientCopyKeepsTheDefaultRedirectLimit(t *testing.T) {
+	var loop *httptest.Server
+	loop = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, loop.URL+"/again", http.StatusFound)
+	}))
+	t.Cleanup(loop.Close)
+	client, err := llm.NewSafeHTTPClient(llm.Config{HTTPClient: &http.Client{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = privateAddrGet(t, client, loop.URL)
+	if err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") {
+		t.Fatalf("redirect loop through the caller's client = %v, want net/http's 10-redirect error", err)
 	}
 }

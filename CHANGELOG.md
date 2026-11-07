@@ -44,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller's transport is responsible for proxying and egress filtering,
   including names. `ProxyURL` / `DisableProxy` are refused alongside it.
 
+### Changed
+
+- With `BlockPrivateBaseURL` and no `ProxyURL`, a failed name lookup is a
+  `*net.DNSError` (retryable), not `ErrPrivateAddress`: the dialer resolves
+  and checks each address it connects to, so nothing is dialed. Through `ProxyURL` a failed lookup
+  is still refused with `ErrPrivateAddress`.
+- A `Config.HTTPClient` without its own `CheckRedirect` keeps net/http's
+  default: after 10 redirects the request fails with "stopped after 10
+  redirects", as with any `http.Client`. rho-llm's own client still returns
+  the last response at 10 redirects.
+
 ## [0.13.0] - 2026-11-06
 
 Anthropic API version `2026-10-21` by default, following the migration guide

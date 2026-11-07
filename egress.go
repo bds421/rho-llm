@@ -121,7 +121,7 @@ func interleave(addrs []netip.Addr) []netip.Addr {
 }
 
 // race runs attempt for each address in interleaved order, starting the next
-// one after fallbackDelay or as soon as the running ones failed. The first
+// one after fallbackDelay or as soon as any running attempt fails (RFC 8305). The first
 // connection wins; the others are cancelled and closed.
 func race(ctx context.Context, addrs []netip.Addr, attempt func(context.Context, netip.Addr) (net.Conn, error)) (net.Conn, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -161,7 +161,7 @@ func race(ctx context.Context, addrs []netip.Addr, attempt func(context.Context,
 				return r.conn, nil
 			}
 			errs = append(errs, r.err)
-			if started < len(order) && pending == 0 {
+			if started < len(order) {
 				start()
 				timer.Reset(fallbackDelay)
 			}

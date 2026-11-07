@@ -3,6 +3,7 @@ package llm
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -82,7 +83,11 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 			return nil, fmt.Errorf("llm: HTTPClient excludes ProxyURL and DisableProxy; configure the proxy on the client")
 		}
 		client := *cfg.HTTPClient
-		client.CheckRedirect = safeRedirect(cfg.BlockPrivateBaseURL, cfg.HTTPClient.CheckRedirect)
+		callerPolicy := cfg.HTTPClient.CheckRedirect
+		if callerPolicy == nil {
+			callerPolicy = defaultRedirectPolicy
+		}
+		client.CheckRedirect = safeRedirect(cfg.BlockPrivateBaseURL, callerPolicy)
 		return &client, nil
 	}
 	proxy, err := proxyPolicy(cfg)
@@ -116,6 +121,15 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 		},
 		CheckRedirect: safeRedirect(cfg.BlockPrivateBaseURL, nil),
 	}, nil
+}
+
+// defaultRedirectPolicy is net/http's policy for a client without CheckRedirect:
+// an error after 10 redirects. A caller's client keeps it.
+func defaultRedirectPolicy(_ *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
 }
 
 // safeRedirect strips sensitiveHeaders on a cross-origin redirect and, with
@@ -372,7 +386,8 @@ type Config struct {
 	// copy whose CheckRedirect first strips the API-key headers on a
 	// cross-origin redirect and, with BlockPrivateBaseURL, refuses a redirect
 	// to localhost, a private IP literal or a non-canonical IPv4 host, then
-	// applies the caller's CheckRedirect. Its transport is used unchanged
+	// applies the caller's CheckRedirect (net/http's default, an error after
+	// 10 redirects, when it has none). Its transport is used unchanged
 	// (streaming requests also drop the overall Timeout and add an idle
 	// watchdog around it), so the caller's client is responsible for proxying
 	// and egress filtering, including resolving names: BlockPrivateBaseURL

@@ -386,3 +386,31 @@ func offlineDialer() *net.Dialer {
 		Control: func(string, string, syscall.RawConn) error { return errors.New("offline test dialer") },
 	}
 }
+
+func TestRaceStartsTheNextAddressAtOnceWhenOneFailsWhileOthersRun(t *testing.T) {
+	hanging := netip.MustParseAddr("2606:4700::1")
+	failing := netip.MustParseAddr("1.1.1.1")
+	working := netip.MustParseAddr("2606:4700::2")
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	began := time.Now()
+	conn, err := race(ctx, []netip.Addr{hanging, working, failing}, func(ctx context.Context, addr netip.Addr) (net.Conn, error) {
+		switch addr {
+		case hanging:
+			<-ctx.Done()
+			return nil, ctx.Err()
+		case failing:
+			return nil, errors.New("refused")
+		}
+		client, server := net.Pipe()
+		_ = server.Close()
+		return client, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if elapsed := time.Since(began); elapsed >= 2*fallbackDelay-50*time.Millisecond {
+		t.Errorf("race took %v, want the third attempt right after the second failed (about %v)", elapsed, fallbackDelay)
+	}
+}
