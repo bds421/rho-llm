@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`BlockPrivateBaseURL` covers IPv6 forms, non-canonical IPv4 hosts, host
+  names, DNS rebinding and proxies** (audit G3). `CheckBaseURL` accepted IPv6
+  forms of private addresses, such as `[64:ff9b::a9fe:a9fe]` (NAT64 of
+  169.254.169.254), 6to4 (`2002::/16`) and IPv4-compatible (`[::a9fe:a9fe]`),
+  and never resolved names. The check (standard library only) now unmaps
+  IPv4-mapped addresses, judges the NAT64 well-known prefix `64:ff9b::/96` by
+  the IPv4 address it carries (so IPv6-only hosts behind DNS64 still reach
+  public providers), and refuses 6to4, Teredo, IPv4-compatible, CGNAT
+  (`100.64.0.0/10`), benchmarking, documentation, multicast and reserved
+  ranges. Hosts that a parser may read as IPv4 (`0x7f.1`, `2130706433`,
+  `0177.0.0.1`) and `*.localhost` are refused too. With the option set the
+  dialer checks every address it is about to connect to, each redirect hop
+  included, while still racing IPv6 and IPv4 (Happy Eyeballs), so DNS
+  rebinding cannot get through. `HTTP_PROXY` / `HTTPS_PROXY` are then ignored.
+  With an explicit `ProxyURL` the client resolves the target itself, refuses
+  it when the lookup fails, returns nothing or returns any private address,
+  and opens CONNECT tunnels to the checked IP addresses (raced 300 ms apart,
+  families interleaved), keeping the name for TLS and `Host`, so the proxy
+  cannot resolve it differently; a proxy that filters by domain name
+  sees only IP addresses. Refusals wrap the new `ErrPrivateAddress`, which
+  `IsRetryable` reports as not retryable.
+- **OAuth device flow uses the configured transport.** `DeviceAuthConfig.HTTP`
+  (a `Config`) sets the timeout, proxy, `HTTPClient` and `BlockPrivateBaseURL`
+  for both endpoints; before, it always used a 30-second default client.
+
+### Added
+
+- **`Config.HTTPClient`** — a caller-provided `*http.Client`. rho-llm uses a
+  copy whose `CheckRedirect` strips the API-key headers on a cross-origin
+  redirect and, with `BlockPrivateBaseURL`, refuses redirects to `localhost`,
+  private IP literals and non-canonical IPv4 hosts, then applies the caller's
+  `CheckRedirect`; the caller's client and transport are not changed. The
+  caller's transport is responsible for proxying and egress filtering,
+  including names. `ProxyURL` / `DisableProxy` are refused alongside it.
+
+### Changed
+
+- With `BlockPrivateBaseURL` and no `ProxyURL`, a failed name lookup is a
+  `*net.DNSError` (retryable), not `ErrPrivateAddress`: the dialer resolves
+  and checks each address it connects to, so nothing is dialed. Through `ProxyURL` a failed lookup
+  is still refused with `ErrPrivateAddress`.
+- A `Config.HTTPClient` without its own `CheckRedirect` keeps net/http's
+  default: after 10 redirects the request fails with "stopped after 10
+  redirects", as with any `http.Client`. rho-llm's own client still returns
+  the last response at 10 redirects.
+
 ## [0.13.0] - 2026-11-06
 
 Anthropic API version `2026-10-21` by default, following the migration guide

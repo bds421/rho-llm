@@ -749,7 +749,8 @@ type Config struct {
     AuthHeader       string         // Override auth header ("Bearer", "x-api-key", "")
     ProviderName     string         // Override Client.Provider() return value
     LogRequests      bool           // Enable metadata logging
-    BlockPrivateBaseURL bool        // Opt-in SSRF guard: reject loopback/private BaseURL hosts
+    BlockPrivateBaseURL bool        // Opt-in SSRF guard: private/reserved BaseURL hosts and dial targets
+    HTTPClient       *http.Client   // Caller-provided client; its transport filters egress
 
     // (Request carries ResponseFormat for structured output; per-Config safety
     //  limits — MaxErrorBodyBytes, MaxResponseBodyBytes, … — are read via the

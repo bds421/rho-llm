@@ -3,6 +3,7 @@ package llm
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -71,7 +72,24 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 // policy declared by cfg. ProxyURL takes precedence over ambient proxy
 // variables; DisableProxy deliberately bypasses them. The two controls are
 // mutually exclusive so callers cannot silently weaken an explicit boundary.
+//
+// When cfg.HTTPClient is set, a copy of it is returned whose CheckRedirect
+// adds rho-llm's redirect checks before the caller's (see Config.HTTPClient);
+// the caller's client and transport are not changed. ProxyURL and
+// DisableProxy are refused alongside it.
 func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
+	if cfg.HTTPClient != nil {
+		if strings.TrimSpace(cfg.ProxyURL) != "" || cfg.DisableProxy {
+			return nil, fmt.Errorf("llm: HTTPClient excludes ProxyURL and DisableProxy; configure the proxy on the client")
+		}
+		client := *cfg.HTTPClient
+		callerPolicy := cfg.HTTPClient.CheckRedirect
+		if callerPolicy == nil {
+			callerPolicy = defaultRedirectPolicy
+		}
+		client.CheckRedirect = safeRedirect(cfg.BlockPrivateBaseURL, callerPolicy)
+		return &client, nil
+	}
 	proxy, err := proxyPolicy(cfg)
 	if err != nil {
 		return nil, err
@@ -79,6 +97,14 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
+	}
+	dialer := &net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second}
+	dial := dialer.DialContext
+	if cfg.BlockPrivateBaseURL {
+		proxy = nil
+		if dial, err = blockPrivateEgress(dialer, cfg.ProxyURL); err != nil {
+			return nil, err
+		}
 	}
 	return &http.Client{
 		Timeout: timeout,
@@ -88,26 +114,49 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 			// Phase bounds that also protect streaming requests, whose client
 			// (NewStreamingHTTPClient) has no overall Timeout. Each is capped
 			// by the configured Timeout so a non-stream call is unchanged.
-			DialContext:           (&net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second}).DialContext,
+			DialContext:           dial,
 			TLSHandshakeTimeout:   min(timeout, 10*time.Second),
 			ResponseHeaderTimeout: timeout,
 			IdleConnTimeout:       90 * time.Second,
 		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return http.ErrUseLastResponse
-			}
-			if len(via) > 0 {
-				prev := via[len(via)-1]
-				if !sameOrigin(prev.URL, req.URL) {
-					for _, h := range sensitiveHeaders {
-						req.Header.Del(h)
-					}
-				}
-			}
-			return nil
-		},
+		CheckRedirect: safeRedirect(cfg.BlockPrivateBaseURL, nil),
 	}, nil
+}
+
+// defaultRedirectPolicy is net/http's policy for a client without CheckRedirect:
+// an error after 10 redirects. A caller's client keeps it.
+func defaultRedirectPolicy(_ *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
+}
+
+// safeRedirect strips sensitiveHeaders on a cross-origin redirect and, with
+// block set, refuses a redirect target that checkHost refuses (localhost, a
+// private literal, a non-canonical IPv4 host). It then applies next, the
+// caller's policy; without one it stops after 10 redirects and returns the
+// last response.
+func safeRedirect(block bool, next func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && !sameOrigin(via[len(via)-1].URL, req.URL) {
+			for _, h := range sensitiveHeaders {
+				req.Header.Del(h)
+			}
+		}
+		if block {
+			if _, _, err := checkHost(req.URL.Hostname()); err != nil {
+				return err
+			}
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		if len(via) >= 10 {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}
 }
 
 // NewStreamingHTTPClient derives the client a streaming request should use
@@ -225,6 +274,14 @@ func proxyPolicy(cfg Config) (func(*http.Request) (*url.URL, error), error) {
 	if proxyURL == "" {
 		return http.ProxyFromEnvironment, nil
 	}
+	parsed, err := parseProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return http.ProxyURL(parsed), nil
+}
+
+func parseProxyURL(proxyURL string) (*url.URL, error) {
 	parsed, err := url.Parse(proxyURL)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
@@ -232,7 +289,7 @@ func proxyPolicy(cfg Config) (func(*http.Request) (*url.URL, error), error) {
 		parsed.Fragment != "" {
 		return nil, fmt.Errorf("llm: ProxyURL is invalid")
 	}
-	return http.ProxyURL(parsed), nil
+	return parsed, nil
 }
 
 // sameHost returns true if two URLs have the same host (including port).
@@ -242,13 +299,18 @@ func sameOrigin(a, b *url.URL) bool {
 	return a.Scheme == b.Scheme && a.Host == b.Host
 }
 
-// CheckBaseURL enforces Config.BlockPrivateBaseURL: when set, it rejects a BaseURL
-// whose host is a loopback, private, link-local, or unspecified IP (e.g. the cloud
-// metadata endpoint 169.254.169.254, or 127.0.0.1), or the literal "localhost".
-// This is opt-in SSRF hardening for deployments that only talk to public provider
-// endpoints; it is incompatible with local providers. Best-effort: it checks IP
-// literals and "localhost" only — hostname DNS resolution and DNS-rebinding are
-// out of scope. It is a no-op when BlockPrivateBaseURL is false or BaseURL is empty.
+// CheckBaseURL enforces Config.BlockPrivateBaseURL at construction: it rejects a
+// BaseURL whose host is "localhost" (or a subdomain of it), a private or
+// reserved IP literal (e.g. the cloud metadata endpoint 169.254.169.254),
+// including IPv6 forms that carry such an IPv4 address (IPv4-mapped and
+// -compatible, 6to4, Teredo; in the NAT64 well-known prefix 64:ff9b::/96 the
+// embedded IPv4 address decides), or a host that a parser may read as a
+// non-canonical IPv4 address (0x7f.1, 2130706433, 0177.0.0.1). Host names are
+// not resolved here, so construction stays offline; the client checks every
+// resolved address before it connects (ErrPrivateAddress). This is opt-in SSRF
+// hardening for deployments that only talk to public provider endpoints; it is
+// incompatible with local providers. It is a no-op when BlockPrivateBaseURL is
+// false or BaseURL is empty.
 func CheckBaseURL(cfg Config) error {
 	if !cfg.BlockPrivateBaseURL || cfg.BaseURL == "" {
 		return nil
@@ -257,17 +319,8 @@ func CheckBaseURL(cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("invalid base URL %q: %w", cfg.BaseURL, err)
 	}
-	// Normalize the host: a trailing dot ("localhost.", "127.0.0.1.") makes an
-	// absolute FQDN that resolvers still map to loopback, yet it evades both the
-	// literal "localhost" comparison and net.ParseIP — a guard bypass.
-	host := strings.TrimSuffix(u.Hostname(), ".")
-	if strings.EqualFold(host, "localhost") {
-		return fmt.Errorf("base URL host %q is not allowed (BlockPrivateBaseURL)", host)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return fmt.Errorf("base URL host %q is a private/loopback/link-local address (BlockPrivateBaseURL)", host)
-		}
+	if _, _, err := checkHost(u.Hostname()); err != nil {
+		return fmt.Errorf("base URL: %w", err)
 	}
 	return nil
 }
@@ -320,20 +373,40 @@ type Config struct {
 
 	// ProxyURL is an explicit HTTP(S) forward proxy for this config. It is
 	// intended for reviewed public-provider egress and overrides HTTP_PROXY,
-	// HTTPS_PROXY, and NO_PROXY. Credentials and path/query fragments are
-	// rejected so this non-secret transport setting is safe to report.
+	// HTTPS_PROXY, and NO_PROXY (which BlockPrivateBaseURL ignores). Credentials
+	// and path/query fragments are rejected so this non-secret transport
+	// setting is safe to report.
 	ProxyURL string `json:"proxy_url,omitempty"`
 
 	// DisableProxy explicitly bypasses both ProxyURL and ambient proxy
 	// variables. Use it for reviewed local/private model endpoints.
 	DisableProxy bool `json:"disable_proxy,omitempty"`
 
+	// HTTPClient, when set, is used for every request of this config through a
+	// copy whose CheckRedirect first strips the API-key headers on a
+	// cross-origin redirect and, with BlockPrivateBaseURL, refuses a redirect
+	// to localhost, a private IP literal or a non-canonical IPv4 host, then
+	// applies the caller's CheckRedirect (net/http's default, an error after
+	// 10 redirects, when it has none). Its transport is used unchanged
+	// (streaming requests also drop the overall Timeout and add an idle
+	// watchdog around it), so the caller's client is responsible for proxying
+	// and egress filtering, including resolving names: BlockPrivateBaseURL
+	// then checks only the BaseURL and redirect hosts. ProxyURL and DisableProxy
+	// are refused alongside it. Not serialized.
+	HTTPClient *http.Client `json:"-"`
+
 	// BlockPrivateBaseURL is opt-in SSRF hardening: when true, client construction
-	// rejects a BaseURL whose host is a loopback, private, link-local, or
-	// unspecified IP, or "localhost". Incompatible with local providers
-	// (ollama/vllm/lmstudio, which use localhost). Best-effort — it checks IP
-	// literals and "localhost"; hostname DNS resolution and DNS-rebinding are out
-	// of scope. See CheckBaseURL.
+	// rejects a BaseURL that CheckBaseURL refuses, and the client checks every
+	// connection, each redirect hop included, before it is made. Ambient proxy
+	// variables are then ignored. Without ProxyURL the client dials directly,
+	// racing IPv6 and IPv4 as usual, and refuses every address it is about to
+	// connect to that is private or reserved (ErrPrivateAddress), so host names
+	// and DNS rebinding are covered. With ProxyURL it resolves and checks the
+	// target itself (a failed or empty lookup, or any private answer, is
+	// refused) and tunnels through the proxy with CONNECT to the checked IP
+	// addresses, racing them 300 ms apart, keeping the name for TLS and Host; a
+	// proxy that filters by domain name therefore sees only IP addresses. Incompatible with
+	// local providers (ollama/vllm/lmstudio, which use localhost).
 	BlockPrivateBaseURL bool `json:"block_private_base_url,omitempty"`
 
 	// AuthHeader overrides the authorization header format.
