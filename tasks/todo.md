@@ -140,7 +140,7 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
     ⚠️ `20_capability_test` is expensive + slow (120m timeout) — never run casually.
   - **cloud-ctl on :8085** (21, 22): service wasn't running locally.
 - 🟢 Expand live smokes to Meta/Mistral/CN hosts when keys are available. [own]
-- 🟢 GitLab mirror is stale. [own]
+- 🟢 Internal mirror is stale. [own]
 
 ---
 
@@ -157,7 +157,7 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
 
 - **API keys** live in `../rho-llm-tutorial/.env` (gitignored, mode 600):
   `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` — all validated HTTP 200.
-  The Gemini key was copied from `../rho-pdf/.env`; if rho-pdf rotates it, this breaks.
+  The Gemini key was copied from another local project's `.env`; if that key rotates, this breaks.
   Load with `set -a && . ./.env && set +a`.
 - **These are paid APIs.** Free metadata endpoints (`GET /v1/models`) validate keys and
   audit model IDs at zero token cost — prefer them over inference calls.

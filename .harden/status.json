@@ -1,8 +1,0 @@
-{
-  "targeted_area": "EstimateCost math (all token types + sentinel clamp)",
-  "new_serious_bugs": 0,
-  "tests_added": 1,
-  "untested_surface_remaining": false,
-  "remaining_areas": [],
-  "changed": true
-}
