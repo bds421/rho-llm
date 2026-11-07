@@ -750,7 +750,7 @@ type Config struct {
     ProviderName     string         // Override Client.Provider() return value
     LogRequests      bool           // Enable metadata logging
     BlockPrivateBaseURL bool        // Opt-in SSRF guard: private/reserved BaseURL hosts and dial targets
-    HTTPClient       *http.Client   // Caller-provided client, used as given (caller filters egress)
+    HTTPClient       *http.Client   // Caller-provided client; its transport filters egress
 
     // (Request carries ResponseFormat for structured output; per-Config safety
     //  limits — MaxErrorBodyBytes, MaxResponseBodyBytes, … — are read via the

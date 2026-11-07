@@ -1209,7 +1209,7 @@ if err != nil {
 
 ### SSRF hardening
 
-`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) whose host is `localhost` (or `*.localhost`), a private or reserved IP literal (e.g. the cloud metadata IP), including IPv6 forms that carry one (IPv4-mapped and -compatible, 6to4, Teredo, NAT64; in `64:ff9b::/96` the embedded IPv4 address decides), or a host a parser may read as IPv4 (`0x7f.1`, `2130706433`). The client then resolves every target itself, refuses it when the lookup fails, returns nothing or returns any private or reserved address (`ErrPrivateAddress`, not retryable), and connects only to the checked addresses, each redirect hop included, so DNS rebinding cannot swap them. `HTTP_PROXY`/`HTTPS_PROXY` are ignored; with an explicit `ProxyURL` the client opens a CONNECT tunnel to the checked IP address and keeps the name for TLS and `Host` (a proxy that filters by domain name sees only IP addresses). Opt-in, off by default so local providers keep working. With `Config.HTTPClient` the caller's client is used as given and is responsible for egress filtering; `BlockPrivateBaseURL` then only checks the `BaseURL`. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
+`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) whose host is `localhost` (or `*.localhost`), a private or reserved IP literal (e.g. the cloud metadata IP), including IPv6 forms that carry one (IPv4-mapped and -compatible, 6to4, Teredo, NAT64; in `64:ff9b::/96` the embedded IPv4 address decides), or a host a parser may read as IPv4 (`0x7f.1`, `2130706433`). The dialer then refuses every address it is about to connect to that is private or reserved (`ErrPrivateAddress`, not retryable), each redirect hop included, while still racing IPv6 and IPv4, so DNS rebinding cannot get through. `HTTP_PROXY`/`HTTPS_PROXY` are ignored; with an explicit `ProxyURL` the client resolves the target itself (a failed or empty lookup or any private answer is refused) and opens CONNECT tunnels to the checked IP addresses, raced 300 ms apart, keeping the name for TLS and `Host` (a proxy that filters by domain name sees only IP addresses). Opt-in, off by default so local providers keep working. With `Config.HTTPClient` rho-llm uses a copy of the caller's client: it still strips API-key headers on cross-origin redirects and refuses redirects to `localhost` or private literals, but the caller's transport is responsible for egress filtering, including names. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
 
 ## Config Reference
 
@@ -1226,7 +1226,7 @@ if err != nil {
 | BaseURL | string | "" | Override provider endpoint |
 | ProxyURL | string | "" | Explicit reviewed HTTP(S) forward proxy; overrides ambient proxy variables |
 | DisableProxy | bool | false | Explicitly bypass configured and ambient proxies for local/private endpoints |
-| HTTPClient | *http.Client | nil | Caller-provided client, used as given; it is then responsible for proxying and egress filtering (excludes ProxyURL and DisableProxy) |
+| HTTPClient | *http.Client | nil | Caller-provided client (rho-llm adds its redirect checks to a copy); its transport is responsible for proxying and egress filtering (excludes ProxyURL and DisableProxy) |
 | AuthHeader | string | "Bearer" | Override auth header format |
 | ProviderName | string | "" | Override Client.Provider() |
 | LogRequests | bool | false | Enable request/response metadata logging |

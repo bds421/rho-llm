@@ -72,14 +72,18 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 // variables; DisableProxy deliberately bypasses them. The two controls are
 // mutually exclusive so callers cannot silently weaken an explicit boundary.
 //
-// When cfg.HTTPClient is set it is returned as given, and ProxyURL and
+// When cfg.HTTPClient is set, a copy of it is returned whose CheckRedirect
+// adds rho-llm's redirect checks before the caller's (see Config.HTTPClient);
+// the caller's client and transport are not changed. ProxyURL and
 // DisableProxy are refused alongside it.
 func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 	if cfg.HTTPClient != nil {
 		if strings.TrimSpace(cfg.ProxyURL) != "" || cfg.DisableProxy {
 			return nil, fmt.Errorf("llm: HTTPClient excludes ProxyURL and DisableProxy; configure the proxy on the client")
 		}
-		return cfg.HTTPClient, nil
+		client := *cfg.HTTPClient
+		client.CheckRedirect = safeRedirect(cfg.BlockPrivateBaseURL, cfg.HTTPClient.CheckRedirect)
+		return &client, nil
 	}
 	proxy, err := proxyPolicy(cfg)
 	if err != nil {
@@ -110,21 +114,35 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 			ResponseHeaderTimeout: timeout,
 			IdleConnTimeout:       90 * time.Second,
 		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return http.ErrUseLastResponse
-			}
-			if len(via) > 0 {
-				prev := via[len(via)-1]
-				if !sameOrigin(prev.URL, req.URL) {
-					for _, h := range sensitiveHeaders {
-						req.Header.Del(h)
-					}
-				}
-			}
-			return nil
-		},
+		CheckRedirect: safeRedirect(cfg.BlockPrivateBaseURL, nil),
 	}, nil
+}
+
+// safeRedirect strips sensitiveHeaders on a cross-origin redirect and, with
+// block set, refuses a redirect target that checkHost refuses (localhost, a
+// private literal, a non-canonical IPv4 host). It then applies next, the
+// caller's policy; without one it stops after 10 redirects and returns the
+// last response.
+func safeRedirect(block bool, next func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && !sameOrigin(via[len(via)-1].URL, req.URL) {
+			for _, h := range sensitiveHeaders {
+				req.Header.Del(h)
+			}
+		}
+		if block {
+			if _, _, err := checkHost(req.URL.Hostname()); err != nil {
+				return err
+			}
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		if len(via) >= 10 {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}
 }
 
 // NewStreamingHTTPClient derives the client a streaming request should use
@@ -350,25 +368,29 @@ type Config struct {
 	// variables. Use it for reviewed local/private model endpoints.
 	DisableProxy bool `json:"disable_proxy,omitempty"`
 
-	// HTTPClient, when set, is used as given for every request of this config
-	// (streaming requests use a copy without the overall Timeout, with an idle
-	// watchdog around the same transport). The caller's client is then
-	// responsible for proxying and egress filtering: rho-llm adds no redirect,
-	// proxy or private-address handling to it, and BlockPrivateBaseURL only
-	// checks the BaseURL at construction. ProxyURL and DisableProxy are refused
-	// alongside it. Not serialized.
+	// HTTPClient, when set, is used for every request of this config through a
+	// copy whose CheckRedirect first strips the API-key headers on a
+	// cross-origin redirect and, with BlockPrivateBaseURL, refuses a redirect
+	// to localhost, a private IP literal or a non-canonical IPv4 host, then
+	// applies the caller's CheckRedirect. Its transport is used unchanged
+	// (streaming requests also drop the overall Timeout and add an idle
+	// watchdog around it), so the caller's client is responsible for proxying
+	// and egress filtering, including resolving names: BlockPrivateBaseURL
+	// then checks only the BaseURL and redirect hosts. ProxyURL and DisableProxy
+	// are refused alongside it. Not serialized.
 	HTTPClient *http.Client `json:"-"`
 
 	// BlockPrivateBaseURL is opt-in SSRF hardening: when true, client construction
 	// rejects a BaseURL that CheckBaseURL refuses, and the client checks every
 	// connection, each redirect hop included, before it is made. Ambient proxy
-	// variables are then ignored. Without ProxyURL the client dials directly and
-	// refuses every resolved address that is private or reserved
-	// (ErrPrivateAddress), so host names and DNS rebinding are covered. With
-	// ProxyURL it resolves and checks the target itself (a failed or empty
-	// lookup is refused too) and tunnels through the proxy with CONNECT to the
-	// checked IP address, keeping the name for TLS and Host; a proxy that
-	// filters by domain name therefore sees only IP addresses. Incompatible with
+	// variables are then ignored. Without ProxyURL the client dials directly,
+	// racing IPv6 and IPv4 as usual, and refuses every address it is about to
+	// connect to that is private or reserved (ErrPrivateAddress), so host names
+	// and DNS rebinding are covered. With ProxyURL it resolves and checks the
+	// target itself (a failed or empty lookup, or any private answer, is
+	// refused) and tunnels through the proxy with CONNECT to the checked IP
+	// addresses, racing them 300 ms apart, keeping the name for TLS and Host; a
+	// proxy that filters by domain name therefore sees only IP addresses. Incompatible with
 	// local providers (ollama/vllm/lmstudio, which use localhost).
 	BlockPrivateBaseURL bool `json:"block_private_base_url,omitempty"`
 

@@ -101,7 +101,9 @@ func privateAddrGet(t *testing.T, client *http.Client, target string) error {
 func TestBlockPrivateBaseURLRefusesResolvedPrivateAddressAtDial(t *testing.T) {
 	srv, hits := privateAddrServer(t)
 	byName := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
-	for _, target := range []string{srv.URL, byName} {
+	numeric := strings.Replace(srv.URL, "127.0.0.1", "0x7f.1", 1)
+	subdomain := strings.Replace(srv.URL, "127.0.0.1", "app.localhost", 1)
+	for _, target := range []string{srv.URL, byName, numeric, subdomain} {
 		client, err := llm.NewSafeHTTPClient(llm.Config{BlockPrivateBaseURL: true, DisableProxy: true})
 		if err != nil {
 			t.Fatal(err)
@@ -164,11 +166,16 @@ func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return nil, errors.New("recorded")
 }
 
-func TestHTTPClientIsUsedAsGiven(t *testing.T) {
-	given := &http.Client{}
+func TestHTTPClientIsUsedThroughACopy(t *testing.T) {
+	givenTransport := &recordingTransport{}
+	given := &http.Client{Transport: givenTransport}
 	got, err := llm.NewSafeHTTPClient(llm.Config{HTTPClient: given, BlockPrivateBaseURL: true})
-	if err != nil || got != given {
-		t.Fatalf("NewSafeHTTPClient = %p, %v; want the given client %p", got, err, given)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == given || got.Transport != given.Transport || given.CheckRedirect != nil {
+		t.Fatalf("NewSafeHTTPClient = %p (transport %p), given %p (transport %p, CheckRedirect set: %v); want a copy on the same transport, given unchanged",
+			got, got.Transport, given, given.Transport, given.CheckRedirect != nil)
 	}
 	for _, cfg := range []llm.Config{
 		{HTTPClient: given, ProxyURL: "http://proxy.example:3128"},
@@ -214,5 +221,69 @@ func TestDeviceAuthUsesTheConfiguredClient(t *testing.T) {
 	_, _ = llm.StartDeviceAuth(t.Context(), cfg)
 	if len(recorder.hosts) != 1 || recorder.hosts[0] != "auth.example.com" {
 		t.Fatalf("caller's client saw %v, want one request to auth.example.com", recorder.hosts)
+	}
+}
+
+func redirectingServer(t *testing.T, to string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, to, http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestHTTPClientCopyStripsKeysOnCrossOriginRedirect(t *testing.T) {
+	var leaked atomic.Value
+	leaked.Store("")
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked.Store(r.Header.Get("x-api-key") + r.Header.Get("x-goog-api-key"))
+	}))
+	t.Cleanup(target.Close)
+	origin := redirectingServer(t, target.URL+"/next")
+
+	var callerCalls atomic.Int32
+	given := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		callerCalls.Add(1)
+		return nil
+	}}
+	client, err := llm.NewSafeHTTPClient(llm.Config{HTTPClient: given})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodGet, origin.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("x-api-key", "secret-a")
+	req.Header.Set("x-goog-api-key", "secret-b")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got := leaked.Load().(string); got != "" {
+		t.Errorf("redirect target received API key headers %q", got)
+	}
+	if callerCalls.Load() != 1 {
+		t.Errorf("caller's CheckRedirect ran %d times, want 1", callerCalls.Load())
+	}
+}
+
+func TestHTTPClientCopyRefusesPrivateRedirectsWithBlockPrivateBaseURL(t *testing.T) {
+	target, hits := privateAddrServer(t)
+	byName := strings.Replace(target.URL, "127.0.0.1", "localhost", 1)
+	for _, to := range []string{target.URL, byName, "http://169.254.169.254/latest", "http://0x7f.1/", "http://[::ffff:10.0.0.1]/"} {
+		origin := redirectingServer(t, to)
+		client, err := llm.NewSafeHTTPClient(llm.Config{HTTPClient: &http.Client{}, BlockPrivateBaseURL: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := privateAddrGet(t, client, origin.URL); !errors.Is(err, llm.ErrPrivateAddress) {
+			t.Errorf("redirect to %s = %v, want ErrPrivateAddress", to, err)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatal("private redirect target reached")
 	}
 }

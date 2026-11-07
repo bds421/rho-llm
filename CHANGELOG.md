@@ -20,12 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`100.64.0.0/10`), benchmarking, documentation, multicast and reserved
   ranges. Hosts that a parser may read as IPv4 (`0x7f.1`, `2130706433`,
   `0177.0.0.1`) and `*.localhost` are refused too. With the option set the
-  client resolves every target itself, refuses it when the lookup fails,
-  returns nothing or returns any private address, and connects only to the
-  checked addresses, each redirect hop included. `HTTP_PROXY` / `HTTPS_PROXY`
-  are then ignored. With an explicit `ProxyURL` the client opens a CONNECT
-  tunnel to the checked IP address and keeps the name for TLS and `Host`, so
-  the proxy cannot resolve it differently; a proxy that filters by domain name
+  dialer checks every address it is about to connect to, each redirect hop
+  included, while still racing IPv6 and IPv4 (Happy Eyeballs), so DNS
+  rebinding cannot get through. `HTTP_PROXY` / `HTTPS_PROXY` are then ignored.
+  With an explicit `ProxyURL` the client resolves the target itself, refuses
+  it when the lookup fails, returns nothing or returns any private address,
+  and opens CONNECT tunnels to the checked IP addresses (raced 300 ms apart,
+  families interleaved), keeping the name for TLS and `Host`, so the proxy
+  cannot resolve it differently; a proxy that filters by domain name
   sees only IP addresses. Refusals wrap the new `ErrPrivateAddress`, which
   `IsRetryable` reports as not retryable.
 - **OAuth device flow uses the configured transport.** `DeviceAuthConfig.HTTP`
@@ -34,11 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`Config.HTTPClient`** — a caller-provided `*http.Client`, used as given
-  (streaming requests use a copy without the overall `Timeout`). The caller's
-  client is then responsible for proxying and egress filtering;
-  `BlockPrivateBaseURL` only checks the `BaseURL` at construction, and
-  `ProxyURL` / `DisableProxy` are refused alongside it.
+- **`Config.HTTPClient`** — a caller-provided `*http.Client`. rho-llm uses a
+  copy whose `CheckRedirect` strips the API-key headers on a cross-origin
+  redirect and, with `BlockPrivateBaseURL`, refuses redirects to `localhost`,
+  private IP literals and non-canonical IPv4 hosts, then applies the caller's
+  `CheckRedirect`; the caller's client and transport are not changed. The
+  caller's transport is responsible for proxying and egress filtering,
+  including names. `ProxyURL` / `DisableProxy` are refused alongside it.
 
 ## [0.13.0] - 2026-11-06
 
