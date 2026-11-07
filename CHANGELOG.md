@@ -9,26 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **`BlockPrivateBaseURL` covers IPv6 forms, host names and DNS rebinding**
-  (audit G3). `CheckBaseURL` accepted IPv6 forms of private addresses, such as
-  `[64:ff9b::a9fe:a9fe]` (NAT64 of 169.254.169.254), 6to4 (`2002::/16`) and
-  IPv4-compatible (`[::a9fe:a9fe]`), and never resolved names. It now uses
-  rho-kit's `netutil.IsPrivateIP` (`security/v2` v2.38.0); in the NAT64
-  well-known prefix `64:ff9b::/96` the embedded IPv4 address decides, so
-  IPv6-only hosts behind DNS64 still reach public providers. With the option
-  set, the client also refuses at connect time every resolved address that is
-  private or reserved, and ignores `HTTP_PROXY` / `HTTPS_PROXY` (they would
-  carry a private target past the dial check). With an explicit `ProxyURL` it
-  dials only the proxy and checks every request and redirect hop before
-  handing it over: not the proxy itself, not `localhost` or a private literal,
-  and no name that resolves to a private address; the proxy resolves the name
-  again and has to enforce egress filtering too. Refusals wrap the new
-  `ErrPrivateAddress`, which `IsRetryable` reports as not retryable.
+- **`BlockPrivateBaseURL` covers IPv6 forms, non-canonical IPv4 hosts, host
+  names, DNS rebinding and proxies** (audit G3). `CheckBaseURL` accepted IPv6
+  forms of private addresses, such as `[64:ff9b::a9fe:a9fe]` (NAT64 of
+  169.254.169.254), 6to4 (`2002::/16`) and IPv4-compatible (`[::a9fe:a9fe]`),
+  and never resolved names. The check (standard library only) now unmaps
+  IPv4-mapped addresses, judges the NAT64 well-known prefix `64:ff9b::/96` by
+  the IPv4 address it carries (so IPv6-only hosts behind DNS64 still reach
+  public providers), and refuses 6to4, Teredo, IPv4-compatible, CGNAT
+  (`100.64.0.0/10`), benchmarking, documentation, multicast and reserved
+  ranges. Hosts that a parser may read as IPv4 (`0x7f.1`, `2130706433`,
+  `0177.0.0.1`) and `*.localhost` are refused too. With the option set the
+  client resolves every target itself, refuses it when the lookup fails,
+  returns nothing or returns any private address, and connects only to the
+  checked addresses, each redirect hop included. `HTTP_PROXY` / `HTTPS_PROXY`
+  are then ignored. With an explicit `ProxyURL` the client opens a CONNECT
+  tunnel to the checked IP address and keeps the name for TLS and `Host`, so
+  the proxy cannot resolve it differently; a proxy that filters by domain name
+  sees only IP addresses. Refusals wrap the new `ErrPrivateAddress`, which
+  `IsRetryable` reports as not retryable.
+- **OAuth device flow uses the configured transport.** `DeviceAuthConfig.HTTP`
+  (a `Config`) sets the timeout, proxy, `HTTPClient` and `BlockPrivateBaseURL`
+  for both endpoints; before, it always used a 30-second default client.
 
-### Changed
+### Added
 
-- The library now imports one rho-kit module (`github.com/bds421/rho-kit/security/v2`,
-  package `netutil`); before it imported only the standard library.
+- **`Config.HTTPClient`** — a caller-provided `*http.Client`, used as given
+  (streaming requests use a copy without the overall `Timeout`). The caller's
+  client is then responsible for proxying and egress filtering;
+  `BlockPrivateBaseURL` only checks the `BaseURL` at construction, and
+  `ProxyURL` / `DisableProxy` are refused alongside it.
 
 ## [0.13.0] - 2026-11-06
 

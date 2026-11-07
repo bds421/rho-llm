@@ -1,6 +1,6 @@
 # rho-llm
 
-Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), an async **Batch API** (~50% cheaper bulk processing), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports the Go standard library and one rho-kit package (`security/v2/netutil`, for the private-address check); the `examples/` use `joho/godotenv`.
+Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/document input, extended thinking, structured output (JSON mode), serializable conversations with cross-provider handoff, embeddings, image generation, audio (speech/transcription), an async **Batch API** (~50% cheaper bulk processing), OAuth device flow, and auth pool rotation. Includes thread-safe concurrency management to prevent redundant HTTP client allocations during concurrent rate-limit failovers. The library imports only the Go standard library (the `examples/` use `joho/godotenv`).
 
 **Requires Go 1.26.10+** (the minimum toolchain in `go.mod`, including the standard-library security updates described in the changelog).
 
@@ -1195,7 +1195,7 @@ ev, _ := session.Recv(ctx) // session.created, response.audio.delta, ...
 For providers that issue tokens via OAuth, use the RFC 8628 device-authorization grant; the resulting access token becomes `Config.APIKey`:
 
 ```go
-authCfg := llm.DeviceAuthConfig{ClientID: "...", DeviceAuthURL: "...", TokenURL: "..."}
+authCfg := llm.DeviceAuthConfig{ClientID: "...", DeviceAuthURL: "...", TokenURL: "...", HTTP: llm.Config{BlockPrivateBaseURL: true}}
 da, err := llm.StartDeviceAuth(ctx, authCfg)
 if err != nil {
     panic(err)
@@ -1209,7 +1209,7 @@ if err != nil {
 
 ### SSRF hardening
 
-`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) whose host is `localhost` or a private or reserved IP literal (e.g. the cloud metadata IP), including IPv6 forms that carry one (IPv4-mapped and -compatible, 6to4, Teredo, NAT64; in `64:ff9b::/96` the embedded IPv4 address decides), and refuses at connect time every resolved address that is private or reserved (`ErrPrivateAddress`, not retryable), so host names and DNS rebinding are covered too. With the option set, `HTTP_PROXY`/`HTTPS_PROXY` are ignored; with an explicit `ProxyURL` the client dials only the proxy and checks every request and redirect hop before handing it over (not the proxy itself, not `localhost` or a private literal, no name that resolves to a private address), and the proxy, which resolves the name again, has to enforce egress filtering too — opt-in, off by default so local providers keep working. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
+`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) whose host is `localhost` (or `*.localhost`), a private or reserved IP literal (e.g. the cloud metadata IP), including IPv6 forms that carry one (IPv4-mapped and -compatible, 6to4, Teredo, NAT64; in `64:ff9b::/96` the embedded IPv4 address decides), or a host a parser may read as IPv4 (`0x7f.1`, `2130706433`). The client then resolves every target itself, refuses it when the lookup fails, returns nothing or returns any private or reserved address (`ErrPrivateAddress`, not retryable), and connects only to the checked addresses, each redirect hop included, so DNS rebinding cannot swap them. `HTTP_PROXY`/`HTTPS_PROXY` are ignored; with an explicit `ProxyURL` the client opens a CONNECT tunnel to the checked IP address and keeps the name for TLS and `Host` (a proxy that filters by domain name sees only IP addresses). Opt-in, off by default so local providers keep working. With `Config.HTTPClient` the caller's client is used as given and is responsible for egress filtering; `BlockPrivateBaseURL` then only checks the `BaseURL`. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
 
 ## Config Reference
 
@@ -1226,6 +1226,7 @@ if err != nil {
 | BaseURL | string | "" | Override provider endpoint |
 | ProxyURL | string | "" | Explicit reviewed HTTP(S) forward proxy; overrides ambient proxy variables |
 | DisableProxy | bool | false | Explicitly bypass configured and ambient proxies for local/private endpoints |
+| HTTPClient | *http.Client | nil | Caller-provided client, used as given; it is then responsible for proxying and egress filtering (excludes ProxyURL and DisableProxy) |
 | AuthHeader | string | "Bearer" | Override auth header format |
 | ProviderName | string | "" | Override Client.Provider() |
 | LogRequests | bool | false | Enable request/response metadata logging |

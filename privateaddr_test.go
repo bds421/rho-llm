@@ -38,6 +38,21 @@ func TestCheckBaseURLRefusesIPv6FormsOfPrivateAddresses(t *testing.T) {
 		"http://0.0.0.0/v1",
 		"http://100.64.0.1/v1",
 		"http://169.254.169.254./latest",
+		"http://0x7f.1/v1",
+		"http://0X7F000001/v1",
+		"http://2130706433/v1",
+		"http://0177.0.0.1/v1",
+		"http://127.1/v1",
+		"http://api.example.0x10/v1",
+		"http://app.localhost/v1",
+		"http://192.0.2.10/v1",
+		"http://198.18.0.1/v1",
+		"http://240.0.0.1/v1",
+		"http://255.255.255.255/v1",
+		"http://224.0.0.1/v1",
+		"http://[3fff::1]/v1",
+		"http://[::ffff:0:a00:1]/v1",
+		"http://[::ffff:100.64.0.1]/v1",
 	}
 	for _, baseURL := range refused {
 		err := llm.CheckBaseURL(llm.Config{BaseURL: baseURL, BlockPrivateBaseURL: true})
@@ -118,20 +133,6 @@ func TestBlockPrivateBaseURLOffDialsPrivateAddress(t *testing.T) {
 	}
 }
 
-func TestBlockPrivateBaseURLAllowsPrivateProxy(t *testing.T) {
-	proxy, hits := privateAddrServer(t)
-	client, err := llm.NewSafeHTTPClient(llm.Config{BlockPrivateBaseURL: true, ProxyURL: proxy.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := privateAddrGet(t, client, "http://8.8.8.8/v1/models"); err != nil {
-		t.Fatalf("GET through a private proxy: %v", err)
-	}
-	if hits.Load() != 1 {
-		t.Fatal("request did not go through the proxy")
-	}
-}
-
 func TestBlockPrivateBaseURLIgnoresAmbientProxy(t *testing.T) {
 	proxy, proxyHits := privateAddrServer(t)
 	target, targetHits := privateAddrServer(t)
@@ -156,52 +157,62 @@ func TestBlockPrivateBaseURLIgnoresAmbientProxy(t *testing.T) {
 	}
 }
 
-func TestBlockPrivateBaseURLChecksTargetBeforeExplicitProxy(t *testing.T) {
-	proxy, proxyHits := privateAddrServer(t)
-	target, _ := privateAddrServer(t)
-	client, err := llm.NewSafeHTTPClient(llm.Config{BlockPrivateBaseURL: true, ProxyURL: proxy.URL})
+type recordingTransport struct{ hosts []string }
+
+func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.hosts = append(r.hosts, req.URL.Host)
+	return nil, errors.New("recorded")
+}
+
+func TestHTTPClientIsUsedAsGiven(t *testing.T) {
+	given := &http.Client{}
+	got, err := llm.NewSafeHTTPClient(llm.Config{HTTPClient: given, BlockPrivateBaseURL: true})
+	if err != nil || got != given {
+		t.Fatalf("NewSafeHTTPClient = %p, %v; want the given client %p", got, err, given)
+	}
+	for _, cfg := range []llm.Config{
+		{HTTPClient: given, ProxyURL: "http://proxy.example:3128"},
+		{HTTPClient: given, DisableProxy: true},
+	} {
+		if _, err := llm.NewSafeHTTPClient(cfg); err == nil {
+			t.Errorf("NewSafeHTTPClient(%+v) = nil error, want refusal", cfg)
+		}
+	}
+
+	recorder := &recordingTransport{}
+	client, err := llm.NewClient(llm.Config{
+		Provider: "openai", Model: "gpt-4.1", APIKey: "k", MaxTokens: 10, DisableRetries: true,
+		BaseURL: "https://api.example.com/v1", HTTPClient: &http.Client{Transport: recorder},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	refused := []string{
-		target.URL,
-		strings.Replace(target.URL, "127.0.0.1", "localhost", 1),
-		"http://app.localhost/v1",
-		"http://169.254.169.254/latest",
-		"http://[64:ff9b::a9fe:a9fe]/latest",
-		"http://[fd00:ec2::254]/latest",
-		proxy.URL,
-	}
-	for _, u := range refused {
-		err := privateAddrGet(t, client, u)
-		if !errors.Is(err, llm.ErrPrivateAddress) {
-			t.Errorf("GET %s via proxy = %v, want ErrPrivateAddress", u, err)
-		}
-		if llm.IsRetryable(err) {
-			t.Errorf("GET %s via proxy: refusal is retryable", u)
-		}
-	}
-	if n := proxyHits.Load(); n != 0 {
-		t.Fatalf("proxy received %d refused requests", n)
+	defer client.Close()
+	_, _ = client.Complete(t.Context(), llm.Request{Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")}})
+	if len(recorder.hosts) == 0 || recorder.hosts[0] != "api.example.com" {
+		t.Fatalf("caller's client saw %v, want a request to api.example.com", recorder.hosts)
 	}
 }
 
-func TestBlockPrivateBaseURLChecksRedirectHopBeforeProxy(t *testing.T) {
-	target, targetHits := privateAddrServer(t)
-	var proxyHits atomic.Int32
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyHits.Add(1)
-		http.Redirect(w, r, target.URL+"/internal", http.StatusFound)
-	}))
-	t.Cleanup(proxy.Close)
-	client, err := llm.NewSafeHTTPClient(llm.Config{BlockPrivateBaseURL: true, ProxyURL: proxy.URL})
-	if err != nil {
-		t.Fatal(err)
+func TestDeviceAuthUsesTheConfiguredClient(t *testing.T) {
+	srv, hits := privateAddrServer(t)
+	cfg := llm.DeviceAuthConfig{ClientID: "c", DeviceAuthURL: srv.URL, TokenURL: srv.URL,
+		HTTP: llm.Config{BlockPrivateBaseURL: true}}
+	if _, err := llm.StartDeviceAuth(t.Context(), cfg); !errors.Is(err, llm.ErrPrivateAddress) {
+		t.Errorf("StartDeviceAuth to %s = %v, want ErrPrivateAddress", srv.URL, err)
 	}
-	if err := privateAddrGet(t, client, "http://8.8.8.8/start"); !errors.Is(err, llm.ErrPrivateAddress) {
-		t.Errorf("redirect to %s = %v, want ErrPrivateAddress", target.URL, err)
+	if _, err := llm.PollDeviceToken(t.Context(), cfg, &llm.DeviceAuth{DeviceCode: "d", Interval: 1}); !errors.Is(err, llm.ErrPrivateAddress) {
+		t.Errorf("PollDeviceToken to %s = %v, want ErrPrivateAddress", srv.URL, err)
 	}
-	if proxyHits.Load() != 1 || targetHits.Load() != 0 {
-		t.Fatalf("proxy hits %d, target hits %d, want 1 and 0", proxyHits.Load(), targetHits.Load())
+	if hits.Load() != 0 {
+		t.Fatal("OAuth endpoint reached despite BlockPrivateBaseURL")
+	}
+
+	recorder := &recordingTransport{}
+	cfg = llm.DeviceAuthConfig{ClientID: "c", DeviceAuthURL: "https://auth.example.com/device",
+		HTTP: llm.Config{HTTPClient: &http.Client{Transport: recorder}}}
+	_, _ = llm.StartDeviceAuth(t.Context(), cfg)
+	if len(recorder.hosts) != 1 || recorder.hosts[0] != "auth.example.com" {
+		t.Fatalf("caller's client saw %v, want one request to auth.example.com", recorder.hosts)
 	}
 }

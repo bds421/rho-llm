@@ -21,6 +21,12 @@ type DeviceAuthConfig struct {
 	DeviceAuthURL string // device_authorization endpoint
 	TokenURL      string // token endpoint
 	Scope         string // optional
+
+	// HTTP holds the transport settings for both endpoints, applied as for a
+	// client: Timeout (30s when zero), ProxyURL, DisableProxy, HTTPClient and
+	// BlockPrivateBaseURL, which also checks DeviceAuthURL and TokenURL the way
+	// CheckBaseURL checks a BaseURL. Other fields are ignored.
+	HTTP Config
 }
 
 // DeviceAuth is the device-authorization response. Show UserCode and
@@ -48,8 +54,12 @@ func StartDeviceAuth(ctx context.Context, cfg DeviceAuthConfig) (*DeviceAuth, er
 	if cfg.Scope != "" {
 		form.Set("scope", cfg.Scope)
 	}
+	client, err := cfg.httpClient(cfg.DeviceAuthURL)
+	if err != nil {
+		return nil, err
+	}
 	var da DeviceAuth
-	status, errCode, errDesc, err := postForm(ctx, cfg.DeviceAuthURL, form, &da)
+	status, errCode, errDesc, err := postForm(ctx, client, cfg.DeviceAuthURL, form, &da)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +82,10 @@ func StartDeviceAuth(ctx context.Context, cfg DeviceAuthConfig) (*DeviceAuth, er
 // expires, or ctx is cancelled. It honors the RFC 8628 "authorization_pending" and
 // "slow_down" responses.
 func PollDeviceToken(ctx context.Context, cfg DeviceAuthConfig, da *DeviceAuth) (*Token, error) {
+	client, err := cfg.httpClient(cfg.TokenURL)
+	if err != nil {
+		return nil, err
+	}
 	interval := clampPollInterval(da.Interval)
 	// Self-imposed expiry: stop polling once the device code's lifetime elapses
 	// (RFC 8628). Without this the loop relies entirely on the server returning
@@ -96,7 +110,7 @@ func PollDeviceToken(ctx context.Context, cfg DeviceAuthConfig, da *DeviceAuth) 
 			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		}
 		var tok Token
-		status, errCode, errDesc, err := postForm(ctx, cfg.TokenURL, form, &tok)
+		status, errCode, errDesc, err := postForm(ctx, client, cfg.TokenURL, form, &tok)
 		if err != nil {
 			return nil, err
 		}
@@ -159,17 +173,30 @@ func oauthErrMsg(code, desc string) string {
 	return code
 }
 
+// httpClient builds the client for endpoint from cfg.HTTP.
+func (cfg DeviceAuthConfig) httpClient(endpoint string) (*http.Client, error) {
+	transport := cfg.HTTP
+	if transport.Timeout <= 0 {
+		transport.Timeout = 30 * time.Second
+	}
+	transport.BaseURL = endpoint
+	if err := CheckBaseURL(transport); err != nil {
+		return nil, err
+	}
+	return NewSafeHTTPClient(transport)
+}
+
 // postForm POSTs a urlencoded form and, on 200, decodes JSON into out; otherwise it
 // best-effort parses the OAuth "error" code and "error_description".
 // Returns (status, errorCode, errorDescription, transportErr).
-func postForm(ctx context.Context, endpoint string, form url.Values, out any) (int, string, string, error) {
+func postForm(ctx context.Context, client *http.Client, endpoint string, form url.Values, out any) (int, string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return 0, "", "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	resp, err := SafeHTTPClient(30 * time.Second).Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, "", "", fmt.Errorf("request failed: %w", err)
 	}

@@ -1,128 +1,116 @@
 package llm
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"net/netip"
-	"net/url"
 	"strings"
-	"syscall"
-
-	"github.com/bds421/rho-kit/security/v2/netutil"
 )
 
 // ErrPrivateAddress is returned, wrapped, when Config.BlockPrivateBaseURL
-// refuses a connection to a private, reserved or otherwise non-public address.
-// It is not retryable.
+// refuses a host or a connection to a private, reserved or otherwise
+// non-public address. It is not retryable.
 var ErrPrivateAddress = errors.New("llm: private or reserved address refused (BlockPrivateBaseURL)")
+
+// nonPublicPrefixes are the ranges BlockPrivateBaseURL refuses. IPv4-mapped
+// addresses are unmapped first, and an address in the NAT64 well-known prefix
+// is judged by the IPv4 address it carries (see privateAddr).
+var nonPublicPrefixes = func() []netip.Prefix {
+	cidrs := []string{
+		"0.0.0.0/8",       // "this network" (RFC 791)
+		"10.0.0.0/8",      // private (RFC 1918)
+		"100.64.0.0/10",   // shared address space, CGNAT (RFC 6598)
+		"127.0.0.0/8",     // loopback
+		"169.254.0.0/16",  // link-local, cloud metadata
+		"172.16.0.0/12",   // private (RFC 1918)
+		"192.0.0.0/24",    // IETF protocol assignments (RFC 6890)
+		"192.0.2.0/24",    // documentation TEST-NET-1 (RFC 5737)
+		"192.88.99.0/24",  // 6to4 relay anycast (RFC 7526)
+		"192.168.0.0/16",  // private (RFC 1918)
+		"198.18.0.0/15",   // benchmarking (RFC 2544)
+		"198.51.100.0/24", // documentation TEST-NET-2
+		"203.0.113.0/24",  // documentation TEST-NET-3
+		"224.0.0.0/4",     // multicast
+		"240.0.0.0/4",     // reserved, broadcast
+		"::/96",           // unspecified, loopback, IPv4-compatible (RFC 4291)
+		"::ffff:0:0:0/96", // IPv4-translated (RFC 2765)
+		"64:ff9b:1::/48",  // local-use IPv4/IPv6 translation (RFC 8215)
+		"100::/64",        // discard-only (RFC 6666)
+		"2001::/32",       // Teredo, carries an IPv4 address
+		"2001:2::/48",     // benchmarking (RFC 5180)
+		"2001:10::/28",    // ORCHID (RFC 4843)
+		"2001:db8::/32",   // documentation (RFC 3849)
+		"2002::/16",       // 6to4, carries an IPv4 address
+		"3fff::/20",       // documentation (RFC 9637)
+		"5f00::/16",       // SRv6 SIDs (RFC 9602)
+		"fc00::/7",        // unique local
+		"fe80::/10",       // link-local
+		"fec0::/10",       // site-local, deprecated
+		"ff00::/8",        // multicast
+	}
+	prefixes := make([]netip.Prefix, len(cidrs))
+	for i, cidr := range cidrs {
+		prefixes[i] = netip.MustParsePrefix(cidr)
+	}
+	return prefixes
+}()
 
 // wellKnownNAT64 is 64:ff9b::/96 (RFC 6052). An address in it is judged by the
 // IPv4 address it carries, so an IPv6-only host behind DNS64 still reaches
 // public providers while 64:ff9b::a9fe:a9fe (169.254.169.254) stays refused.
-var wellKnownNAT64 = func() netutil.NAT64Prefix {
-	prefix, err := netutil.ParseNAT64Prefix("64:ff9b::/96")
-	if err != nil {
-		panic("llm: invalid well-known NAT64 prefix")
-	}
-	return prefix
-}()
+var wellKnownNAT64 = netip.MustParsePrefix("64:ff9b::/96")
 
-// privateAddr reports whether BlockPrivateBaseURL refuses addr: rho-kit's
-// netutil.IsPrivateIP, which also covers IPv4-mapped, IPv4-compatible, 6to4,
-// Teredo and other IPv6 forms that carry an IPv4 address.
+// privateAddr reports whether BlockPrivateBaseURL refuses addr.
 func privateAddr(addr netip.Addr) bool {
-	addr = addr.WithZone("")
-	if v4, ok := wellKnownNAT64.Extract(addr); ok {
-		addr = v4
+	addr = addr.WithZone("").Unmap()
+	if wellKnownNAT64.Contains(addr) {
+		b := addr.As16()
+		addr = netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
 	}
-	return netutil.IsPrivateIP(net.IP(addr.AsSlice()))
+	if !addr.IsValid() || addr.IsUnspecified() || addr.IsLoopback() || addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() {
+		return true
+	}
+	for _, prefix := range nonPublicPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
-// blockPrivateEgress returns the proxy policy and dialer of a client with
-// BlockPrivateBaseURL set. Without an explicit ProxyURL (ambient proxy
-// variables are ignored) the dialer refuses every private or reserved address
-// at connect time, after resolution, so host names, redirects and DNS
-// rebinding are covered. With ProxyURL, the dialer reaches only the proxy, and
-// every request (each redirect hop is one) is checked before it is handed to
-// the proxy: its host must not be the proxy itself, "localhost" or a private
-// literal, and a name must not resolve to a private address. The proxy
-// resolves the name again, so it has to enforce egress filtering itself.
-func blockPrivateEgress(dialer *net.Dialer, proxyURL string) (func(*http.Request) (*url.URL, error), func(context.Context, string, string) (net.Conn, error)) {
-	proxyURL = strings.TrimSpace(proxyURL)
-	if proxyURL == "" {
-		guarded := *dialer
-		guarded.Control = func(_, address string, _ syscall.RawConn) error {
-			target, err := netip.ParseAddrPort(address)
-			if err != nil || privateAddr(target.Addr()) {
-				return fmt.Errorf("%w: %s", ErrPrivateAddress, address)
-			}
-			return nil
-		}
-		return nil, guarded.DialContext
-	}
-	proxy, err := parseProxyURL(proxyURL)
-	if err != nil {
-		return func(*http.Request) (*url.URL, error) { return nil, err }, dialer.DialContext
-	}
-	proxyAddr := dialAddr(proxy)
-	policy := func(req *http.Request) (*url.URL, error) {
-		if err := checkProxiedTarget(req, proxyAddr); err != nil {
-			return nil, err
-		}
-		return proxy, nil
-	}
-	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if addr != proxyAddr {
-			return nil, fmt.Errorf("%w: %s is not the proxy", ErrPrivateAddress, addr)
-		}
-		return dialer.DialContext(ctx, network, addr)
-	}
-	return policy, dial
-}
-
-// checkProxiedTarget refuses a request that the proxy would send to a private
-// address, or that targets the proxy itself.
-func checkProxiedTarget(req *http.Request, proxyAddr string) error {
-	if req == nil || req.URL == nil {
-		return fmt.Errorf("%w: request without URL", ErrPrivateAddress)
-	}
-	target := dialAddr(req.URL)
-	if target == proxyAddr {
-		return fmt.Errorf("%w: %s is the proxy", ErrPrivateAddress, target)
-	}
-	host := strings.TrimSuffix(req.URL.Hostname(), ".")
-	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
-		return fmt.Errorf("%w: %s", ErrPrivateAddress, host)
-	}
+// checkHost refuses a host BlockPrivateBaseURL never lets through without
+// resolving it: "localhost" and its subdomains, a private IP literal, and a
+// host a URL parser or resolver may read as a non-canonical IPv4 address
+// (0x7f.1, 2130706433, 0177.0.0.1). It reports whether host is an IP literal.
+func checkHost(host string) (netip.Addr, bool, error) {
+	host = strings.TrimSuffix(host, ".")
 	if addr, err := netip.ParseAddr(host); err == nil {
 		if privateAddr(addr) {
-			return fmt.Errorf("%w: %s", ErrPrivateAddress, host)
+			return addr, true, fmt.Errorf("%w: %s", ErrPrivateAddress, host)
 		}
-		return nil
+		return addr, true, nil
 	}
-	addrs, err := lookupNetIP(req.Context(), "ip", host)
-	if err != nil {
-		return fmt.Errorf("llm: resolve %s: %w", host, err)
+	lower := strings.ToLower(host)
+	if lower == "" || lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
+		return netip.Addr{}, false, fmt.Errorf("%w: %q", ErrPrivateAddress, host)
 	}
-	for _, addr := range addrs {
-		if privateAddr(addr) {
-			return fmt.Errorf("%w: %s resolves to %s", ErrPrivateAddress, host, addr)
-		}
+	if numericHost(lower) {
+		return netip.Addr{}, false, fmt.Errorf("%w: %q looks like an IPv4 address", ErrPrivateAddress, host)
 	}
-	return nil
+	return netip.Addr{}, false, nil
 }
 
-// lookupNetIP resolves names before a request is handed to the proxy.
-var lookupNetIP = net.DefaultResolver.LookupNetIP
-
-// dialAddr is the host:port net/http dials for u.
-func dialAddr(u *url.URL) string {
-	port := u.Port()
-	if port == "" {
-		port = map[string]string{"http": "80", "https": "443"}[u.Scheme]
+// numericHost applies the WHATWG URL rule "ends in a number" (last label all
+// digits, or 0x followed by hex digits) and also refuses any host starting
+// with 0x.
+func numericHost(host string) bool {
+	if strings.HasPrefix(host, "0x") {
+		return true
 	}
-	return net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+	last := host[strings.LastIndex(host, ".")+1:]
+	if hex, ok := strings.CutPrefix(last, "0x"); ok {
+		return strings.Trim(hex, "0123456789abcdef") == ""
+	}
+	return last != "" && strings.Trim(last, "0123456789") == ""
 }

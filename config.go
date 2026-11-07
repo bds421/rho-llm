@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -72,7 +71,16 @@ func SafeHTTPClient(timeout time.Duration) *http.Client {
 // policy declared by cfg. ProxyURL takes precedence over ambient proxy
 // variables; DisableProxy deliberately bypasses them. The two controls are
 // mutually exclusive so callers cannot silently weaken an explicit boundary.
+//
+// When cfg.HTTPClient is set it is returned as given, and ProxyURL and
+// DisableProxy are refused alongside it.
 func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
+	if cfg.HTTPClient != nil {
+		if strings.TrimSpace(cfg.ProxyURL) != "" || cfg.DisableProxy {
+			return nil, fmt.Errorf("llm: HTTPClient excludes ProxyURL and DisableProxy; configure the proxy on the client")
+		}
+		return cfg.HTTPClient, nil
+	}
 	proxy, err := proxyPolicy(cfg)
 	if err != nil {
 		return nil, err
@@ -84,7 +92,10 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 	dialer := &net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second}
 	dial := dialer.DialContext
 	if cfg.BlockPrivateBaseURL {
-		proxy, dial = blockPrivateEgress(dialer, cfg.ProxyURL)
+		proxy = nil
+		if dial, err = blockPrivateEgress(dialer, cfg.ProxyURL); err != nil {
+			return nil, err
+		}
 	}
 	return &http.Client{
 		Timeout: timeout,
@@ -257,16 +268,17 @@ func sameOrigin(a, b *url.URL) bool {
 }
 
 // CheckBaseURL enforces Config.BlockPrivateBaseURL at construction: it rejects a
-// BaseURL whose host is "localhost" or an IP literal that is loopback, private,
-// link-local, unspecified or otherwise reserved (rho-kit's netutil.IsPrivateIP,
-// e.g. the cloud metadata endpoint 169.254.169.254), including IPv6 forms that
-// carry such an IPv4 address (IPv4-mapped and -compatible, 6to4, Teredo; in the
-// NAT64 well-known prefix 64:ff9b::/96 the embedded IPv4 address decides). Host
-// names are not resolved here, so construction stays offline; the client's
-// dialer checks every resolved address at connect time (ErrPrivateAddress).
-// This is opt-in SSRF hardening for deployments that only talk to public
-// provider endpoints; it is incompatible with local providers. It is a no-op
-// when BlockPrivateBaseURL is false or BaseURL is empty.
+// BaseURL whose host is "localhost" (or a subdomain of it), a private or
+// reserved IP literal (e.g. the cloud metadata endpoint 169.254.169.254),
+// including IPv6 forms that carry such an IPv4 address (IPv4-mapped and
+// -compatible, 6to4, Teredo; in the NAT64 well-known prefix 64:ff9b::/96 the
+// embedded IPv4 address decides), or a host that a parser may read as a
+// non-canonical IPv4 address (0x7f.1, 2130706433, 0177.0.0.1). Host names are
+// not resolved here, so construction stays offline; the client checks every
+// resolved address before it connects (ErrPrivateAddress). This is opt-in SSRF
+// hardening for deployments that only talk to public provider endpoints; it is
+// incompatible with local providers. It is a no-op when BlockPrivateBaseURL is
+// false or BaseURL is empty.
 func CheckBaseURL(cfg Config) error {
 	if !cfg.BlockPrivateBaseURL || cfg.BaseURL == "" {
 		return nil
@@ -275,15 +287,8 @@ func CheckBaseURL(cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("invalid base URL %q: %w", cfg.BaseURL, err)
 	}
-	// Normalize the host: a trailing dot ("localhost.", "127.0.0.1.") makes an
-	// absolute FQDN that resolvers still map to loopback, yet it evades both the
-	// literal "localhost" comparison and net.ParseIP — a guard bypass.
-	host := strings.TrimSuffix(u.Hostname(), ".")
-	if strings.EqualFold(host, "localhost") {
-		return fmt.Errorf("base URL host %q is not allowed (BlockPrivateBaseURL)", host)
-	}
-	if addr, err := netip.ParseAddr(host); err == nil && privateAddr(addr) {
-		return fmt.Errorf("base URL host %q: %w", host, ErrPrivateAddress)
+	if _, _, err := checkHost(u.Hostname()); err != nil {
+		return fmt.Errorf("base URL: %w", err)
 	}
 	return nil
 }
@@ -345,15 +350,25 @@ type Config struct {
 	// variables. Use it for reviewed local/private model endpoints.
 	DisableProxy bool `json:"disable_proxy,omitempty"`
 
+	// HTTPClient, when set, is used as given for every request of this config
+	// (streaming requests use a copy without the overall Timeout, with an idle
+	// watchdog around the same transport). The caller's client is then
+	// responsible for proxying and egress filtering: rho-llm adds no redirect,
+	// proxy or private-address handling to it, and BlockPrivateBaseURL only
+	// checks the BaseURL at construction. ProxyURL and DisableProxy are refused
+	// alongside it. Not serialized.
+	HTTPClient *http.Client `json:"-"`
+
 	// BlockPrivateBaseURL is opt-in SSRF hardening: when true, client construction
-	// rejects a BaseURL that is "localhost" or a private or reserved IP literal
-	// (CheckBaseURL), and the client refuses at connect time every resolved
-	// address that is private or reserved (ErrPrivateAddress). Ambient proxy
-	// variables are then ignored. With ProxyURL, the client dials only the
-	// proxy and checks each request (every redirect hop) before handing it
-	// over: not the proxy itself, not "localhost" or a private literal, and a
-	// name must not resolve to a private address. The proxy resolves the name
-	// again, so it has to enforce egress filtering too. Incompatible with
+	// rejects a BaseURL that CheckBaseURL refuses, and the client checks every
+	// connection, each redirect hop included, before it is made. Ambient proxy
+	// variables are then ignored. Without ProxyURL the client dials directly and
+	// refuses every resolved address that is private or reserved
+	// (ErrPrivateAddress), so host names and DNS rebinding are covered. With
+	// ProxyURL it resolves and checks the target itself (a failed or empty
+	// lookup is refused too) and tunnels through the proxy with CONNECT to the
+	// checked IP address, keeping the name for TLS and Host; a proxy that
+	// filters by domain name therefore sees only IP addresses. Incompatible with
 	// local providers (ollama/vllm/lmstudio, which use localhost).
 	BlockPrivateBaseURL bool `json:"block_private_base_url,omitempty"`
 
