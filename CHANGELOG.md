@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-07
+
+`BlockPrivateBaseURL` checked against everything a private address can hide
+behind (audit G3), and a caller-provided `*http.Client`.
+
 ### Security
 
 - **`BlockPrivateBaseURL` covers IPv6 forms, non-canonical IPv4 hosts, host
