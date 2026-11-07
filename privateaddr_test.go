@@ -124,10 +124,84 @@ func TestBlockPrivateBaseURLAllowsPrivateProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := privateAddrGet(t, client, "http://api.example.com/v1/models"); err != nil {
+	if err := privateAddrGet(t, client, "http://8.8.8.8/v1/models"); err != nil {
 		t.Fatalf("GET through a private proxy: %v", err)
 	}
 	if hits.Load() != 1 {
 		t.Fatal("request did not go through the proxy")
+	}
+}
+
+func TestBlockPrivateBaseURLIgnoresAmbientProxy(t *testing.T) {
+	proxy, proxyHits := privateAddrServer(t)
+	target, targetHits := privateAddrServer(t)
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("HTTPS_PROXY", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+	client, err := llm.NewSafeHTTPClient(llm.Config{BlockPrivateBaseURL: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Transport.(*http.Transport).Proxy != nil {
+		t.Fatal("BlockPrivateBaseURL client uses the ambient proxy")
+	}
+	byName := strings.Replace(target.URL, "127.0.0.1", "localhost", 1)
+	for _, u := range []string{target.URL, byName} {
+		if err := privateAddrGet(t, client, u); !errors.Is(err, llm.ErrPrivateAddress) {
+			t.Errorf("GET %s = %v, want ErrPrivateAddress", u, err)
+		}
+	}
+	if proxyHits.Load() != 0 || targetHits.Load() != 0 {
+		t.Fatalf("proxy hits %d, target hits %d, want 0 and 0", proxyHits.Load(), targetHits.Load())
+	}
+}
+
+func TestBlockPrivateBaseURLChecksTargetBeforeExplicitProxy(t *testing.T) {
+	proxy, proxyHits := privateAddrServer(t)
+	target, _ := privateAddrServer(t)
+	client, err := llm.NewSafeHTTPClient(llm.Config{BlockPrivateBaseURL: true, ProxyURL: proxy.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := []string{
+		target.URL,
+		strings.Replace(target.URL, "127.0.0.1", "localhost", 1),
+		"http://app.localhost/v1",
+		"http://169.254.169.254/latest",
+		"http://[64:ff9b::a9fe:a9fe]/latest",
+		"http://[fd00:ec2::254]/latest",
+		proxy.URL,
+	}
+	for _, u := range refused {
+		err := privateAddrGet(t, client, u)
+		if !errors.Is(err, llm.ErrPrivateAddress) {
+			t.Errorf("GET %s via proxy = %v, want ErrPrivateAddress", u, err)
+		}
+		if llm.IsRetryable(err) {
+			t.Errorf("GET %s via proxy: refusal is retryable", u)
+		}
+	}
+	if n := proxyHits.Load(); n != 0 {
+		t.Fatalf("proxy received %d refused requests", n)
+	}
+}
+
+func TestBlockPrivateBaseURLChecksRedirectHopBeforeProxy(t *testing.T) {
+	target, targetHits := privateAddrServer(t)
+	var proxyHits atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits.Add(1)
+		http.Redirect(w, r, target.URL+"/internal", http.StatusFound)
+	}))
+	t.Cleanup(proxy.Close)
+	client, err := llm.NewSafeHTTPClient(llm.Config{BlockPrivateBaseURL: true, ProxyURL: proxy.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := privateAddrGet(t, client, "http://8.8.8.8/start"); !errors.Is(err, llm.ErrPrivateAddress) {
+		t.Errorf("redirect to %s = %v, want ErrPrivateAddress", target.URL, err)
+	}
+	if proxyHits.Load() != 1 || targetHits.Load() != 0 {
+		t.Fatalf("proxy hits %d, target hits %d, want 1 and 0", proxyHits.Load(), targetHits.Load())
 	}
 }

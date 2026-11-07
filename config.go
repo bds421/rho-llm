@@ -84,9 +84,7 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 	dialer := &net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second}
 	dial := dialer.DialContext
 	if cfg.BlockPrivateBaseURL {
-		proxies := &proxyAddrs{}
-		proxy = proxies.record(proxy)
-		dial = blockPrivateDialContext(dialer, proxies)
+		proxy, dial = blockPrivateEgress(dialer, cfg.ProxyURL)
 	}
 	return &http.Client{
 		Timeout: timeout,
@@ -233,6 +231,14 @@ func proxyPolicy(cfg Config) (func(*http.Request) (*url.URL, error), error) {
 	if proxyURL == "" {
 		return http.ProxyFromEnvironment, nil
 	}
+	parsed, err := parseProxyURL(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return http.ProxyURL(parsed), nil
+}
+
+func parseProxyURL(proxyURL string) (*url.URL, error) {
 	parsed, err := url.Parse(proxyURL)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
@@ -240,7 +246,7 @@ func proxyPolicy(cfg Config) (func(*http.Request) (*url.URL, error), error) {
 		parsed.Fragment != "" {
 		return nil, fmt.Errorf("llm: ProxyURL is invalid")
 	}
-	return http.ProxyURL(parsed), nil
+	return parsed, nil
 }
 
 // sameHost returns true if two URLs have the same host (including port).
@@ -330,8 +336,9 @@ type Config struct {
 
 	// ProxyURL is an explicit HTTP(S) forward proxy for this config. It is
 	// intended for reviewed public-provider egress and overrides HTTP_PROXY,
-	// HTTPS_PROXY, and NO_PROXY. Credentials and path/query fragments are
-	// rejected so this non-secret transport setting is safe to report.
+	// HTTPS_PROXY, and NO_PROXY (which BlockPrivateBaseURL ignores). Credentials
+	// and path/query fragments are rejected so this non-secret transport
+	// setting is safe to report.
 	ProxyURL string `json:"proxy_url,omitempty"`
 
 	// DisableProxy explicitly bypasses both ProxyURL and ambient proxy
@@ -341,9 +348,13 @@ type Config struct {
 	// BlockPrivateBaseURL is opt-in SSRF hardening: when true, client construction
 	// rejects a BaseURL that is "localhost" or a private or reserved IP literal
 	// (CheckBaseURL), and the client refuses at connect time every resolved
-	// address that is private or reserved (ErrPrivateAddress), except the
-	// configured or ambient proxy. Incompatible with local providers
-	// (ollama/vllm/lmstudio, which use localhost).
+	// address that is private or reserved (ErrPrivateAddress). Ambient proxy
+	// variables are then ignored. With ProxyURL, the client dials only the
+	// proxy and checks each request (every redirect hop) before handing it
+	// over: not the proxy itself, not "localhost" or a private literal, and a
+	// name must not resolve to a private address. The proxy resolves the name
+	// again, so it has to enforce egress filtering too. Incompatible with
+	// local providers (ollama/vllm/lmstudio, which use localhost).
 	BlockPrivateBaseURL bool `json:"block_private_base_url,omitempty"`
 
 	// AuthHeader overrides the authorization header format.

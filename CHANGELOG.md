@@ -17,9 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   well-known prefix `64:ff9b::/96` the embedded IPv4 address decides, so
   IPv6-only hosts behind DNS64 still reach public providers. With the option
   set, the client also refuses at connect time every resolved address that is
-  private or reserved; the configured or ambient proxy is exempt. Refusals
-  wrap the new `ErrPrivateAddress`, which `IsRetryable` reports as not
-  retryable.
+  private or reserved, and ignores `HTTP_PROXY` / `HTTPS_PROXY` (they would
+  carry a private target past the dial check). With an explicit `ProxyURL` it
+  dials only the proxy and checks every request and redirect hop before
+  handing it over: not the proxy itself, not `localhost` or a private literal,
+  and no name that resolves to a private address; the proxy resolves the name
+  again and has to enforce egress filtering too. Refusals wrap the new
+  `ErrPrivateAddress`, which `IsRetryable` reports as not retryable.
 
 ### Changed
 

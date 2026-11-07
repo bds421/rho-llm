@@ -1209,7 +1209,7 @@ if err != nil {
 
 ### SSRF hardening
 
-`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) whose host is `localhost` or a private or reserved IP literal (e.g. the cloud metadata IP), including IPv6 forms that carry one (IPv4-mapped and -compatible, 6to4, Teredo, NAT64; in `64:ff9b::/96` the embedded IPv4 address decides), and refuses at connect time every resolved address that is private or reserved (`ErrPrivateAddress`, not retryable), so host names and DNS rebinding are covered too; the configured or ambient proxy is exempt — opt-in, off by default so local providers keep working. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
+`Config.BlockPrivateBaseURL` rejects a `BaseURL` (or per-key override) whose host is `localhost` or a private or reserved IP literal (e.g. the cloud metadata IP), including IPv6 forms that carry one (IPv4-mapped and -compatible, 6to4, Teredo, NAT64; in `64:ff9b::/96` the embedded IPv4 address decides), and refuses at connect time every resolved address that is private or reserved (`ErrPrivateAddress`, not retryable), so host names and DNS rebinding are covered too. With the option set, `HTTP_PROXY`/`HTTPS_PROXY` are ignored; with an explicit `ProxyURL` the client dials only the proxy and checks every request and redirect hop before handing it over (not the proxy itself, not `localhost` or a private literal, no name that resolves to a private address), and the proxy, which resolves the name again, has to enforce egress filtering too — opt-in, off by default so local providers keep working. `BaseURL` is otherwise a **trusted** value: the API key is sent to it, so never populate it from untrusted input.
 
 ## Config Reference
 

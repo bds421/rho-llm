@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"sync"
+	"strings"
 	"syscall"
 
 	"github.com/bds421/rho-kit/security/v2/netutil"
@@ -41,57 +41,88 @@ func privateAddr(addr netip.Addr) bool {
 	return netutil.IsPrivateIP(net.IP(addr.AsSlice()))
 }
 
-// blockPrivateDialContext refuses, at connect time, every address privateAddr
-// refuses. It covers what CheckBaseURL cannot: host names (checked after
-// resolution, on the address actually dialed, so DNS rebinding does not get
-// through) and redirects. The configured or ambient proxy is a reviewed
-// egress point and may be private; proxies records the addresses it dials.
-func blockPrivateDialContext(dialer *net.Dialer, proxies *proxyAddrs) func(context.Context, string, string) (net.Conn, error) {
-	guarded := *dialer
-	guarded.Control = func(_, address string, _ syscall.RawConn) error {
-		target, err := netip.ParseAddrPort(address)
-		if err != nil || privateAddr(target.Addr()) {
-			return fmt.Errorf("%w: %s", ErrPrivateAddress, address)
+// blockPrivateEgress returns the proxy policy and dialer of a client with
+// BlockPrivateBaseURL set. Without an explicit ProxyURL (ambient proxy
+// variables are ignored) the dialer refuses every private or reserved address
+// at connect time, after resolution, so host names, redirects and DNS
+// rebinding are covered. With ProxyURL, the dialer reaches only the proxy, and
+// every request (each redirect hop is one) is checked before it is handed to
+// the proxy: its host must not be the proxy itself, "localhost" or a private
+// literal, and a name must not resolve to a private address. The proxy
+// resolves the name again, so it has to enforce egress filtering itself.
+func blockPrivateEgress(dialer *net.Dialer, proxyURL string) (func(*http.Request) (*url.URL, error), func(context.Context, string, string) (net.Conn, error)) {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		guarded := *dialer
+		guarded.Control = func(_, address string, _ syscall.RawConn) error {
+			target, err := netip.ParseAddrPort(address)
+			if err != nil || privateAddr(target.Addr()) {
+				return fmt.Errorf("%w: %s", ErrPrivateAddress, address)
+			}
+			return nil
+		}
+		return nil, guarded.DialContext
+	}
+	proxy, err := parseProxyURL(proxyURL)
+	if err != nil {
+		return func(*http.Request) (*url.URL, error) { return nil, err }, dialer.DialContext
+	}
+	proxyAddr := dialAddr(proxy)
+	policy := func(req *http.Request) (*url.URL, error) {
+		if err := checkProxiedTarget(req, proxyAddr); err != nil {
+			return nil, err
+		}
+		return proxy, nil
+	}
+	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr != proxyAddr {
+			return nil, fmt.Errorf("%w: %s is not the proxy", ErrPrivateAddress, addr)
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
+	return policy, dial
+}
+
+// checkProxiedTarget refuses a request that the proxy would send to a private
+// address, or that targets the proxy itself.
+func checkProxiedTarget(req *http.Request, proxyAddr string) error {
+	if req == nil || req.URL == nil {
+		return fmt.Errorf("%w: request without URL", ErrPrivateAddress)
+	}
+	target := dialAddr(req.URL)
+	if target == proxyAddr {
+		return fmt.Errorf("%w: %s is the proxy", ErrPrivateAddress, target)
+	}
+	host := strings.TrimSuffix(req.URL.Hostname(), ".")
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return fmt.Errorf("%w: %s", ErrPrivateAddress, host)
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if privateAddr(addr) {
+			return fmt.Errorf("%w: %s", ErrPrivateAddress, host)
 		}
 		return nil
 	}
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if proxies.has(addr) {
-			return dialer.DialContext(ctx, network, addr)
+	addrs, err := lookupNetIP(req.Context(), "ip", host)
+	if err != nil {
+		return fmt.Errorf("llm: resolve %s: %w", host, err)
+	}
+	for _, addr := range addrs {
+		if privateAddr(addr) {
+			return fmt.Errorf("%w: %s resolves to %s", ErrPrivateAddress, host, addr)
 		}
-		return guarded.DialContext(ctx, network, addr)
 	}
+	return nil
 }
 
-// proxyAddrs remembers the host:port of every proxy the transport's proxy
-// policy has chosen, so the dial guard can tell a proxy connection apart.
-type proxyAddrs struct {
-	seen sync.Map
-}
+// lookupNetIP resolves names before a request is handed to the proxy.
+var lookupNetIP = net.DefaultResolver.LookupNetIP
 
-func (p *proxyAddrs) record(policy func(*http.Request) (*url.URL, error)) func(*http.Request) (*url.URL, error) {
-	if policy == nil {
-		return nil
-	}
-	return func(req *http.Request) (*url.URL, error) {
-		proxyURL, err := policy(req)
-		if proxyURL != nil {
-			p.seen.Store(proxyDialAddr(proxyURL), struct{}{})
-		}
-		return proxyURL, err
-	}
-}
-
-func (p *proxyAddrs) has(addr string) bool {
-	_, ok := p.seen.Load(addr)
-	return ok
-}
-
-// proxyDialAddr is the address net/http dials for a proxy URL.
-func proxyDialAddr(u *url.URL) string {
+// dialAddr is the host:port net/http dials for u.
+func dialAddr(u *url.URL) string {
 	port := u.Port()
 	if port == "" {
-		port = map[string]string{"http": "80", "https": "443", "socks5": "1080", "socks5h": "1080"}[u.Scheme]
+		port = map[string]string{"http": "80", "https": "443"}[u.Scheme]
 	}
-	return net.JoinHostPort(u.Hostname(), port)
+	return net.JoinHostPort(strings.ToLower(u.Hostname()), port)
 }
