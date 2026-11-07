@@ -1828,7 +1828,7 @@ Documented (not a defect): integers inside `ToolInput` (typed `any`) deserialize
 
 ### Changed
 
-- **`.mailmap`** added — unifies two `Rene Heinzl` commit identities (`reneheinzl@macbookpro.lan` → `rene@bds421.com`) for `git shortlog`/blame.
+- **`.mailmap`** added — unifies two `Rene Heinzl` commit identities for `git shortlog`/blame.
 
 - **Repository reformatted with `gofmt`** — corrected pre-existing struct-alignment drift across several files (`retrypolicy.go`, `types.go`, examples, internal tests) so the new `fmt-check` CI gate passes. Formatting-only; no behavioral change.
 
