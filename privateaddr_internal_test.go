@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"crypto/x509"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -413,4 +414,87 @@ func TestRaceStartsTheNextAddressAtOnceWhenOneFailsWhileOthersRun(t *testing.T) 
 	if elapsed := time.Since(began); elapsed >= 2*fallbackDelay-50*time.Millisecond {
 		t.Errorf("race took %v, want the third attempt right after the second failed (about %v)", elapsed, fallbackDelay)
 	}
+}
+
+// A name that resolves to a private address is dialed without
+// BlockPrivateBaseURL and refused at dial with it, whatever the platform's
+// resolver would make of the name.
+func TestBlockPrivateBaseURLRefusesANameResolvingToAPrivateAddressAtDial(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits.Add(1) }))
+	t.Cleanup(srv.Close)
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubDialResolver(t, netip.MustParseAddr("127.0.0.1"))
+	target := "http://rebound.example:" + port + "/v1"
+
+	open, err := NewSafeHTTPClient(Config{DisableProxy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fetch(open, target); err != nil || hits.Load() != 1 {
+		t.Fatalf("GET %s without BlockPrivateBaseURL = %v after %d hits, want the server reached once", target, err, hits.Load())
+	}
+	blocking, err := NewSafeHTTPClient(Config{BlockPrivateBaseURL: true, DisableProxy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fetch(blocking, target)
+	if !errors.Is(err, ErrPrivateAddress) {
+		t.Errorf("GET %s = %v, want ErrPrivateAddress", target, err)
+	}
+	if IsRetryable(err) {
+		t.Errorf("GET %s: refused dial is retryable", target)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Fatalf("server reached %d times, want once (only without BlockPrivateBaseURL)", n)
+	}
+}
+
+// stubDialResolver makes the direct dialer resolve every name to addr: A
+// queries get addr, every other query no records.
+func stubDialResolver(t *testing.T, addr netip.Addr) {
+	t.Helper()
+	original := dialResolver
+	dialResolver = &net.Resolver{PreferGo: true, Dial: func(context.Context, string, string) (net.Conn, error) {
+		client, server := net.Pipe()
+		go answerDNS(server, addr)
+		return client, nil
+	}}
+	t.Cleanup(func() { dialResolver = original })
+}
+
+// answerDNS answers one DNS query framed as over TCP (RFC 1035 4.2.2), which
+// is how the Go resolver talks on a conn that is not a PacketConn.
+func answerDNS(conn net.Conn, addr netip.Addr) {
+	defer func() { _ = conn.Close() }()
+	var size [2]byte
+	if _, err := io.ReadFull(conn, size[:]); err != nil {
+		return
+	}
+	query := make([]byte, binary.BigEndian.Uint16(size[:]))
+	if _, err := io.ReadFull(conn, query); err != nil || len(query) < 12 {
+		return
+	}
+	end := 12
+	for end < len(query) && query[end] != 0 {
+		end += int(query[end]) + 1
+	}
+	end += 5 // the root label, QTYPE and QCLASS
+	if end > len(query) {
+		return
+	}
+	question := query[12:end]
+	// ID, then QR, RD, RA and NOERROR, one question, no other records.
+	msg := append([]byte{query[0], query[1], 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0}, question...)
+	if question[len(question)-4] == 0 && question[len(question)-3] == 1 {
+		msg[7] = 1
+		ip := addr.As4()
+		// The question's name by pointer, type A, class IN, TTL 60, 4 bytes.
+		msg = append(msg, 0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4)
+		msg = append(msg, ip[:]...)
+	}
+	_, _ = conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(msg))), msg...))
 }

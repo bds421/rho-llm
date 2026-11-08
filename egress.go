@@ -15,6 +15,10 @@ import (
 // to the checked addresses.
 var lookupNetIP = net.DefaultResolver.LookupNetIP
 
+// dialResolver resolves names for the direct dialer; nil is the system's.
+// Tests answer from it, so a name resolves alike on every platform.
+var dialResolver *net.Resolver
+
 // fallbackDelay is how long a connection attempt runs alone before the next
 // checked address starts racing it (the Happy Eyeballs stagger, RFC 8305).
 const fallbackDelay = 300 * time.Millisecond

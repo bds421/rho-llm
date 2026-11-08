@@ -98,7 +98,7 @@ func NewSafeHTTPClient(cfg Config) (*http.Client, error) {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	dialer := &net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second}
+	dialer := &net.Dialer{Timeout: min(timeout, 30*time.Second), KeepAlive: 30 * time.Second, Resolver: dialResolver}
 	dial := dialer.DialContext
 	if cfg.BlockPrivateBaseURL {
 		proxy = nil
