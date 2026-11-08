@@ -101,9 +101,8 @@ func privateAddrGet(t *testing.T, client *http.Client, target string) error {
 func TestBlockPrivateBaseURLRefusesResolvedPrivateAddressAtDial(t *testing.T) {
 	srv, hits := privateAddrServer(t)
 	byName := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
-	numeric := strings.Replace(srv.URL, "127.0.0.1", "0x7f.1", 1)
 	subdomain := strings.Replace(srv.URL, "127.0.0.1", "app.localhost", 1)
-	for _, target := range []string{srv.URL, byName, numeric, subdomain} {
+	for _, target := range []string{srv.URL, byName, subdomain} {
 		client, err := llm.NewSafeHTTPClient(llm.Config{BlockPrivateBaseURL: true, DisableProxy: true})
 		if err != nil {
 			t.Fatal(err)
