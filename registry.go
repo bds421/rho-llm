@@ -46,6 +46,16 @@ type ModelInfo struct {
 // date passed) or a live probe (Fireworks 404 "Model not found", NVIDIA 410
 // "end of life").
 var retiredModels = map[string]string{
+	// xAI answers these with grok-4.3 / grok-build-0.1 (response "model", checked
+	// 2026-11-10) and bills that model, so the old ID's price would be wrong.
+	"grok-3":                                    "grok-4.3",
+	"grok-3-mini":                               "grok-4.3",
+	"grok-4-0709":                               "grok-4.3",
+	"grok-4-fast-reasoning":                     "grok-4.3",
+	"grok-4-fast-non-reasoning":                 "grok-4.3",
+	"grok-4-1-fast-reasoning":                   "grok-4.3",
+	"grok-4-1-fast-non-reasoning":               "grok-4.3",
+	"grok-code-fast-1":                          "grok-build-0.1",
 	"claude-3-haiku-20240307":                   "claude-haiku-4-5",
 	"claude-opus-4-0":                           "claude-opus-4-5",
 	"claude-opus-4-1":                           "claude-opus-4-5",
@@ -100,7 +110,8 @@ func RetiredModelReplacement(model string) (string, bool) {
 var modelRegistry = map[string]ModelInfo{
 	// Anthropic — from platform.claude.com/docs/en/about-claude/pricing (2026-10-31)
 	// Cache pricing: write = 1.25× input; read is usually 0.1× input but the
-	// page sets it per model (Fable 5.1 $0.25, Opus 5.5 $0.20, Sonnet 5.5 $0.10).
+	// page sets it per model (Fable 5.2 $0.20, Fable 5.1 $0.25, Opus 5.5 $0.20,
+	// Sonnet 5.5 $0.10). Fable 5.2 rechecked 2026-11-10.
 	// 1-hour cache writes: 2× input (same page, 2026-11-06).
 	// Web search: $10 per 1,000 searches, on top of tokens (same page, 2026-11-06).
 	// Sampling: API version 2026-10-21 (DefaultAnthropicVersion) rejects
@@ -108,6 +119,7 @@ var modelRegistry = map[string]ModelInfo{
 	// the 4.6 and 4.5 rows accept them (anthropicWithoutSamplingControls).
 	// Structured output (output_config.format) and documents: every row.
 	// Claude 5 family (no minor segment in major-version IDs).
+	"claude-fable-5-2":  {ID: "claude-fable-5-2", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 8.00, OutputPricePer1M: 40.00, CacheWritePricePer1M: 10.00, CacheWrite1hPricePer1M: 16.00, CacheReadPricePer1M: 0.20, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Fable 5.2"},
 	"claude-fable-5-1":  {ID: "claude-fable-5-1", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheWritePricePer1M: 12.50, CacheWrite1hPricePer1M: 20.00, CacheReadPricePer1M: 0.25, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Fable 5.1"},
 	"claude-opus-5-5":   {ID: "claude-opus-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 4.00, OutputPricePer1M: 20.00, CacheWritePricePer1M: 5.00, CacheWrite1hPricePer1M: 8.00, CacheReadPricePer1M: 0.20, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Opus 5.5"},
 	"claude-sonnet-5-5": {ID: "claude-sonnet-5-5", Provider: "anthropic", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheWrite1hPricePer1M: 4.00, CacheReadPricePer1M: 0.10, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Sonnet 5.5"},
@@ -127,7 +139,10 @@ var modelRegistry = map[string]ModelInfo{
 	"claude-haiku-4-5-20251001":  {ID: "claude-haiku-4-5-20251001", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheWrite1hPricePer1M: 2.00, CacheReadPricePer1M: 0.10, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Haiku 4.5"},
 	"claude-haiku-4-5":           {ID: "claude-haiku-4-5", Provider: "anthropic", MaxTokens: 64000, ContextWindow: 200000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheWritePricePer1M: 1.25, CacheWrite1hPricePer1M: 2.00, CacheReadPricePer1M: 0.10, WebSearchPricePer1K: 10.00, SupportsThinking: true, Label: "Haiku 4.5"},
 
-	// xAI / Grok — from docs.x.ai/developers/models (2026-10-31)
+	// xAI / Grok — from docs.x.ai/developers/models (2026-10-31), prices rechecked
+	// against GET /v1/language-models on 2026-11-10. The 4.20 beta slugs are
+	// aliases of the 0309 IDs (modelAliases); grok-3/4/4.1-fast and
+	// grok-code-fast-1 are retired (retiredModels).
 	// Short-context rates; long-context (≥200k prompt) is 2× and not modeled here.
 	"grok-4.7":                     {ID: "grok-4.7", Provider: "xai", ContextWindow: 500000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, CacheReadPricePer1M: 0.50, Thinking: true, Label: "Grok 4.7"},
 	"grok-4.6":                     {ID: "grok-4.6", Provider: "xai", ContextWindow: 500000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, CacheReadPricePer1M: 0.50, Thinking: true, Label: "Grok 4.6"},
@@ -137,19 +152,6 @@ var modelRegistry = map[string]ModelInfo{
 	"grok-4.20-0309-non-reasoning": {ID: "grok-4.20-0309-non-reasoning", Provider: "xai", ContextWindow: 1000000, InputPricePer1M: 1.25, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.20, Label: "Grok 4.20"},
 	"grok-4.20-multi-agent-0309":   {ID: "grok-4.20-multi-agent-0309", Provider: "xai", ContextWindow: 1000000, InputPricePer1M: 1.25, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.20, Thinking: true, Label: "Grok 4.20 Agent"},
 	"grok-build-0.1":               {ID: "grok-build-0.1", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 1.00, OutputPricePer1M: 2.00, CacheReadPricePer1M: 0.20, Thinking: true, Label: "Grok Build 0.1"},
-	// Legacy beta slugs retained for existing callers.
-	"grok-4.20-beta":                    {ID: "grok-4.20-beta", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 Beta"},
-	"grok-4.20-beta-0309-reasoning":     {ID: "grok-4.20-beta-0309-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 R (beta)"},
-	"grok-4.20-beta-0309-non-reasoning": {ID: "grok-4.20-beta-0309-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Label: "Grok 4.20 (beta)"},
-	"grok-4.20-multi-agent-beta-0309":   {ID: "grok-4.20-multi-agent-beta-0309", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 2.00, OutputPricePer1M: 6.00, Thinking: true, Label: "Grok 4.20 Agent (beta)"},
-	"grok-4-1-fast-reasoning":           {ID: "grok-4-1-fast-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 4.1 R"},
-	"grok-4-1-fast-non-reasoning":       {ID: "grok-4-1-fast-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Label: "Grok 4.1"},
-	"grok-4-fast-reasoning":             {ID: "grok-4-fast-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 4 R"},
-	"grok-4-fast-non-reasoning":         {ID: "grok-4-fast-non-reasoning", Provider: "xai", ContextWindow: 2000000, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, Label: "Grok 4"},
-	"grok-4-0709":                       {ID: "grok-4-0709", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Thinking: true, Label: "Grok 4 (Jul)"},
-	"grok-code-fast-1":                  {ID: "grok-code-fast-1", Provider: "xai", ContextWindow: 256000, InputPricePer1M: 0.20, OutputPricePer1M: 1.50, Thinking: true, Label: "Grok Code"},
-	"grok-3":                            {ID: "grok-3", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Grok 3"},
-	"grok-3-mini":                       {ID: "grok-3-mini", Provider: "xai", ContextWindow: 131072, InputPricePer1M: 0.30, OutputPricePer1M: 0.50, Thinking: true, Label: "Grok 3 Mini"},
 
 	// Gemini — from ai.google.dev/gemini-api/docs/pricing and /models (2026-10-31)
 	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
@@ -234,6 +236,9 @@ var modelRegistry = map[string]ModelInfo{
 	"openai/gpt-oss-20b":      {ID: "openai/gpt-oss-20b", Provider: "groq", MaxTokens: 65536, ContextWindow: 131072, InputPricePer1M: 0.075, OutputPricePer1M: 0.30, Label: "GPT-OSS 20B"},
 
 	// Mistral — cloud API (2026-08-06)
+	// Mistral Large 4 — docs.mistral.ai/models/mistral-large-4-0 (2026-11-10).
+	// Max output is not published; the context window is used, as for Large 3.
+	"mistral-large-4-0":     {ID: "mistral-large-4-0", Provider: "mistral", MaxTokens: 1048576, ContextWindow: 1048576, InputPricePer1M: 0.70, OutputPricePer1M: 2.10, CacheReadPricePer1M: 0.07, Thinking: true, Label: "Mistral Large 4"},
 	"mistral-large-2512":    {ID: "mistral-large-2512", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.50, OutputPricePer1M: 1.50, Label: "Mistral Large"},
 	"mistral-medium-latest": {ID: "mistral-medium-latest", Provider: "mistral", MaxTokens: 131072, ContextWindow: 131072, InputPricePer1M: 0.40, OutputPricePer1M: 2.00, Label: "Mistral Medium"},
 	"mistral-small-2603":    {ID: "mistral-small-2603", Provider: "mistral", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, Thinking: true, Label: "Mistral Small 4"},
@@ -344,6 +349,11 @@ var modelRegistry = map[string]ModelInfo{
 	"text-embedding-3-small": {ID: "text-embedding-3-small", Provider: "openai", Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Text Embedding 3 Small"},
 	"text-embedding-3-large": {ID: "text-embedding-3-large", Provider: "openai", Capabilities: CapabilitySet(CapabilityEmbeddings | CapabilityBatch), Label: "Text Embedding 3 Large"},
 	"gpt-image-2":            {ID: "gpt-image-2", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 2"},
+	// Listed by GET /v1/models on 2026-11-10 (2.6 created 2026-10-28).
+	"gpt-image-2.6-flare":    {ID: "gpt-image-2.6-flare", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 2.6 Flare"},
+	"gpt-image-2.6-sunburst": {ID: "gpt-image-2.6-sunburst", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 2.6 Sunburst"},
+	"gpt-image-2.5-flare":    {ID: "gpt-image-2.5-flare", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 2.5 Flare"},
+	"gpt-image-2.5-sunburst": {ID: "gpt-image-2.5-sunburst", Provider: "openai", Capabilities: CapabilitySet(CapabilityImageGeneration), Label: "GPT Image 2.5 Sunburst"},
 	"tts-1":                  {ID: "tts-1", Provider: "openai", Capabilities: CapabilitySet(CapabilitySpeechSynthesis), Label: "TTS 1"},
 	"whisper-1":              {ID: "whisper-1", Provider: "openai", Capabilities: CapabilitySet(CapabilityTranscription), AudioPricePerMinute: 0.006, Label: "Whisper 1"},
 	// Transcription models from developers.openai.com/api/docs/guides/speech-to-text (2026-10-06).
@@ -407,6 +417,7 @@ var defaultModels = map[string]string{
 
 var availableModels = map[string][]string{
 	"anthropic": {
+		"claude-fable-5-2",
 		"claude-fable-5-1",
 		"claude-opus-5-5",
 		"claude-sonnet-5-5",
@@ -432,18 +443,6 @@ var availableModels = map[string][]string{
 		"grok-4.20-0309-non-reasoning",
 		"grok-4.20-multi-agent-0309",
 		"grok-build-0.1",
-		"grok-4.20-beta",
-		"grok-4.20-beta-0309-reasoning",
-		"grok-4.20-beta-0309-non-reasoning",
-		"grok-4.20-multi-agent-beta-0309",
-		"grok-4-1-fast-reasoning",
-		"grok-4-1-fast-non-reasoning",
-		"grok-4-fast-reasoning",
-		"grok-4-fast-non-reasoning",
-		"grok-4-0709",
-		"grok-code-fast-1",
-		"grok-3",
-		"grok-3-mini",
 	},
 	"gemini": {
 		"gemini-4-argon",
@@ -500,6 +499,7 @@ var availableModels = map[string][]string{
 		"llama-3.1-8b-instant",
 	},
 	"mistral": {
+		"mistral-large-4-0",
 		"mistral-large-2512",
 		"mistral-large-latest",
 		"mistral-medium-latest",
@@ -577,32 +577,38 @@ var modelAliases = map[string]string{
 	// Anthropic aliases
 	"opus":   "claude-opus-5-5",
 	"sonnet": "claude-sonnet-5-5",
-	"fable":  "claude-fable-5",
+	"fable":  "claude-fable-5-2",
 	"haiku":  "claude-haiku-5-5",
 	"claude": "claude-sonnet-5-5",
 
 	// xAI/Grok aliases
-	"grok":               "grok-4.7",
-	"grok4.7":            "grok-4.7",
-	"grok-4-7":           "grok-4.7",
-	"grok4.6":            "grok-4.6",
-	"grok-4-6":           "grok-4.6",
-	"grok4.5":            "grok-4.5",
-	"grok-4-5":           "grok-4.5",
-	"grok4.3":            "grok-4.3",
-	"grok-4-3":           "grok-4.3",
-	"grok4.2":            "grok-4.20-0309-reasoning",
-	"grok4.20":           "grok-4.20-0309-reasoning",
-	"grok4":              "grok-4.7",
-	"grok-4":             "grok-4.7",
-	"grok4.1":            "grok-4-1-fast-non-reasoning",
-	"grok-4-1":           "grok-4-1-fast-non-reasoning",
-	"grok-reasoning":     "grok-4-fast-reasoning",
-	"grok-4-reasoning":   "grok-4-fast-reasoning",
-	"grok-4-1-reasoning": "grok-4-1-fast-reasoning",
-	"grok-code":          "grok-code-fast-1",
-	"grok-mini":          "grok-3-mini",
+	"grok":     "grok-4.7",
+	"grok4.7":  "grok-4.7",
+	"grok-4-7": "grok-4.7",
+	"grok4.6":  "grok-4.6",
+	"grok-4-6": "grok-4.6",
+	"grok4.5":  "grok-4.5",
+	"grok-4-5": "grok-4.5",
+	"grok4.3":  "grok-4.3",
+	"grok-4-3": "grok-4.3",
+	"grok4.2":  "grok-4.20-0309-reasoning",
+	"grok4.20": "grok-4.20-0309-reasoning",
+	"grok4":    "grok-4.7",
+	"grok-4":   "grok-4.7",
+	// The 4.1/fast/mini models are retired; these follow xAI's own redirects.
+	"grok4.1":            "grok-4.3",
+	"grok-4-1":           "grok-4.3",
+	"grok-reasoning":     "grok-4.3",
+	"grok-4-reasoning":   "grok-4.3",
+	"grok-4-1-reasoning": "grok-4.3",
+	"grok-code":          "grok-build-0.1",
+	"grok-mini":          "grok-4.3",
 	"grok-build":         "grok-build-0.1",
+	// Former beta slugs: xAI serves them as the 0309 models.
+	"grok-4.20-beta":                    "grok-4.20-0309-reasoning",
+	"grok-4.20-beta-0309-reasoning":     "grok-4.20-0309-reasoning",
+	"grok-4.20-beta-0309-non-reasoning": "grok-4.20-0309-non-reasoning",
+	"grok-4.20-multi-agent-beta-0309":   "grok-4.20-multi-agent-0309",
 
 	// Groq aliases
 	"groq":          "openai/gpt-oss-120b",
@@ -615,16 +621,17 @@ var modelAliases = map[string]string{
 	"gpt-oss-20b":   "openai/gpt-oss-20b",
 
 	// Mistral aliases
-	"mistral-large":  "mistral-large-2512",
-	"mistral-medium": "mistral-medium-latest",
-	"mistral-small":  "mistral-small-2603",
-	"magistral":      "magistral-medium-2509",
-	"codestral":      "codestral-2508",
-	"devstral":       "devstral-2512",
-	"devstral-small": "devstral-small-2-2512",
-	"ministral":      "ministral-8b-2512",
-	"pixtral":        "pixtral-large-2411",
-	"pixtral-large":  "pixtral-large-2411",
+	"mistral-large":   "mistral-large-4-0", // Large 3 (2512) deprecated 2026-10-31
+	"mistral-large-4": "mistral-large-4-0",
+	"mistral-medium":  "mistral-medium-latest",
+	"mistral-small":   "mistral-small-2603",
+	"magistral":       "magistral-medium-2509",
+	"codestral":       "codestral-2508",
+	"devstral":        "devstral-2512",
+	"devstral-small":  "devstral-small-2-2512",
+	"ministral":       "ministral-8b-2512",
+	"pixtral":         "pixtral-large-2411",
+	"pixtral-large":   "pixtral-large-2411",
 
 	// DeepSeek aliases
 	"deepseek-cloud":    "deepseek-flash",

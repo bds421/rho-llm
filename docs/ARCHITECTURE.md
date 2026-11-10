@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of November 2026 (v0.14.0).
+> **Status:** Reflects the current implementation as of November 2026 (v0.15.0).
 
 ---
 
@@ -634,9 +634,9 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 
 | Provider | Models |
 |---|---|
-| Anthropic | claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5, claude-fable-5, claude-opus-5, claude-sonnet-5, claude-opus-4-{8,7,6,5}, claude-sonnet-4-{6,5}, claude-haiku-4-5 |
+| Anthropic | claude-fable-5-2, claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5, claude-fable-5, claude-opus-5, claude-sonnet-5, claude-opus-4-{8,7,6,5}, claude-sonnet-4-{6,5}, claude-haiku-4-5 |
 | OpenAI | gpt-6.1-{sol,terra}, gpt-6-{astra,sol,luna}, gpt-5.6-{sol,terra,luna}, gpt-5.5(-pro), gpt-5.4(-pro,-mini,-nano), gpt-5.3-codex, gpt-5.2(-pro), gpt-5.1, gpt-5(-pro,-mini,-nano), gpt-4.1(-mini), o3, o3-pro |
-| xAI | grok-4.7, grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-{reasoning,non-reasoning}, grok-4.20-multi-agent-0309, grok-build-0.1, legacy grok-4.20-beta*/grok-4-1-fast-*/grok-4-fast-*/grok-4-0709/grok-code-fast-1/grok-3(-mini) |
+| xAI | grok-4.7, grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-{reasoning,non-reasoning}, grok-4.20-multi-agent-0309, grok-build-0.1 (the grok-4.20-beta* slugs are aliases; grok-3(-mini)/grok-4-0709/grok-4(-1)-fast-*/grok-code-fast-1 are retired) |
 | Gemini | gemini-4-argon, gemini-3.8-flash, gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-{flash,flash-lite}, gemini-3.1-flash-lite, gemini-3.1-pro-preview(-customtools), gemini-3-flash-preview, gemini-2.5-{pro,flash,flash-lite} |
 
 The full list (19 providers with curated rows, including Groq, Mistral, DeepSeek,

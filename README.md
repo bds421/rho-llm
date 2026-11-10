@@ -1271,7 +1271,7 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-3.8-flash"
 | `opus` | `claude-opus-5-5` |
 | `sonnet` | `claude-sonnet-5-5` |
 | `haiku` | `claude-haiku-5-5` |
-| `fable` | `claude-fable-5` |
+| `fable` | `claude-fable-5-2` |
 | `claude` | `claude-sonnet-5-5` |
 
 ### xAI / Grok aliases
@@ -1283,11 +1283,11 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-3.8-flash"
 | `grok4.5`, `grok-4-5` | `grok-4.5` |
 | `grok4.3`, `grok-4-3` | `grok-4.3` |
 | `grok4.2`, `grok4.20` | `grok-4.20-0309-reasoning` |
-| `grok4.1`, `grok-4-1` | `grok-4-1-fast-non-reasoning` |
-| `grok-reasoning`, `grok-4-reasoning` | `grok-4-fast-reasoning` |
-| `grok-4-1-reasoning` | `grok-4-1-fast-reasoning` |
-| `grok-code` | `grok-code-fast-1` |
-| `grok-mini` | `grok-3-mini` |
+| `grok4.1`, `grok-4-1`, `grok-reasoning`, `grok-4-reasoning`, `grok-4-1-reasoning`, `grok-mini` | `grok-4.3` (xAI retired the 3/4/4.1-fast models and serves them as grok-4.3) |
+| `grok-code` | `grok-build-0.1` |
+| `grok-4.20-beta`, `grok-4.20-beta-0309-reasoning` | `grok-4.20-0309-reasoning` |
+| `grok-4.20-beta-0309-non-reasoning` | `grok-4.20-0309-non-reasoning` |
+| `grok-4.20-multi-agent-beta-0309` | `grok-4.20-multi-agent-0309` |
 
 ### OpenAI aliases
 
@@ -1322,7 +1322,7 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-3.8-flash"
 
 | Alias | Resolves to |
 |-------|-------------|
-| `mistral-large` | `mistral-large-2512` |
+| `mistral-large`, `mistral-large-4` | `mistral-large-4-0` |
 | `mistral-medium` | `mistral-medium-latest` |
 | `mistral-small` | `mistral-small-2603` |
 | `codestral` | `codestral-2508` |
@@ -1399,7 +1399,7 @@ generations reject them.
 cost := llm.EstimateCost(llm.CostInput{Model: "claude-sonnet-4-6", InputTokens: inputTokens, OutputTokens: outputTokens})
 
 // Query per-model metadata (context window, pricing, thinking support)
-info, ok := llm.GetModelInfo("grok-4.20-beta")
+info, ok := llm.GetModelInfo("grok-4.3")
 fmt.Printf("Context: %d tokens\n", info.ContextWindow)
 
 // Detect provider from model ID

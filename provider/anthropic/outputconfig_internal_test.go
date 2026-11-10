@@ -42,7 +42,7 @@ func TestResponseFormatOnTheWire(t *testing.T) {
 	}
 
 	// Adaptive thinking: effort and format share output_config.
-	for _, model := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"} {
+	for _, model := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2", "claude-fable-5-1"} {
 		oc, th := wireOutputConfig(t, model, llm.Request{ThinkingLevel: llm.ThinkingHigh, ResponseFormat: format})
 		if oc["effort"] != "high" || !sameFormat(oc["format"]) || th["type"] != "adaptive" {
 			t.Errorf("%s adaptive: output_config %v, thinking %v", model, oc, th)

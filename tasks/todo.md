@@ -93,10 +93,20 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
 ### Providers & registry data
 - 🟡 **Perplexity Agent API adapter — M** [registry]. Sonar Chat Completions ended
   2026-09-27; requests are reformulated onto `POST /v1/agent`. Prices unverified.
-- 🟢 Unconfirmed data: Kimi K3 / K3.1 Pro prices; Meta `muse-spark-1.3` price; Mistral
-  Large 4 ID (`mistral-large-4` vs `-4-0`); OpenAI cache-read prices for
+- 🟢 Unconfirmed data: Kimi K3 / K3.1 Pro prices; Meta `muse-spark-1.3` price; OpenAI cache-read prices for
   `gpt-5.2`/`5.1`/`5`/`5-mini`/`5-nano`/`o3`; `gpt-image-2.5-{sunburst,flare}`; DeepInfra
   DeepSeek-V4-Flash; Cohere `command-a-plus-05-2026`; Groq `qwen/qwen3.8-27b`. [registry]
+- 🟡 **Mistral Medium 3.5** — `mistral-medium-latest` now serves Medium 3.5 (262,144
+  context; the row says 131,072 at $0.40/$2.00). Price not found on docs.mistral.ai
+  (2026-11-10). Also unregistered but live: `magistral-*`, `voxtral-*`, `mistral-ocr-*`,
+  `codestral-embed`, `ministral-3b-2512`. [registry]
+- 🟢 **Claude Mythos 5.2** (`claude-mythos-5-2`, $8/$40) — verified-organizations only;
+  not in our key's model list, not registered. [registry]
+- 🟢 **Gemini new but not registered (2026-11-10):** `gemini-omni-1.1/1.2-flash` (video),
+  `gemini-3.8-live*`, `gemini-3.8-flash(-lite)-tts`, `gemini-embedding-2-preview`,
+  `deep-research-*`, `antigravity-preview-*`, `lyria-3.5`. Nano Banana limits still
+  disagree with the docs (`GET /v1beta/models`: 3.1-flash-image and nano-banana-2.1
+  input 65,536 vs registry 131,072; 3-pro-image 131,072 vs 65,536). [registry]
 - 🟢 Gemini 3.5/3.7 Flash auto-route to 3.8 Flash (deprecated 2026-10-08, no shutdown
   date) — billed prices may differ from the registry. [registry]
 - 🟢 Nano Banana limits: docs vs `GET /v1beta/models` disagree (e.g. `gemini-3-pro-image`
@@ -129,9 +139,6 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
   Responses adapters; coverage for fallback embeddings/images/speech. [review]
 
 ### Verification & ops
-- 🟡 **Gemini key out of credit (2026-11-04)** — API returns 402 "prepayment credits are
-  depleted". Top up in AI Studio, then live-check `ThinkingMax`/`ThinkingXHigh` on
-  `gemini-3.8-flash` (unit-tested only). [own]
 - 🟠 **Finish the tutorial verification — M** [own]. Cloud modules pass live; still
   unrun, blocked on environment:
   - **Ollama** (08, 15, 20): host `renelinux2023@rene-pcoffice-2023` was busy on

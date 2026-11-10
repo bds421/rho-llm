@@ -345,6 +345,7 @@ type adaptiveThinkingProfile struct {
 // registry row must be classified here or listed as a budget model in the
 // tests, so a new Claude model is a deliberate decision.
 var adaptiveThinkingModels = map[string]adaptiveThinkingProfile{
+	"claude-fable-5-2":  {off: thinkingOffOmit, noForcedToolChoice: true},
 	"claude-fable-5-1":  {off: thinkingOffOmit, noForcedToolChoice: true},
 	"claude-fable-5":    {off: thinkingOffOmit},
 	"claude-opus-5-5":   {off: thinkingOffOmit, noForcedToolChoice: true},

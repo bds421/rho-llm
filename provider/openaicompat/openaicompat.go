@@ -597,16 +597,19 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 		resp.StopReason = normalizeStopReason(choice.FinishReason)
 		resp.RawStopReason = choice.FinishReason
 
-		// Extract content
-		if content, ok := choice.Message.Content.(string); ok {
-			resp.Content = content
-		}
+		// Extract content (a string, or Mistral's typed chunks).
+		content, chunkThinking := splitContent(choice.Message.Content)
+		resp.Content = content
 
 		// Extract reasoning/thinking content.
-		// Most providers use "reasoning_content"; Ollama uses "reasoning".
+		// Most providers use "reasoning_content"; Ollama uses "reasoning";
+		// Mistral reasoning models send thinking chunks inside content.
 		reasoning := choice.Message.ReasoningContent
 		if reasoning == "" {
 			reasoning = choice.Message.Reasoning
+		}
+		if reasoning == "" {
+			reasoning = chunkThinking
 		}
 		if reasoning != "" {
 			resp.Thinking = reasoning
@@ -717,7 +720,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			Choices []struct {
 				Index int `json:"index"`
 				Delta struct {
-					Content          string           `json:"content"`
+					Content          any              `json:"content"`           // string, or Mistral typed chunks
 					ReasoningContent string           `json:"reasoning_content"` // OpenAI, DeepSeek, etc.
 					Reasoning        string           `json:"reasoning"`         // Ollama
 					ToolCalls        []openaiToolCall `json:"tool_calls"`
@@ -759,11 +762,17 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
 
+			contentDelta, chunkThinking := splitContent(choice.Delta.Content)
+
 			// Reasoning/thinking delta.
-			// Most providers use "reasoning_content"; Ollama uses "reasoning".
+			// Most providers use "reasoning_content"; Ollama uses "reasoning";
+			// Mistral reasoning models send thinking chunks inside content.
 			reasoningDelta := choice.Delta.ReasoningContent
 			if reasoningDelta == "" {
 				reasoningDelta = choice.Delta.Reasoning
+			}
+			if reasoningDelta == "" {
+				reasoningDelta = chunkThinking
 			}
 			if reasoningDelta != "" {
 				if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: reasoningDelta}, nil) {
@@ -772,8 +781,8 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 
 			// Content delta
-			if choice.Delta.Content != "" {
-				if !yield(llm.StreamEvent{Type: llm.EventContent, Text: choice.Delta.Content}, nil) {
+			if contentDelta != "" {
+				if !yield(llm.StreamEvent{Type: llm.EventContent, Text: contentDelta}, nil) {
 					return
 				}
 			}
@@ -883,4 +892,44 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// anthropic adapter for the rationale; io.ErrUnexpectedEOF makes it
 	// pool-retryable).
 	yield(llm.StreamEvent{}, fmt.Errorf("%s: stream ended without completion: %w", c.providerName, io.ErrUnexpectedEOF))
+}
+
+// splitContent splits a response message's (or stream delta's) content into
+// answer text and reasoning. Content is usually a string; Mistral reasoning
+// models (mistral-large-4-0, 2026-11) send an array of typed chunks instead:
+//
+//	[{"type":"thinking","thinking":[{"type":"text","text":"..."}]},
+//	 {"type":"text","text":"391"}]
+//
+// Unknown chunk types are ignored.
+func splitContent(content any) (text, thinking string) {
+	switch c := content.(type) {
+	case string:
+		return c, ""
+	case []any:
+		var tb, rb strings.Builder
+		for _, item := range c {
+			chunk, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch chunk["type"] {
+			case "text":
+				if s, ok := chunk["text"].(string); ok {
+					tb.WriteString(s)
+				}
+			case "thinking":
+				// thinking is itself a list of text chunks (or, defensively, a string).
+				switch th := chunk["thinking"].(type) {
+				case string:
+					rb.WriteString(th)
+				case []any:
+					inner, _ := splitContent(th)
+					rb.WriteString(inner)
+				}
+			}
+		}
+		return tb.String(), rb.String()
+	}
+	return "", ""
 }

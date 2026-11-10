@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-10
+
+Endpoint refresh against the live model lists (`GET /v1/models` on Anthropic,
+OpenAI and Mistral, `GET /v1/language-models` on xAI, `GET /v1beta/models` on
+Gemini) and the providers' docs, 2026-11-10.
+
+> **Alias changes.** `fable` → `claude-fable-5-2` (was `claude-fable-5`, set in
+> v0.7.0); `mistral-large` → `mistral-large-4-0` (Mistral deprecated Large 3
+> on 2026-10-31); `grok-code` → `grok-build-0.1`; `grok-mini`, `grok4.1`,
+> `grok-4-1`, `grok-reasoning`, `grok-4-reasoning`, `grok-4-1-reasoning` →
+> `grok-4.3`.
+>
+> **Retired xAI models now fail before dispatch.** `grok-3`, `grok-3-mini`,
+> `grok-4-0709`, `grok-4-fast-{reasoning,non-reasoning}`,
+> `grok-4-1-fast-{reasoning,non-reasoning}` → use `grok-4.3`;
+> `grok-code-fast-1` → use `grok-build-0.1`. xAI no longer lists them and
+> answers requests for them with grok-4.3 / grok-build-0.1 (the response's
+> `model`), billed at that model's price, so `EstimateCost` was wrong by up to
+> 6× and the caller never learned the model had changed.
+
+### Added
+
+- **`claude-fable-5-2`** (released 2026-11-09): $8 / $40, cache write
+  $10 (1h $16), cache read $0.20; 1M context, 128K output; adaptive thinking
+  only (always on), forced `tool_choice` and sampling parameters rejected — the
+  same rules as Fable 5.1. Live: answers through rho-llm.
+- **`mistral-large-4-0`** (alias `mistral-large-4`): $0.70 / $2.10, cached
+  input $0.07, 1M context, reasons by default
+  (docs.mistral.ai/models/mistral-large-4-0).
+- **`gpt-image-2.6-flare`, `gpt-image-2.6-sunburst`, `gpt-image-2.5-flare`,
+  `gpt-image-2.5-sunburst`** image-generation rows (no price, like
+  `gpt-image-2`). Live: `gpt-image-2.6-flare` returns a PNG.
+
+### Changed
+
+- The `grok-4.20-beta*` slugs are aliases of the 0309 IDs instead of their own
+  rows. Their rows priced them at $2 / $6 with a 2M context; xAI serves them as
+  the 0309 models at $1.25 / $2.50 with 1M.
+
+### Fixed
+
+- **Mistral reasoning models returned an empty answer, and streams failed.**
+  `mistral-large-4-0` sends `content` as typed chunks (a `thinking` chunk, then
+  a `text` chunk) in both responses and stream deltas. The OpenAI-compatible
+  adapter read `content` only as a string, so `Complete` returned `""` and
+  every streamed chunk failed to decode ("cannot unmarshal array"). Text chunks
+  now become `Content`, thinking chunks `Thinking` / `EventThinking`. Live
+  2026-11-10: `Complete` and `Stream` both return `391` with the reasoning.
+
 ## [0.14.0] - 2026-11-07
 
 `BlockPrivateBaseURL` checked against everything a private address can hide

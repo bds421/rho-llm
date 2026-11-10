@@ -313,7 +313,7 @@ func TestResolveModelAlias(t *testing.T) {
 	}{
 		{"opus", "claude-opus-5-5"},
 		{"sonnet", "claude-sonnet-5-5"},
-		{"fable", "claude-fable-5"},
+		{"fable", "claude-fable-5-2"},
 		{"haiku", "claude-haiku-5-5"},
 		{"grok", "grok-4.7"},
 		{"gpt6.1", "gpt-6.1-sol"},
@@ -327,7 +327,9 @@ func TestResolveModelAlias(t *testing.T) {
 		{"gemini3.6", "gemini-3.6-flash"},
 		{"gemini3.5-lite", "gemini-3.5-flash-lite"},
 		{"gemini3.1-lite", "gemini-3.1-flash-lite"},
-		{"grok-code", "grok-code-fast-1"},
+		{"grok-code", "grok-build-0.1"},
+		{"grok-4.20-beta", "grok-4.20-0309-reasoning"},
+		{"mistral-large", "mistral-large-4-0"},
 		{"gemini-pro", "gemini-3.1-pro-preview"},
 		{"flash-lite", "gemini-3.5-flash-lite"},
 		// Non-alias should pass through
@@ -352,7 +354,7 @@ func TestProviderForModel(t *testing.T) {
 		expected string
 	}{
 		{"claude-sonnet-4-6", "anthropic"},
-		{"grok-4-fast-non-reasoning", "xai"},
+		{"grok-4.20-0309-non-reasoning", "xai"},
 		{"gemini-2.5-flash", "gemini"},
 		{"unknown-model", ""},
 	}
@@ -750,7 +752,7 @@ func TestModelInfoContextWindow(t *testing.T) {
 		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 		"muse-spark-1.2", "muse-spark-1.1",
 		"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-		"grok-4.5", "grok-4-fast-non-reasoning", "grok-3",
+		"grok-4.5", "grok-4.3", "grok-build-0.1",
 	}
 
 	for _, model := range modelsToCheck {
@@ -781,7 +783,7 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 
 	// 2. Intrinsic reasoning (Thinking)
 	intrinsic := []string{
-		"grok-4-1-fast-reasoning", "grok-4-fast-reasoning", "grok-3-mini",
+		"grok-4.3", "grok-4.20-0309-reasoning", "grok-build-0.1",
 	}
 	for _, model := range intrinsic {
 		info, ok := llm.GetModelInfo(model)
@@ -850,16 +852,16 @@ func TestAllProviders(t *testing.T) {
 			skip:     anthropicKey == "",
 		},
 		{
-			name:     "xAI/Grok-4-Fast",
+			name:     "xAI/Grok-4.20",
 			provider: "xai",
-			model:    "grok-4-fast-non-reasoning",
+			model:    "grok-4.20-0309-non-reasoning",
 			apiKey:   xaiKey,
 			skip:     xaiKey == "",
 		},
 		{
-			name:     "xAI/Grok-3-Mini",
+			name:     "xAI/Grok-Build",
 			provider: "xai",
-			model:    "grok-3-mini",
+			model:    "grok-build-0.1",
 			apiKey:   xaiKey,
 			skip:     xaiKey == "",
 		},
@@ -1012,7 +1014,7 @@ func TestXAIStreaming(t *testing.T) {
 
 	cfg := llm.Config{
 		Provider:    "xai",
-		Model:       "grok-3-mini",
+		Model:       "grok-4.20-0309-non-reasoning",
 		APIKey:      apiKey,
 		MaxTokens:   100,
 		Temperature: floatPtr(0.0),
@@ -4744,7 +4746,7 @@ func TestReasoningModelMaxTokensWireFormat(t *testing.T) {
 		// OpenAI reasoning models → max_completion_tokens (gpt-5 family uses Responses API, tested separately)
 		{"openai", "o3", false, true},
 		// xAI reasoning models → max_completion_tokens
-		{"xai", "grok-3-mini", false, true},
+		{"xai", "grok-4.3", false, true},
 		// Mistral reasoning models → max_tokens
 		{"mistral", "mistral-small-2603", true, false},
 		// Other openai_compat reasoning hosts → max_tokens
@@ -5121,6 +5123,9 @@ func TestDefaultMaxTokensMatchesDefaultConfig(t *testing.T) {
 // error that gives the caller nothing to act on.
 func TestRetiredModelGivesActionableError(t *testing.T) {
 	for _, model := range []string{
+		// xAI answers these with grok-4.3 / grok-build-0.1 (checked 2026-11-10).
+		"grok-3", "grok-3-mini", "grok-4-0709", "grok-4-fast-reasoning",
+		"grok-4-1-fast-non-reasoning", "grok-code-fast-1",
 		"claude-sonnet-4-20250514",
 		"claude-opus-4-20250514",
 		"claude-opus-4-1-20250805",
@@ -5136,10 +5141,15 @@ func TestRetiredModelGivesActionableError(t *testing.T) {
 			}
 			// Capability validation is a dispatch-time gate (Complete/Stream),
 			// not a construction-time one, so assert at that boundary.
+			provider := "anthropic"
+			if strings.HasPrefix(model, "grok-") {
+				provider = "xai"
+			}
 			c, err := llm.NewClient(llm.Config{
-				Provider: "anthropic",
+				Provider: provider,
 				Model:    model,
 				APIKey:   "test-key-not-used",
+				BaseURL:  "http://127.0.0.1:9", // never reached: retirement fails first
 			})
 			if err != nil {
 				t.Fatalf("NewClient: %v", err)
@@ -5173,6 +5183,9 @@ func TestLiveModelsStillRegistered(t *testing.T) {
 		"claude-sonnet-4-5",
 		"claude-opus-4-5",
 		"claude-haiku-4-5",
+		// Live on 2026-11-10 (GET /v1/models, /v1/language-models).
+		"claude-fable-5-2", "grok-4.3", "grok-build-0.1", "grok-4.20-0309-reasoning",
+		"mistral-large-4-0", "mistral-large-2512",
 	} {
 		if _, ok := llm.GetModelInfo(model); !ok {
 			t.Errorf("GetModelInfo(%q) = not registered, want registered (still live)", model)

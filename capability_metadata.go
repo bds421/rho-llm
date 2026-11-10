@@ -404,6 +404,7 @@ func supportsSamplingTemperature(info ModelInfo) bool {
 // stay in step with the anthropic adapter's adaptiveThinkingModels — the
 // adapter's tests pin that.
 var anthropicWithoutSamplingControls = map[string]struct{}{
+	"claude-fable-5-2":  {},
 	"claude-fable-5-1":  {},
 	"claude-fable-5":    {},
 	"claude-opus-5-5":   {},

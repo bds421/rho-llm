@@ -312,6 +312,7 @@ func TestThinkingReplayPerModelWithoutThinkingLevel(t *testing.T) {
 		replayed        bool
 	}{
 		{"claude-opus-5-5", "", true},
+		{"claude-fable-5-2", "", true},
 		{"claude-fable-5-1", "", true},
 		{"claude-sonnet-5-5", "between_tools", true},
 		{"claude-sonnet-5", "disabled", false},
