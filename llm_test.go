@@ -150,7 +150,7 @@ func TestFactoryDefaultModels(t *testing.T) {
 		{"xai", "grok-4.7"},
 		{"grok", "grok-4.7"},
 		{"openai", "gpt-6.1-sol"},
-		{"meta", "muse-spark-1.2"},
+		{"meta", "muse-spark-1.3"},
 		{"gemini", "gemini-3.5-flash-lite"},
 		{"google", "gemini-3.5-flash-lite"},
 	}
@@ -322,7 +322,7 @@ func TestResolveModelAlias(t *testing.T) {
 		{"grok4.3", "grok-4.3"},
 		{"gpt5.6", "gpt-5.6-sol"},
 		{"gpt5.5", "gpt-5.5"},
-		{"muse", "muse-spark-1.2"},
+		{"muse", "muse-spark-1.3"},
 		{"gemini3.5", "gemini-3.5-flash"},
 		{"gemini3.6", "gemini-3.6-flash"},
 		{"gemini3.5-lite", "gemini-3.5-flash-lite"},

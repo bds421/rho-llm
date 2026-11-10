@@ -52,7 +52,7 @@ v0.13.0 sends Anthropic API version `2026-10-21` by default
 | DashScope/Qwen | OpenAI-compat | Bearer | dashscope-intl.aliyuncs.com/compatible-mode/v1 |
 | DeepSeek | OpenAI-compat | Bearer | api.deepseek.com |
 | Cohere | OpenAI-compat | Bearer | api.cohere.ai/compatibility/v1 |
-| Together AI | OpenAI-compat | Bearer | api.together.xyz/v1 |
+| Together AI | OpenAI-compat | Bearer | api.together.ai/v1 |
 | Fireworks | OpenAI-compat | Bearer | api.fireworks.ai/inference/v1 |
 | NVIDIA NIM | OpenAI-compat | Bearer | integrate.api.nvidia.com/v1 |
 | Perplexity | OpenAI-compat | Bearer | api.perplexity.ai |

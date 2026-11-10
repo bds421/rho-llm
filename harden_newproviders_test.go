@@ -31,7 +31,7 @@ type newProvider struct {
 var newProviders = []newProvider{
 	{provider: "zai", alias: "glm", model: "glm-5.3", key: "sk-zai-secret-key"},
 	{provider: "minimax", alias: "minimax", model: "MiniMax-M3", key: "sk-minimax-secret-key"},
-	{provider: "moonshot", alias: "kimi", model: "kimi-k2.7-code", key: "sk-moonshot-secret-key"},
+	{provider: "moonshot", alias: "kimi", model: "kimi-k3.1-pro", key: "sk-moonshot-secret-key"},
 }
 
 // Provider names resolve CASE-SENSITIVELY and must FAIL CLOSED. A mis-cased or
@@ -94,7 +94,7 @@ func TestNewProviderAliasCollisionsAgree(t *testing.T) {
 }
 
 // ProviderForModel is the reverse map, case-sensitive on the EXACT registry key.
-// MiniMax-M3 and kimi-k2.7-code are the non-trivial keys; if anyone lowercases or
+// MiniMax-M3 and kimi-k3.1-pro are the non-trivial keys; if anyone lowercases or
 // rewrites a key, the canonical lookup breaks while the lowercase alias (not a
 // key) keeps returning "". Pin both directions for every new model.
 func TestProviderForModelExactCaseKeys(t *testing.T) {
@@ -108,32 +108,32 @@ func TestProviderForModelExactCaseKeys(t *testing.T) {
 		}
 	}
 	// A lowercased variant of the mixed-case keys must not resolve either.
-	for _, bad := range []string{"minimax-m3", "KIMI-K2.7-CODE", "GLM-5.2"} {
+	for _, bad := range []string{"minimax-m3", "KIMI-K3.1-PRO", "GLM-5.2"} {
 		if got := llm.ProviderForModel(bad); got != "" {
 			t.Errorf("ProviderForModel(%q) = %q, want \"\" — case-variant must not match the registry key", bad, got)
 		}
 	}
 }
 
-// All three new models carry a cache-READ price but NO cache-WRITE price. The
+// glm-5.3 and MiniMax-M3 carry a cache-READ price but NO cache-WRITE price. The
 // bug this guards: billing cache-create tokens the provider gives away for free
-// (write price 0 ⇒ must be skipped). Also: alias pricing must equal canonical
+// (write price 0 ⇒ must be skipped). kimi-k3.1-pro bills writes (1× input for the
+// default 5-minute TTL), so its 1M cache-create tokens must add exactly $2. Also: alias pricing must equal canonical
 // pricing, and the TokensNotReported(-1) sentinel must clamp to 0.
 func TestNewProviderCostMathCacheAndSentinel(t *testing.T) {
 	const M = 1_000_000
-	// Exact expected cost for 1M input + 1M output + 1M cacheRead (+1M cacheCreate
-	// which MUST contribute nothing because write price is 0).
+	// Exact expected cost for 1M input + 1M output + 1M cacheRead + 1M cacheCreate.
 	want := map[string]float64{
-		"glm-5.3":        1.40 + 4.40 + 0.26,
-		"MiniMax-M3":     0.30 + 1.20 + 0.06,
-		"kimi-k2.7-code": 0.95 + 4.00 + 0.16,
+		"glm-5.3":       1.40 + 4.40 + 0.26,
+		"MiniMax-M3":    0.30 + 1.20 + 0.06,
+		"kimi-k3.1-pro": 2.00 + 10.00 + 0.20 + 2.00,
 	}
 	for _, p := range newProviders {
 		t.Run(p.model, func(t *testing.T) {
 			in := llm.CostInput{Model: p.model, InputTokens: M, OutputTokens: M, CacheReadTokens: M, CacheCreateTokens: M}
 			got := llm.EstimateCost(in)
 			if math.Abs(got-want[p.model]) > 1e-9 {
-				t.Fatalf("%s cost = %v, want %v — a cache-create charge on a model with no write price",
+				t.Fatalf("%s cost = %v, want %v — cache-create tokens billed at the wrong write price",
 					p.model, got, want[p.model])
 			}
 			// Alias must price identically to the canonical ID.

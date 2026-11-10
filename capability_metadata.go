@@ -390,6 +390,11 @@ func supportsSamplingTemperature(info ModelInfo) bool {
 		(info.Thinking || info.ResponsesAPI) {
 		return false
 	}
+	// Kimi K3 models fix temperature, top_p, n and the penalties ("omit them from
+	// requests", platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart, 2026-11-10).
+	if _, denied := moonshotWithoutSamplingControls[info.ID]; denied {
+		return false
+	}
 	// Google deprecated and ignores sampling controls beginning with the July
 	// 2026 GA models, and later generations reject them outright. An explicit
 	// list is used rather than a version comparison so a newly registered model
@@ -403,6 +408,13 @@ func supportsSamplingTemperature(info ModelInfo) bool {
 // sampling parameters (platform.claude.com model docs, 2026-10-31). It must
 // stay in step with the anthropic adapter's adaptiveThinkingModels — the
 // adapter's tests pin that.
+// moonshotWithoutSamplingControls lists the Moonshot models whose sampling
+// parameters are fixed by the API.
+var moonshotWithoutSamplingControls = map[string]struct{}{
+	"kimi-k3.1-pro": {},
+	"kimi-k3":       {},
+}
+
 var anthropicWithoutSamplingControls = map[string]struct{}{
 	"claude-fable-5-2":  {},
 	"claude-fable-5-1":  {},

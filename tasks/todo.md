@@ -9,14 +9,13 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ---
 
-## Current state (2026-11-06)
+## Current state (2026-11-10)
 
-`v0.13.0` is the latest release (v0.12.0: Anthropic server tools with web search,
-`pause_turn` continuation, per-iteration usage and search pricing; v0.12.1: refuse
-thinking disabled at effort xhigh/max on Haiku 5.5 and Opus 5; v0.13.0: Anthropic API
-version 2026-10-21 by default, structured output, typed Effort, text documents,
-partial usage on broken streams —
-see `CHANGELOG.md`).
+`v0.16.0` is the latest release (v0.14.0: `BlockPrivateBaseURL` hardening and a
+caller-provided `HTTPClient`; v0.15.0: Fable 5.2, Mistral Large 4, retired xAI models,
+Mistral typed content chunks; v0.16.0: Kimi K3 / K3.1 Pro, Muse Spark 1.3 / Wonder /
+Ember, Command A+, the Together `api.together.ai` endpoint and price corrections —
+see `CHANGELOG.md`). Next: v0.17.0 (Anthropic `thinking.block_binding`, message threads).
 
 ---
 
@@ -35,9 +34,14 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
 - **2026-11-30** `claude-sonnet-4-5` retires → move to `retiredModels` (→ `claude-sonnet-5-5`). [registry]
 - **2026-12-01** `gemini-2.5-pro`, `gemini-2.5-flash` shut down (Google routes to
   `gemini-3.8-flash` / `gemini-3.5-flash-lite`); `gpt-image-1.5`, `gpt-image-1-mini`. [registry]
-- **2026-12-11** `gpt-5*`, `o3`, `o3-pro`. **Dec 2026** Kimi K2 series. **2027-01-06**
+- **2026-11-18** `MiniMax-M2.5` retires (platform.minimax.io FAQ; the same page's table
+  already lists it as retired) → move to `retiredModels` (→ `MiniMax-M3.1-Flash`). [registry]
+- **2026-12-11** `gpt-5*`, `o3`, `o3-pro`. **Late Dec 2026** Kimi K2 series
+  (`kimi-k2.7-code`, the `moonshot-cn`/`kimi-cn` default: confirm K3.1 Pro on
+  api.moonshot.cn before switching it). **2027-01-06**
   `tts-1`, `gpt-4o-mini-tts`. **2027-01-14** `gpt-4.1*`. **2027-02-26** `whisper-1`,
-  `gpt-4o-*transcribe`. **2027-04-01** `gpt-5.1`, `gpt-5.3-codex`, `gpt-5.4-nano`.
+  `gpt-4o-*transcribe`. **2027-02-10** `gpt-image-2` (→ `gpt-image-2.6-{sunburst,flare}`;
+  the `gpt-image-1` alias points at it). **2027-04-01** `gpt-5.1`, `gpt-5.3-codex`, `gpt-5.4-nano`.
   **2027-04-30** `mistral-large-2512`, Mistral Medium 3.5. [registry]
 - Each retirement also needs a sweep of `../rho-llm-tutorial` (tutorials 04/08 still use
   Sonnet 4.6 / Haiku 4.5 on purpose; 21 has gpt-4.1).
@@ -93,13 +97,29 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
 ### Providers & registry data
 - 🟡 **Perplexity Agent API adapter — M** [registry]. Sonar Chat Completions ended
   2026-09-27; requests are reformulated onto `POST /v1/agent`. Prices unverified.
-- 🟢 Unconfirmed data: Kimi K3 / K3.1 Pro prices; Meta `muse-spark-1.3` price; OpenAI cache-read prices for
-  `gpt-5.2`/`5.1`/`5`/`5-mini`/`5-nano`/`o3`; `gpt-image-2.5-{sunburst,flare}`; DeepInfra
-  DeepSeek-V4-Flash; Cohere `command-a-plus-05-2026`; Groq `qwen/qwen3.8-27b`. [registry]
-- 🟡 **Mistral Medium 3.5** — `mistral-medium-latest` now serves Medium 3.5 (262,144
-  context; the row says 131,072 at $0.40/$2.00). Price not found on docs.mistral.ai
-  (2026-11-10). Also unregistered but live: `magistral-*`, `voxtral-*`, `mistral-ocr-*`,
-  `codestral-embed`, `ministral-3b-2512`. [registry]
+  The documented Sonar path is now `POST /v1/sonar`; `/chat/completions` still answers
+  401 (not 404) without a key but is no longer documented. The only published Sonar rate
+  is `perplexity/sonar` on the Agent API ($0.25 / $2.50), so our `sonar*` rows are stale.
+- 🟡 **OpenAI cache writes — S** [registry]. GPT-5.6 and later bill cache writes at
+  1.25× input (30-minute TTL) and 2.5× (12h, `prompt_cache_options.ttl`); the rows carry
+  no write price, so `EstimateCost` undercounts cached GPT-6 requests.
+- 🟡 **OpenAI `prompt_cache_key` + Responses `session-id` affinity header — S** [pi 1.5.1].
+- 🟢 **openai_compat `""` instead of `null` content** on tool-call-only assistant messages,
+  as a per-provider option (pi `requiresNonNullAssistantContent`, 1.5.1). [pi]
+- 🟢 **OpenRouter "maximum context length" 400 on input + `max_tokens`** is classified as
+  `IsContextLength`; a caller compacting on it compacts too early (pi 1.5.1). [pi]
+- 🟢 **DashScope workspace endpoints** `https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com`
+  (recommended since 2026-10-13; the legacy host keeps working) and the Qwen Token Plan CN
+  provider (pi 1.5.1). [registry][pi]
+- 🟢 Unconfirmed data: OpenAI cache-read prices for `gpt-5.2`/`5.1`/`5`/`5-mini`/`5-nano`/`o3`;
+  `gpt-image-2.5-{sunburst,flare}` prices; DashScope `qwen3-max`, `qwen3.5-omni-light`,
+  `text-embedding-v2` are missing from the 2026-11-07 International price page (retired?);
+  `gemini-4-argon` max output (row 32,768, model page 65,536); NVIDIA Nemotron 3 Ultra
+  context (build.nvidia.com: 1,048,576); max output of Muse Spark / Wonder and Mistral
+  Large 4; Cohere `command-a-03-2025` is no longer on cohere.com/pricing. [registry]
+- 🟢 Unregistered but live: Mistral `magistral-*`, `voxtral-*`, `mistral-ocr-*`,
+  `codestral-embed`; Z.ai `glm-5.3-flashx`; Kimi `kimi-k3.1-pro-highspeed`; Together/DeepInfra
+  Kimi K3.1 Pro, DeepSeek V4 Pro; Qwen `qwen3.7-*`, `qwen3.8-omni-flash`. [registry]
 - 🟢 **Claude Mythos 5.2** (`claude-mythos-5-2`, $8/$40) — verified-organizations only;
   not in our key's model list, not registered. [registry]
 - 🟢 **Gemini new but not registered (2026-11-10):** `gemini-omni-1.1/1.2-flash` (video),

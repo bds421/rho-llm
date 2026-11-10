@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-10
+
+Registry and endpoint refresh for the providers v0.15.0 did not cover (Moonshot,
+Meta, Cohere, Mistral, Groq, DeepInfra, Fireworks, Together), checked against each
+provider's pages and public model lists on 2026-11-10.
+
+> **Default and alias changes.** `moonshot` / `kimi` → `kimi-k3.1-pro` (was
+> `kimi-k2.7-code`; the K2 series retires in late December 2026); `meta`, `muse`,
+> `muse-spark` → `muse-spark-1.3` (was `muse-spark-1.2`). `moonshot-cn` / `kimi-cn`
+> keep `kimi-k2.7-code` until K3.1 Pro is confirmed on api.moonshot.cn.
+>
+> **`mistral-medium-latest` costs more.** Mistral points it at Medium 3.5 now:
+> $1.50 / $7.50 (was $0.40 / $2.00 for Medium 3.1, retired 2026-08-31).
+
+### Added
+
+- **`kimi-k3.1-pro`** (Moonshot's flagship) at $2 / $10, cache read $0.20, cache
+  write $2 (1h $4), and **`kimi-k3`** at $3 / $15 / $0.30, write $3 (1h $6); 1M
+  context, thinking always on (platform.kimi.ai/docs/pricing/chat). Also on Fireworks
+  (`accounts/fireworks/models/kimi-k3p1-pro`, live-probed) and Together
+  (`moonshotai/Kimi-K3.1-Pro`), both $2 / $10 / $0.20. Alias `kimi-k3.1`.
+- **Meta:** `muse-spark-1.3` ($1.25 / $4.25, cache $0.15) and
+  `muse-spark-1.3-contributor` ($0.10 / $0.20 / $0.002); `muse-wonder-1.0` (preview,
+  $4 / $20 / $0.20); `muse-ember-1.0` ($0.10 / $0.50 / $0.004, 524,288 output; prompts
+  over 200K tokens cost 3×, not modeled). All 1M context (dev.meta.ai pricing).
+- **Cohere `command-a-plus-05-2026`** (Command A+): $2.50 / $10, 128K input, 64K
+  output, reasoning.
+- **Mistral `ministral-3b-2512`** ($0.10 / $0.10, 256K) and **Groq `qwen/qwen3.8-27b`**
+  (preview, $0.80 / $4.00, 131,072 context, 16,384 output).
+- **DeepInfra `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo`** ($0.02 / $0.04).
+
+### Changed
+
+- **Together preset uses `https://api.together.ai/v1`**, the host its docs now
+  document. `api.together.xyz` still answers; pass it as `BaseURL` if you need it.
+- **Kimi K3 models refuse an explicit temperature** before the request is sent:
+  Moonshot fixes temperature, top_p, n and the penalties ("omit them from requests").
+- Prices and limits, from each provider's page:
+  - `mistral-medium-latest`: Medium 3.5, $1.50 / $7.50, 256K, reasoning.
+  - `codestral-2508` / `codestral-latest`: context 128K (was 256K).
+  - `kimi-k2.7-code`: cache read $0.19 (was $0.16).
+  - DeepInfra `deepseek-ai/DeepSeek-V4-Flash`: $0.09 / $0.18, cache read $0.018
+    (was $0.10 / $0.20), context 1,048,576 (was 163,840).
+  - Groq Llama 3.1 8B / 3.3 70B: context 131,072; these two are enterprise-only
+    since 2026-08-16 (free and developer tiers moved to `openai/gpt-oss-*`).
+
+### Removed
+
+- **Retired:** `kimi-k2.5` and `moonshot-v1-128k` (Moonshot returns 404 since
+  August 2026) → use `kimi-k3.1-pro`; DeepInfra
+  `meta-llama/Meta-Llama-3.1-8B-Instruct` (deprecated 2026-07-16) → use the
+  `-Turbo` variant. Requests for them now fail with the "retired by its provider"
+  error naming the replacement.
+
 ## [0.15.0] - 2026-11-10
 
 Endpoint refresh against the live model lists (`GET /v1/models` on Anthropic,

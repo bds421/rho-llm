@@ -42,7 +42,7 @@ var presets = map[string]ProviderPreset{
 	// No first-party embeddings API — use another host for vectors.
 	"deepseek":   {BaseURL: "https://api.deepseek.com", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"cohere":     {BaseURL: "https://api.cohere.ai/compatibility/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"together":   {BaseURL: "https://api.together.xyz/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"together":   {BaseURL: "https://api.together.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"fireworks":  {BaseURL: "https://api.fireworks.ai/inference/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"nvidia":     {BaseURL: "https://integrate.api.nvidia.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"perplexity": {BaseURL: "https://api.perplexity.ai", AuthHeader: "Bearer", Protocol: "openai_compat"},

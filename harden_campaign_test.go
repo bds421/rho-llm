@@ -27,7 +27,7 @@ func TestPerRequestAliasResolvesToCanonicalWireModel(t *testing.T) {
 	cases := []struct{ provider, reqModel, wantWire string }{
 		{"zai", "glm", "glm-5.3"},
 		{"minimax", "minimax-m3", "MiniMax-M3"}, // lowercase variant of the mixed-case key
-		{"moonshot", "kimi", "kimi-k2.7-code"},
+		{"moonshot", "kimi", "kimi-k3.1-pro"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider+"/"+tc.reqModel, func(t *testing.T) {

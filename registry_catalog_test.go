@@ -16,10 +16,10 @@ func TestCatalogDefaultsAndDiscoveryForPhaseCProviders(t *testing.T) {
 		{"mistral", "mistral-small-2603", "ministral-14b-2512", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
 		{"zai", "glm-5.3", "glm-4.7", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
 		{"minimax", "MiniMax-M3", "MiniMax-M2.5", []llm.Capability{llm.CapabilityChat}},
-		{"moonshot", "kimi-k2.7-code", "kimi-k2.5", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
+		{"moonshot", "kimi-k3.1-pro", "kimi-k3", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
 		{"dashscope", "qwen3.6-plus", "qwen3.6-flash", []llm.Capability{llm.CapabilityChat}},
 		{"deepseek", "deepseek-flash", "deepseek-v4-pro", []llm.Capability{llm.CapabilityChat}},
-		{"meta", "muse-spark-1.2", "muse-spark-1.1", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision, llm.CapabilityDocumentInput}},
+		{"meta", "muse-spark-1.3", "muse-spark-1.2", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision, llm.CapabilityDocumentInput}},
 	}
 	for _, tc := range cases {
 		if got := llm.GetDefaultModel(tc.provider); got != tc.wantDef {
@@ -51,7 +51,7 @@ func TestCatalogAliasesPhaseC(t *testing.T) {
 	if got := llm.ResolveModelAlias("pixtral"); got != "pixtral-large-2411" {
 		t.Fatalf("pixtral alias = %q", got)
 	}
-	if got := llm.ResolveModelAlias("muse"); got != "muse-spark-1.2" {
+	if got := llm.ResolveModelAlias("muse"); got != "muse-spark-1.3" {
 		t.Fatalf("muse alias = %q", got)
 	}
 	if got := llm.ResolveModelAlias("glm4.7"); got != "glm-4.7" {
