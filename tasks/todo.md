@@ -9,13 +9,13 @@ Effort: **S** (hours) · **M** (≈1 day) · **L** (multi-day)
 
 ---
 
-## Current state (2026-11-10)
+## Current state (2026-11-11)
 
-`v0.16.0` is the latest release (v0.14.0: `BlockPrivateBaseURL` hardening and a
+`v0.16.1` is the latest release (v0.14.0: `BlockPrivateBaseURL` hardening and a
 caller-provided `HTTPClient`; v0.15.0: Fable 5.2, Mistral Large 4, retired xAI models,
 Mistral typed content chunks; v0.16.0: Kimi K3 / K3.1 Pro, Muse Spark 1.3 / Wonder /
 Ember, Command A+, the Together `api.together.ai` endpoint and price corrections —
-see `CHANGELOG.md`). Next: v0.17.0 (Anthropic `thinking.block_binding`, message threads).
+see `CHANGELOG.md`; v0.16.1: Gemini tool schemas go in `parametersJsonSchema`).
 
 ---
 
@@ -47,6 +47,14 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
   Sonnet 4.6 / Haiku 4.5 on purpose; 21 has gpt-4.1).
 
 ### 🟠 Next up (high value)
+0. **Anthropic `thinking.block_binding` — S/M** [pi 1.5.1 #10954]. Send
+   `{"prefix_mismatch_behavior":"drop_block"}` (beta `thinking-binding-controls-2026-08-01`)
+   and parse `input_transformations` (`thinking_dropped`, `prefix_binding_mismatch`).
+   Without it Fable 5.2 / Mythos 5.2 (every account) and Opus / Sonnet / Haiku 5.5 and
+   Fable 5.1 (accounts created after 2026-08-31) answer 400 "Invalid `signature` in
+   `thinking` block. The block is bound to a different conversation" when a session
+   changes tools, system or history (platform.claude.com preserved-thinking docs). Not
+   yet reproduced live with rho-llm.
 1. **Anthropic message threads — M** [pi]. Beta `message-threads-2026-08-12`: only new
    messages are sent per turn (big token savings in long sessions).
 2. **Chat fallback + per-attempt usage — M** [review M2]. `OperationChat` usage events
@@ -73,7 +81,7 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
 ### Tools & structured output
 - 🟡 **Streamed tool-call argument deltas — M** [pi]. `input_json_delta` is buffered;
   tool calls are emitted once complete.
-- 🟡 **Strict tool schemas — M** [pi]. `strict: prefer/require`, retry once non-strict.
+- 🟡 **Strict tool schemas — M** [pi]. `strict: prefer/require`, retry once non-strict and remember it per session, so later turns skip the rejected request (pi 1.5.1 #11626).
 - 🟡 **Structured-output ergonomics — M** [review M9][pi]. JSON fence stripping, Gemini
   schema-dialect normalisation for `ResponseFormat`, typed error for a
   `max_tokens`-truncated structured response, malformed tool JSON surfaced as an error
@@ -86,6 +94,10 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
   (`geminiWithoutSamplingControls`, `anthropicWithoutSamplingControls`,
   `adaptiveThinkingModels`) into registry metadata. pi generates its catalog from
   models.dev — worth comparing before building our own tooling.
+- 🟢 Typed server-side refusal fallback: `fallbacks:"default"` + beta
+  `server-side-fallback-2026-07-01` (not on Haiku 5.5; sticky routing ~1h) [pi].
+- 🟢 Live test for Gemini tool schemas with `additionalProperties` / `$defs` (v0.16.1
+  is pinned offline only) [own].
 - 🟢 Anthropic client-side refusal fallback (retry on another model with fallback
   credit) [pi]. Server-side `fallbacks` works since v0.12.0.
 - 🟢 Anthropic server tools: typed web fetch results; a turn that mixes server and

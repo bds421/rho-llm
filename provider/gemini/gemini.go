@@ -260,10 +260,14 @@ type geminiTool struct {
 	FunctionDeclarations []geminiFunctionDeclaration `json:"functionDeclarations,omitempty"`
 }
 
+// geminiFunctionDeclaration sends the tool schema as parametersJsonSchema,
+// which takes full JSON Schema. The older "parameters" field takes only
+// Gemini's OpenAPI subset and answers 400 "Unknown name" for keywords such as
+// additionalProperties or $defs that the other adapters pass through.
 type geminiFunctionDeclaration struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
+	Name                 string         `json:"name"`
+	Description          string         `json:"description"`
+	ParametersJSONSchema map[string]any `json:"parametersJsonSchema"`
 }
 
 type geminiResponse struct {
@@ -504,9 +508,9 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				params = map[string]any{"type": "object"} // valid object, not null
 			}
 			tool.FunctionDeclarations = append(tool.FunctionDeclarations, geminiFunctionDeclaration{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  params,
+				Name:                 t.Name,
+				Description:          t.Description,
+				ParametersJSONSchema: params,
 			})
 		}
 		apiReq.Tools = []geminiTool{tool}

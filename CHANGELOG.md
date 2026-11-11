@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-11
+
+### Fixed
+
+- **Gemini tool calls with JSON-Schema keywords failed with a 400.** The adapter
+  copied `Tool.InputSchema` into the function declaration's `parameters` field, which
+  takes only Gemini's OpenAPI subset, so a schema with `additionalProperties`,
+  `$defs`/`$ref` or `$schema` was rejected (`Unknown name "additionalProperties" at
+  'tools[0].function_declarations[0].parameters'`, seen live in a tutorial run on
+  v0.15.0). The schema now goes in `parametersJsonSchema`, which takes full JSON
+  Schema (ai.google.dev/api, `FunctionDeclaration`), unchanged. Schemas that worked
+  before keep working; the same schema now works on Anthropic, OpenAI and Gemini.
+
+### Security
+
+- **Go 1.26.11 minimum** (`go.mod`). govulncheck reports GO-2026-6859 in `net/http`
+  for go1.26.10, fixed in go1.26.11.
+
 ## [0.16.0] - 2026-11-10
 
 Registry and endpoint refresh for the providers v0.15.0 did not cover (Moonshot,
