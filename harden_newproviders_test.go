@@ -150,30 +150,17 @@ func TestNewProviderCostMathCacheAndSentinel(t *testing.T) {
 	}
 }
 
-// Every model listed in availableModels for a new provider must be a real
-// registry entry owned by that same provider and appear exactly once. Guards a
-// copy-paste that lists a model under the wrong provider or twice.
-func TestNewProviderAvailableModelsConsistent(t *testing.T) {
+// Every new provider is discoverable, and each model it lists is registered
+// under that provider. Guards a registry row filed under the wrong provider.
+func TestNewProviderModelsConsistent(t *testing.T) {
 	for _, p := range newProviders {
-		models := llm.GetAvailableModels(p.provider)
+		models := llm.ModelsByProvider(p.provider)
 		if len(models) == 0 {
-			t.Fatalf("GetAvailableModels(%q) is empty — provider not discoverable", p.provider)
+			t.Fatalf("ModelsByProvider(%q) is empty — provider not discoverable", p.provider)
 		}
-		seen := map[string]int{}
-		for _, id := range models {
-			seen[id]++
-			info, ok := llm.GetModelInfo(id)
-			if !ok {
-				t.Errorf("%s lists %q which is absent from the registry", p.provider, id)
-				continue
-			}
-			if info.Provider != p.provider {
-				t.Errorf("%s lists %q but its registry Provider is %q", p.provider, id, info.Provider)
-			}
-		}
-		for id, n := range seen {
-			if n != 1 {
-				t.Errorf("%s lists %q %d times — duplicate discovery entry", p.provider, id, n)
+		for _, m := range models {
+			if m.Provider != p.provider {
+				t.Errorf("%s lists %q but its registry Provider is %q", p.provider, m.ID, m.Provider)
 			}
 		}
 	}
@@ -254,7 +241,7 @@ func TestNewProviderConcurrentAliasResolutionRace(t *testing.T) {
 					_ = llm.ResolveModelAlias(p.alias)
 					_ = llm.ProviderForModel(p.model)
 					_ = llm.GetDefaultModel(p.provider)
-					_ = llm.GetAvailableModels(p.provider)
+					_ = llm.ModelsByProvider(p.provider)
 					if c := llm.EstimateCost(llm.CostInput{Model: p.alias, InputTokens: 100, OutputTokens: 100}); c <= 0 {
 						t.Errorf("EstimateCost(%q) = %v under concurrent registry writes — alias resolution lost", p.alias, c)
 						return

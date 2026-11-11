@@ -8,7 +8,6 @@ package llm_test
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,11 +24,11 @@ func uniqueModelID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, regTestSeq.Add(1))
 }
 
-// countOccurrences reports how many times id appears in s.
-func countOccurrences(s []string, id string) int {
+// countModel reports how many times id appears in models.
+func countModel(models []llm.ModelInfo, id string) int {
 	n := 0
-	for _, v := range s {
-		if v == id {
+	for _, m := range models {
+		if m.ID == id {
 			n++
 		}
 	}
@@ -159,42 +158,9 @@ func TestRegistryConcurrentAccessRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
-// #6: GetAvailableModels (the curated discovery list) must stay in sync with the
-// registry across an override. The old code gated the append on `!existed`, so
-// re-registering a model already in modelRegistry but absent from
-// availableModels never reached discovery. Re-register such a built-in (with its
-// own metadata, unchanged) and it must surface.
-func TestRegisterModelOverrideSurfacesInAvailableModels(t *testing.T) {
-	var gapID, gapProvider string
-	for _, m := range llm.Models() {
-		if !slices.Contains(llm.GetAvailableModels(m.Provider), m.ID) {
-			gapID, gapProvider = m.ID, m.Provider
-			break
-		}
-	}
-	if gapID == "" {
-		t.Skip("no built-in is currently absent from GetAvailableModels; nothing to pin")
-	}
-	info, ok := llm.GetModelInfo(gapID)
-	if !ok {
-		t.Fatalf("GetModelInfo(%q) missing", gapID)
-	}
-	// Re-register identical metadata — non-destructive, but exercises the
-	// override path (existed == true).
-	if err := llm.RegisterModel(info); err != nil {
-		t.Fatalf("RegisterModel: %v", err)
-	}
-	if !slices.Contains(llm.GetAvailableModels(gapProvider), gapID) {
-		t.Fatalf("after RegisterModel override, %q still absent from GetAvailableModels(%q) — override never reached discovery", gapID, gapProvider)
-	}
-	if c := countOccurrences(llm.GetAvailableModels(gapProvider), gapID); c != 1 {
-		t.Fatalf("model %q appears %d times in discovery, want exactly 1 (no duplicates)", gapID, c)
-	}
-}
-
-// #6: an override that moves a model to a different provider must update both
-// providers' discovery lists — add to the new, remove from the old — and never
-// duplicate. The old `!existed` append-gate left the new provider missing it.
+// An override that moves a model to a different provider must update both
+// providers' discovery — add to the new, remove from the old — and never
+// list it twice.
 func TestRegisterModelProviderChangeUpdatesDiscovery(t *testing.T) {
 	const id = "test-only-move-provider-v1"
 	const p1, p2 = "test-only-p1", "test-only-p2"
@@ -202,26 +168,26 @@ func TestRegisterModelProviderChangeUpdatesDiscovery(t *testing.T) {
 	if err := llm.RegisterModel(llm.ModelInfo{ID: id, Provider: p1, InputPricePer1M: 1}); err != nil {
 		t.Fatalf("RegisterModel p1: %v", err)
 	}
-	if !slices.Contains(llm.GetAvailableModels(p1), id) {
-		t.Fatal("new model missing from its provider's discovery list")
+	if countModel(llm.ModelsByProvider(p1), id) != 1 {
+		t.Fatal("new model missing from its provider's discovery")
 	}
 
 	// Move it to a different provider.
 	if err := llm.RegisterModel(llm.ModelInfo{ID: id, Provider: p2, InputPricePer1M: 1}); err != nil {
 		t.Fatalf("RegisterModel p2: %v", err)
 	}
-	if !slices.Contains(llm.GetAvailableModels(p2), id) {
-		t.Fatal("override to a new provider didn't add the model to the new provider's discovery (append gated on !existed)")
+	if countModel(llm.ModelsByProvider(p2), id) != 1 {
+		t.Fatal("override to a new provider did not add the model to the new provider's discovery")
 	}
-	if slices.Contains(llm.GetAvailableModels(p1), id) {
+	if countModel(llm.ModelsByProvider(p1), id) != 0 {
 		t.Fatal("override to a new provider left a stale entry in the old provider's discovery")
 	}
 
-	// Re-register under the same provider: still exactly one entry, no dup.
+	// Re-register under the same provider: still exactly one entry.
 	if err := llm.RegisterModel(llm.ModelInfo{ID: id, Provider: p2, InputPricePer1M: 2}); err != nil {
 		t.Fatalf("RegisterModel p2 again: %v", err)
 	}
-	if c := countOccurrences(llm.GetAvailableModels(p2), id); c != 1 {
+	if c := countModel(llm.ModelsByProvider(p2), id); c != 1 {
 		t.Fatalf("model appears %d times after same-provider re-register, want 1", c)
 	}
 }

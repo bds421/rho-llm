@@ -11,14 +11,17 @@ func TestCurrentGeminiCatalogExcludesShutdownPreview(t *testing.T) {
 	if _, ok := GetModelInfo(shutdownPreview); ok {
 		t.Fatal("shutdown Gemini 3.1 Flash-Lite preview remains registered")
 	}
-	available := GetAvailableModels("gemini")
-	if slices.Contains(available, shutdownPreview) {
+	available := ModelsByProvider("gemini")
+	listed := func(id string) bool {
+		return slices.ContainsFunc(available, func(m ModelInfo) bool { return m.ID == id })
+	}
+	if listed(shutdownPreview) {
 		t.Fatal("shutdown Gemini preview remains discoverable")
 	}
 	for _, model := range []string{
 		"gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
 	} {
-		if _, ok := GetModelInfo(model); !ok || !slices.Contains(available, model) {
+		if _, ok := GetModelInfo(model); !ok || !listed(model) {
 			t.Fatalf("current Gemini model %q is not registered and discoverable", model)
 		}
 	}

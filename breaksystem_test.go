@@ -371,7 +371,7 @@ func TestRegistryConcurrentSameIDNoDoubleAppend(t *testing.T) {
 		}
 	}
 	if n != 1 {
-		t.Fatalf("model %q appears %d times in availableModels — concurrent override double-appended", id, n)
+		t.Fatalf("model %q appears %d times in ModelsByProvider — concurrent override double-registered", id, n)
 	}
 }
 

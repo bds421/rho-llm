@@ -54,9 +54,9 @@ func TestRetiredOn20261110(t *testing.T) {
 		}
 	}
 	for _, provider := range []string{"moonshot", "moonshot-cn", "deepinfra"} {
-		for _, id := range llm.GetAvailableModels(provider) {
-			if _, retired := cases[id]; retired {
-				t.Errorf("GetAvailableModels(%s) still lists retired %q", provider, id)
+		for _, m := range llm.ModelsByProvider(provider) {
+			if _, retired := cases[m.ID]; retired {
+				t.Errorf("ModelsByProvider(%s) still lists retired %q", provider, m.ID)
 			}
 		}
 	}

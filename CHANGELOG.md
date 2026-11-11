@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`GetAvailableModels` and the hand-written `availableModels` list.** The registry
+  (`modelRegistry`) is the one model index; `Models()` / `ModelsByProvider(provider)`
+  enumerate it, sorted by ID. The curated list had drifted from the registry (46
+  registered models were missing from it, and it listed regional presets the registry
+  files under their family). `ModelsByProvider` now lists a family's catalog for a
+  preset that shares it (`dashscope-cn`, `qwen`, `kimi-cn`, …), as capability
+  validation already did. Callers of `GetAvailableModels(p)` map
+  `ModelsByProvider(p)` to `m.ID`.
+
 ## [0.16.1] - 2026-11-11
 
 ### Fixed

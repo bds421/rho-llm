@@ -1,6 +1,7 @@
 package llm_test
 
 import (
+	"slices"
 	"testing"
 
 	llm "github.com/bds421/rho-llm"
@@ -25,16 +26,9 @@ func TestCatalogDefaultsAndDiscoveryForPhaseCProviders(t *testing.T) {
 		if got := llm.GetDefaultModel(tc.provider); got != tc.wantDef {
 			t.Errorf("GetDefaultModel(%s)=%q want %q", tc.provider, got, tc.wantDef)
 		}
-		models := llm.GetAvailableModels(tc.provider)
-		found := false
-		for _, m := range models {
-			if m == tc.sample {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("GetAvailableModels(%s) missing %q: %v", tc.provider, tc.sample, models)
+		models := llm.ModelsByProvider(tc.provider)
+		if !slices.ContainsFunc(models, func(m llm.ModelInfo) bool { return m.ID == tc.sample }) {
+			t.Errorf("ModelsByProvider(%s) missing %q: %v", tc.provider, tc.sample, models)
 		}
 		cfg := llm.Config{Provider: tc.provider, Model: tc.sample}
 		if err := llm.RequireCapabilities(cfg, tc.caps...); err != nil {
@@ -64,7 +58,7 @@ func TestChineseRegionalPresetsAndEmbeddingModels(t *testing.T) {
 		if llm.GetDefaultModel(p) == "" {
 			t.Fatalf("default for %s empty", p)
 		}
-		if len(llm.GetAvailableModels(p)) == 0 {
+		if len(llm.ModelsByProvider(p)) == 0 {
 			t.Fatalf("available models for %s empty", p)
 		}
 	}

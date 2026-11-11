@@ -291,12 +291,7 @@ func TestAvailableModels(t *testing.T) {
 	providers := []string{"anthropic", "xai", "gemini"}
 
 	for _, provider := range providers {
-		models := llm.GetAvailableModels(provider)
-		if models == nil {
-			t.Errorf("No models defined for provider %s", provider)
-			continue
-		}
-
+		models := llm.ModelsByProvider(provider)
 		if len(models) == 0 {
 			t.Errorf("Empty model list for provider %s", provider)
 		}
@@ -1979,14 +1974,6 @@ func TestGetDefaultModelUnknown(t *testing.T) {
 	model := llm.GetDefaultModel("nonexistent-provider")
 	if model != "claude-sonnet-5" {
 		t.Errorf("GetDefaultModel(unknown) = %q, want claude-sonnet-5", model)
-	}
-}
-
-// TestGetAvailableModelsUnknown verifies nil for unknown provider.
-func TestGetAvailableModelsUnknown(t *testing.T) {
-	models := llm.GetAvailableModels("nonexistent-provider")
-	if models != nil {
-		t.Errorf("GetAvailableModels(unknown) = %v, want nil", models)
 	}
 }
 

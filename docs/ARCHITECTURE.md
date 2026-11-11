@@ -642,7 +642,8 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 The full list (19 providers with curated rows, including Groq, Mistral, DeepSeek,
 Cohere, Z.ai, MiniMax, Moonshot, DashScope, Meta, Perplexity, Fireworks, Together,
 DeepInfra, NVIDIA and Ollama) lives in `registry.go`; `Models()` /
-`GetAvailableModels(provider)` enumerate it. IDs a provider has shut down move to
+`ModelsByProvider(provider)` enumerate it (a regional preset such as
+`dashscope-cn` lists its family's catalog). IDs a provider has shut down move to
 `retiredModels`, so a request naming one fails with the replacement instead of a
 provider 404.
 
