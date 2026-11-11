@@ -546,15 +546,12 @@ func TestEstimateCostBatchIsHalf(t *testing.T) {
 	}
 }
 
-// A misconfigured (negative) process-wide download cap must never make the bounded
-// read return zero bytes and silently truncate results — the effective cap clamps to
-// the positive default instead. Not parallel: it briefly mutates a process-wide var.
+// A misconfigured (negative) download cap must never make the bounded read return
+// zero bytes and silently truncate results — the effective cap falls back to the
+// positive default instead.
 func TestEffectiveMaxBatchDownloadBytesNeverNonPositive(t *testing.T) {
-	saved := llm.MaxBatchDownloadBytes
-	t.Cleanup(func() { llm.MaxBatchDownloadBytes = saved })
-	llm.MaxBatchDownloadBytes = -5 // hostile/misconfigured global cap
-
-	cfg := llm.DefaultConfig() // no per-config override → falls through to the global
+	cfg := llm.DefaultConfig()
+	cfg.MaxBatchDownloadBytes = -5
 	if got := cfg.EffectiveMaxBatchDownloadBytes(); got <= 0 {
 		t.Fatalf("download cap must never be non-positive (would silently truncate results); got %d", got)
 	}

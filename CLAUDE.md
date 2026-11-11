@@ -114,8 +114,8 @@ Layered decorator stack over a stateless `Client` interface (`Complete`/`Stream`
 - Conventional-commit subjects (`feat:`, `fix:`, `docs:`, `refactor:`, `security:`).
 - Structured errors via `APIError` + the `Is*()` classifiers; never put API keys in errors
   or logs (`Config` and `AuthProfile` redact `APIKey` in their `MarshalJSON`).
-- Per-client tunables live on `Config`; read them via the `Effective*()` accessors, not the
-  package-global `llm.Max*` vars (those are only the process-wide fallback).
+- Per-client tunables live on `Config`; read them via the `Effective*()` accessors, which
+  fall back to the `Default*` constants. There is no package-level setting.
 - New providers register themselves in `init()` via `llm.RegisterProvider` and are wired
   through `provider/all.go` (the `database/sql` driver pattern).
 - **Messages are the neutral currency.** Keep `Message`/`ContentPart` a concrete tagged struct

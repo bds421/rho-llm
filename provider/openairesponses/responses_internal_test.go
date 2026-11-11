@@ -1078,7 +1078,7 @@ func TestParseStreamToolInputOverflow(t *testing.T) {
 	// Each delta must fit within MaxSSELineBytes (256KB), so use 128KB chunks.
 	chunkSize := 128 * 1024
 	chunk := strings.Repeat("x", chunkSize)
-	numChunks := (llm.MaxToolInputBytes / chunkSize) + 2 // enough to exceed the limit
+	numChunks := (llm.DefaultMaxToolInputBytes / chunkSize) + 2 // enough to exceed the limit
 
 	var sb strings.Builder
 	for i := 0; i < numChunks; i++ {

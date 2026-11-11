@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preset that shares it (`dashscope-cn`, `qwen`, `kimi-cn`, …), as capability
   validation already did. Callers of `GetAvailableModels(p)` map
   `ModelsByProvider(p)` to `m.ID`.
+- **The package-level `llm.MaxErrorBodyBytes`, `MaxSSELineBytes`, `MaxResponseBodyBytes`,
+  `MaxBatchDownloadBytes` and `MaxToolInputBytes` vars.** A limit is set on `Config`
+  and read through its `Effective*` accessor, which falls back to the `Default*`
+  constant; the unsynchronised process-wide fallback is gone. A program that set a
+  var sets the `Config` field instead.
 
 ## [0.16.1] - 2026-11-11
 

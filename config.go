@@ -14,7 +14,8 @@ import (
 	"time"
 )
 
-// Default safety limits. Used when the corresponding Config field is zero.
+// Default safety limits, used when the corresponding Config field is zero. A
+// limit is set per client on Config and read through its Effective* accessor.
 const (
 	DefaultMaxErrorBodyBytes    = 1 << 20    // 1 MB — caps error response body reads
 	DefaultMaxSSELineBytes      = 256 * 1024 // 256 KB — caps per-line SSE buffer
@@ -32,22 +33,6 @@ const (
 	DefaultAnthropicVersion  = AnthropicVersion20261021
 	AnthropicVersion20261021 = "2026-10-21"
 	AnthropicVersion20230601 = "2023-06-01"
-)
-
-// Backward-compatible package-level vars — used as the process-wide fallback when
-// the corresponding Config field is zero (see the Effective* accessors). Values
-// come from the Default* constants. Set these for global control, or set the
-// matching Config fields for per-client control (which takes precedence).
-//
-// These vars are read without synchronization: set them once at program start,
-// BEFORE creating clients or issuing requests. Mutating them while requests
-// are in flight is a data race.
-var (
-	MaxErrorBodyBytes     int64 = DefaultMaxErrorBodyBytes
-	MaxSSELineBytes       int   = DefaultMaxSSELineBytes
-	MaxResponseBodyBytes  int64 = DefaultMaxResponseBodyBytes
-	MaxBatchDownloadBytes int64 = DefaultMaxBatchDownloadBytes
-	MaxToolInputBytes     int   = DefaultMaxToolInputBytes
 )
 
 // sensitiveHeaders are stripped on cross-origin redirects (scheme or host change)
@@ -580,7 +565,7 @@ func (c Config) EffectiveMaxErrorBodyBytes() int64 {
 	if c.MaxErrorBodyBytes > 0 {
 		return int64(c.MaxErrorBodyBytes)
 	}
-	return MaxErrorBodyBytes
+	return DefaultMaxErrorBodyBytes
 }
 
 // EffectiveMaxSSELineBytes returns the configured or default limit.
@@ -588,7 +573,7 @@ func (c Config) EffectiveMaxSSELineBytes() int {
 	if c.MaxSSELineBytes > 0 {
 		return c.MaxSSELineBytes
 	}
-	return MaxSSELineBytes
+	return DefaultMaxSSELineBytes
 }
 
 // EffectiveMaxResponseBodyBytes returns the configured or default limit.
@@ -596,21 +581,18 @@ func (c Config) EffectiveMaxResponseBodyBytes() int64 {
 	if c.MaxResponseBodyBytes > 0 {
 		return int64(c.MaxResponseBodyBytes)
 	}
-	return MaxResponseBodyBytes
+	return DefaultMaxResponseBodyBytes
 }
 
 // EffectiveMaxBatchDownloadBytes returns the configured or default cap for batch
 // result-file downloads. Defaults far above the 32 MB sync-response cap because a
 // completed batch's output file can legitimately be hundreds of MB. The result is
-// always positive: a non-positive override (or a negative process-wide var) would make
-// the bounded download read zero bytes and silently truncate results, so it falls back
-// to the default rather than disabling the cap.
+// always positive: a non-positive override would make the bounded download read
+// zero bytes and silently truncate results, so it falls back to the default rather
+// than disabling the cap.
 func (c Config) EffectiveMaxBatchDownloadBytes() int64 {
 	if c.MaxBatchDownloadBytes > 0 {
 		return int64(c.MaxBatchDownloadBytes)
-	}
-	if MaxBatchDownloadBytes > 0 {
-		return MaxBatchDownloadBytes
 	}
 	return DefaultMaxBatchDownloadBytes
 }
@@ -620,7 +602,7 @@ func (c Config) EffectiveMaxToolInputBytes() int {
 	if c.MaxToolInputBytes > 0 {
 		return c.MaxToolInputBytes
 	}
-	return MaxToolInputBytes
+	return DefaultMaxToolInputBytes
 }
 
 // EffectiveMaxErrorMessageLen returns the configured or default limit.
