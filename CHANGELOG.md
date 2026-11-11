@@ -30,7 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*_adversarial`, `llm_test.go`) are regrouped into 48 files named after the source
   concept they cover (`retry_test.go`, `pool_test.go`, `batch_test.go`, …;
   package-internal tests in `<concept>_internal_test.go`, shared fakes in
-  `fixtures_test.go`). No test was dropped or changed.
+  `fixtures_test.go`). Two tests of the removed `GetAvailableModels` were dropped;
+  tests that used it now use `ModelsByProvider`, which also matches the provider
+  case- and whitespace-insensitively and lists runtime-registered `openai_responses`
+  models under `openai`.
 
 ## [0.16.1] - 2026-11-11
 
