@@ -30,6 +30,9 @@ full design and `tasks/todo.md` for the roadmap.
   genuinely try to break the code — nil/empty/malformed/corrupt inputs, concurrency (under `-race`),
   failure paths, and hostile transcripts — not just the happy path. A break-it pass where everything
   passes means it wasn't hostile enough.
+- **Tests live by concept.** A test goes into the file named after the source concept it
+  covers (`retry_test.go`, `pool_internal_test.go` for package-internal tests, shared fakes in
+  `fixtures_test.go`), never into a file named after a hardening pass, audit wave or version.
 - **Prove each test catches its bug.** When you fix a defect, confirm the regression test fails
   *without* the fix (revert it, run, watch it go red, restore). A test that passes regardless is
   vacuous.

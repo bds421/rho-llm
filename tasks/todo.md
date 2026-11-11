@@ -165,7 +165,8 @@ pi is now published as `@earendil-works/pi-ai` (repo `earendil-works/pi`;
 - 🟡 `examples/failover` reads `OPENAI_PRIMARY_KEY`/`OPENAI_BACKUP_KEY`/`AZURE_OPENAI_KEY`;
   fall back to `OPENAI_API_KEY` — S. Rotation itself verified working. [own]
 - 🟡 Examples use `panic(err)` instead of the error handling the README teaches — S. [own]
-- 🟢 Tighten break tests that accept any error (`security_test.go:380,451,942,999`,
+- 🟢 Tighten break tests that accept any error (`TestSuccessResponseBodyBounded`,
+  `TestPerConfigErrorMessageLimit`, `TestBlockPrivateBaseURL` in `security_test.go`,
   `provider/gemini/transcription_break_test.go`); de-flake the `<= 900ms` assertion in
   `fallback_modality_test.go`; HTTP-level 429/401/5xx tests for the Anthropic and
   Responses adapters; coverage for fallback embeddings/images/speech. [review]

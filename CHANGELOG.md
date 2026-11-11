@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant; the unsynchronised process-wide fallback is gone. A program that set a
   var sets the `Config` field instead.
 
+### Changed
+
+- **Tests are organised by concept.** The 82 root test files named after hardening
+  passes, audit waves and versions (`harden_*`, `breaksystem*`, `v095_*`,
+  `*_adversarial`, `llm_test.go`) are regrouped into 48 files named after the source
+  concept they cover (`retry_test.go`, `pool_test.go`, `batch_test.go`, …;
+  package-internal tests in `<concept>_internal_test.go`, shared fakes in
+  `fixtures_test.go`). No test was dropped or changed.
+
 ## [0.16.1] - 2026-11-11
 
 ### Fixed

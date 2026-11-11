@@ -1,16 +1,17 @@
 package llm_test
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	llm "github.com/bds421/rho-llm"
+	_ "github.com/bds421/rho-llm/provider"
 )
-
-// --- State transition tests ---
 
 func TestCircuitBreakerStartsClosed(t *testing.T) {
 	cb := llm.NewCircuitBreaker(3, 100*time.Millisecond)
@@ -120,8 +121,6 @@ func TestCircuitBreakerSuccessResetsClosed(t *testing.T) {
 	}
 }
 
-// --- Nil safety tests ---
-
 func TestCircuitBreakerNilAllow(t *testing.T) {
 	var cb *llm.CircuitBreaker
 	if !cb.Allow() {
@@ -165,8 +164,6 @@ func TestCircuitBreakerNilExecute(t *testing.T) {
 		t.Error("nil.Execute() did not call fn")
 	}
 }
-
-// --- Execute tests ---
 
 func TestCircuitBreakerExecuteSuccess(t *testing.T) {
 	cb := llm.NewCircuitBreaker(3, 100*time.Millisecond)
@@ -237,8 +234,6 @@ func TestCircuitBreakerExecuteWithSuccessPredicate(t *testing.T) {
 	}
 }
 
-// --- OnStateChange callback tests ---
-
 func TestCircuitBreakerOnStateChange(t *testing.T) {
 	type transition struct {
 		from, to llm.CircuitState
@@ -274,8 +269,6 @@ func TestCircuitBreakerOnStateChange(t *testing.T) {
 	}
 }
 
-// --- Reset tests ---
-
 func TestCircuitBreakerReset(t *testing.T) {
 	cb := llm.NewCircuitBreaker(1, 1*time.Hour)
 	cb.RecordFailure() // opens
@@ -294,8 +287,6 @@ func TestCircuitBreakerReset(t *testing.T) {
 	}
 }
 
-// --- String representation ---
-
 func TestCircuitStateString(t *testing.T) {
 	tests := []struct {
 		state llm.CircuitState
@@ -312,8 +303,6 @@ func TestCircuitStateString(t *testing.T) {
 		}
 	}
 }
-
-// --- Concurrency tests ---
 
 func TestCircuitBreakerConcurrentAccess(t *testing.T) {
 	cb := llm.NewCircuitBreaker(100, 10*time.Millisecond)
@@ -367,8 +356,6 @@ func TestCircuitBreakerConcurrentExecute(t *testing.T) {
 	}
 }
 
-// --- Threshold edge cases ---
-
 func TestCircuitBreakerThresholdOne(t *testing.T) {
 	cb := llm.NewCircuitBreaker(1, 100*time.Millisecond)
 	cb.RecordFailure()
@@ -388,5 +375,229 @@ func TestCircuitBreakerHighThreshold(t *testing.T) {
 	cb.RecordFailure()
 	if cb.State() != llm.CircuitOpen {
 		t.Errorf("state = %v after 1000 failures, want open", cb.State())
+	}
+}
+
+// TestCircuitBreakerOpensAfterConsecutiveFailures verifies the circuit opens
+// after CircuitThreshold consecutive failures, returning circuit-open error.
+func TestCircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
+	var mu sync.Mutex
+	var circuitOpenEvents int
+
+	cfg := llm.DefaultConfig()
+	cfg.CircuitThreshold = 2 // opens after 2 failures; attempt 0,1 fail → circuit opens → attempt 2 sees it
+	cfg.CircuitCooldown = 50 * time.Millisecond
+	cfg.CooldownOverload = 10 * time.Millisecond
+	// Single-key backoff follows RetryPolicy (v0.9.5): keep it shorter than
+	// the circuit cooldown so the open circuit is observed between attempts.
+	cfg.RetryPolicy = &llm.RetryPolicy{BaseDelay: 5 * time.Millisecond, MaxDelay: 10 * time.Millisecond, Factor: 2.0}
+	cfg.RetryHook = func(evt llm.RetryEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		if evt.Type == llm.RetryCircuitOpen {
+			circuitOpenEvents++
+		}
+	}
+
+	pc, err := llm.NewPooledClient(cfg, []string{"key-a"}, func(profile llm.AuthProfile) (llm.Client, error) {
+		return &threadSafeMockClient{
+			provider: "test",
+			model:    "m",
+			err:      llm.NewOverloadedError("test", "overloaded"),
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+	defer pc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Attempts 0 and 1 fail (hitting threshold=2), circuit opens.
+	// Attempt 2 sees the open circuit and returns immediately.
+	_, err = pc.Complete(ctx, llm.Request{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	mu.Lock()
+	if circuitOpenEvents == 0 {
+		t.Error("expected at least one RetryCircuitOpen event from hook")
+	}
+	mu.Unlock()
+
+	// Error should mention circuit breaker
+	if !strings.Contains(err.Error(), "circuit breaker open") {
+		t.Errorf("expected circuit breaker open error, got: %v", err)
+	}
+}
+
+// TestCircuitBreakerRecovery verifies the circuit transitions half-open → closed
+// when a probe succeeds after the cooldown elapses.
+func TestCircuitBreakerRecovery(t *testing.T) {
+	var mu sync.Mutex
+	failCount := 0
+	threshold := 2
+
+	cfg := llm.DefaultConfig()
+	cfg.CircuitThreshold = threshold
+	cfg.CircuitCooldown = 50 * time.Millisecond
+	// Short pool cooldowns so the auth pool doesn't block recovery
+	cfg.CooldownOverload = 50 * time.Millisecond
+	cfg.CooldownDefault = 50 * time.Millisecond
+	// Single-key backoff follows RetryPolicy (v0.9.5): it must outlast the
+	// 50ms circuit cooldown so the next attempt is admitted as the probe.
+	cfg.RetryPolicy = &llm.RetryPolicy{
+		BaseDelay: 60 * time.Millisecond,
+		MaxDelay:  100 * time.Millisecond,
+		Factor:    2.0,
+		Jitter:    0,
+	}
+
+	pc, err := llm.NewPooledClient(cfg, []string{"key-a"}, func(profile llm.AuthProfile) (llm.Client, error) {
+		return &mockClient{
+			provider: "test",
+			model:    "m",
+			completeFunc: func(ctx context.Context, req llm.Request) (*llm.Response, error) {
+				mu.Lock()
+				fc := failCount
+				failCount++
+				mu.Unlock()
+
+				// First 'threshold' calls fail (to trip the circuit), then succeed
+				if fc < threshold {
+					return nil, llm.NewOverloadedError("test", "overloaded")
+				}
+				return &llm.Response{Content: "recovered"}, nil
+			},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+	defer pc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// This call will exhaust the threshold, open the circuit, then backoff.
+	// After cooldown, half-open probe succeeds → circuit closes → returns success.
+	resp, err := pc.Complete(ctx, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v (expected recovery after circuit half-open)", err)
+	}
+	if resp.Content != "recovered" {
+		t.Errorf("Content = %q, want recovered", resp.Content)
+	}
+}
+
+// TestCircuitBreakerAuthErrorsDoNotTrip verifies that auth errors (401/403)
+// do not count toward the circuit breaker threshold.
+func TestCircuitBreakerAuthErrorsDoNotTrip(t *testing.T) {
+	cfg := llm.DefaultConfig()
+	cfg.CircuitThreshold = 2
+	cfg.CircuitCooldown = 1 * time.Hour // should never open
+
+	callCount := 0
+	pc, err := llm.NewPooledClient(cfg, []string{"key-a", "key-b", "key-c"}, func(profile llm.AuthProfile) (llm.Client, error) {
+		callCount++
+		if callCount <= 2 {
+			// First two keys: auth errors
+			return &threadSafeMockClient{
+				provider: "test",
+				model:    "m",
+				err:      llm.NewAuthError("test", "invalid key", 401),
+			}, nil
+		}
+		// Third key: success
+		return &threadSafeMockClient{
+			provider: "test",
+			model:    "m",
+			resp:     &llm.Response{Content: "ok"},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+	defer pc.Close()
+
+	resp, err := pc.Complete(context.Background(), llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v (auth errors should not trip circuit)", err)
+	}
+	if resp.Content != "ok" {
+		t.Errorf("Content = %q, want ok", resp.Content)
+	}
+}
+
+// TestCircuitBreakerStreamIntegration verifies the circuit breaker gates
+// stream attempts the same as Complete — returning circuit-open error.
+func TestCircuitBreakerStreamIntegration(t *testing.T) {
+	cfg := llm.DefaultConfig()
+	cfg.CircuitThreshold = 2 // opens after 2 failures
+	cfg.CircuitCooldown = 50 * time.Millisecond
+	cfg.CooldownOverload = 10 * time.Millisecond
+	// Single-key backoff follows RetryPolicy (v0.9.5): keep it shorter than
+	// the circuit cooldown so the open circuit is observed between attempts.
+	cfg.RetryPolicy = &llm.RetryPolicy{BaseDelay: 5 * time.Millisecond, MaxDelay: 10 * time.Millisecond, Factor: 2.0}
+
+	pc, err := llm.NewPooledClient(cfg, []string{"key-a"}, func(profile llm.AuthProfile) (llm.Client, error) {
+		return &threadSafeMockClient{
+			provider: "test",
+			model:    "m",
+			err:      llm.NewOverloadedError("test", "overloaded"),
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewPooledClient: %v", err)
+	}
+	defer pc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var streamErr error
+	for _, err := range pc.Stream(ctx, llm.Request{}) {
+		if err != nil {
+			streamErr = err
+			break
+		}
+	}
+
+	if streamErr == nil {
+		t.Fatal("expected error from stream, got nil")
+	}
+	// After threshold failures, the circuit opens and stream returns circuit-open error
+	if !strings.Contains(streamErr.Error(), "circuit breaker open") {
+		t.Errorf("expected circuit breaker open error, got: %v", streamErr)
+	}
+}
+
+// TestDefaultConfigIncludesCircuitBreaker verifies DefaultConfig has the circuit breaker enabled.
+func TestDefaultConfigIncludesCircuitBreaker(t *testing.T) {
+	cfg := llm.DefaultConfig()
+	if cfg.CircuitThreshold != llm.DefaultCircuitThreshold {
+		t.Errorf("DefaultConfig().CircuitThreshold = %d, want %d", cfg.CircuitThreshold, llm.DefaultCircuitThreshold)
+	}
+	if cfg.CircuitCooldown != llm.DefaultCircuitCooldown {
+		t.Errorf("DefaultConfig().CircuitCooldown = %v, want %v", cfg.CircuitCooldown, llm.DefaultCircuitCooldown)
+	}
+}
+
+// TestCircuitBreakerCallbackPanic verifies a panicking callback doesn't crash the caller.
+func TestCircuitBreakerCallbackPanic(t *testing.T) {
+	cb := llm.NewCircuitBreaker(1, time.Second,
+		llm.WithOnStateChange(func(from, to llm.CircuitState) {
+			panic("boom from callback")
+		}),
+	)
+
+	// This should NOT panic — the library recovers
+	cb.RecordFailure() // trips threshold=1, fires callback
+
+	// Circuit should still be in the expected state despite panic
+	if cb.State() != llm.CircuitOpen {
+		t.Errorf("State() = %v, want CircuitOpen", cb.State())
 	}
 }

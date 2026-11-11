@@ -234,3 +234,85 @@ func TestFallbackConcurrentUseAndDoubleClose(t *testing.T) {
 		t.Fatalf("second Close: %v", err)
 	}
 }
+
+// M3: FailoverTransientOnly does NOT re-send a payload the primary rejected
+// as malformed (400) or oversized (413) — no second charge, no second vendor
+// — but still fails over on 5xx/429. The default policy keeps failing over on
+// the 400 (compatibility with the 2026-10-07 broken-model case).
+func TestFailoverPolicyTransientOnly(t *testing.T) {
+	cases := []struct {
+		mode        string
+		wantCalls   int
+		wantSuccess bool
+	}{
+		{"broken", 1, false},     // 400
+		{"overloaded", 2, true},  // 503
+		{"ratelimited", 2, true}, // 429
+	}
+	for _, tc := range cases {
+		s := newGeminiStub(t, map[string]string{"gemini-3.5-transcribe": tc.mode})
+		client, err := llm.NewFallbackModalityClientWithPolicy(llm.FailoverTransientOnly,
+			s.cfg("gemini-3.5-transcribe"), s.cfg("gemini-3.5-flash-lite"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.TranscribeAudio(context.Background(), llm.TranscriptionRequest{Audio: fbWAV, MediaType: "audio/wav"})
+		_ = client.Close()
+		if (err == nil) != tc.wantSuccess {
+			t.Errorf("%s: err = %v", tc.mode, err)
+		}
+		if got := s.seen(); len(got) != tc.wantCalls {
+			t.Errorf("%s: calls = %v, want %d", tc.mode, got, tc.wantCalls)
+		}
+	}
+
+	// nil policy == default == NewFallbackModalityClient: a 400 fails over.
+	s := newGeminiStub(t, map[string]string{"gemini-3.5-transcribe": "broken"})
+	client, err := llm.NewFallbackModalityClientWithPolicy(nil, s.cfg("gemini-3.5-transcribe"), s.cfg("gemini-3.5-flash-lite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.TranscribeAudio(context.Background(), llm.TranscriptionRequest{Audio: fbWAV, MediaType: "audio/wav"}); err != nil {
+		t.Fatalf("default policy stopped failing over on 400: %v", err)
+	}
+}
+
+// M3: a custom policy is consulted, but can never resurrect caller
+// cancellation into a failover.
+func TestFailoverPolicyCannotOverrideCancellation(t *testing.T) {
+	s := newGeminiStub(t, map[string]string{"gemini-3.5-transcribe": "hang"})
+	var consulted int
+	always := func(context.Context, error) bool { consulted++; return true }
+	client, err := llm.NewFallbackModalityClientWithPolicy(always, s.cfg("gemini-3.5-transcribe"), s.cfg("gemini-3.5-flash-lite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = client.TranscribeAudio(ctx, llm.TranscriptionRequest{Audio: fbWAV, MediaType: "audio/wav"})
+	if err == nil || len(s.seen()) != 1 || consulted != 0 {
+		t.Fatalf("err=%v calls=%v consulted=%d: cancellation failed over", err, s.seen(), consulted)
+	}
+}
+
+// FailoverTransientOnly classification table, including wrapped errors.
+func TestFailoverTransientOnlyTable(t *testing.T) {
+	ctx := context.Background()
+	for status, want := range map[int]bool{400: false, 413: false, 415: false, 422: false,
+		401: true, 403: true, 404: true, 408: true, 429: true, 500: true, 502: true, 503: true, 504: true} {
+		err := llm.NewAPIErrorFromStatus("p", status, "x")
+		if got := llm.FailoverTransientOnly(ctx, errors.Join(errors.New("wrapped"), err)); got != want {
+			t.Errorf("status %d: got %v want %v", status, got, want)
+		}
+	}
+	if llm.FailoverTransientOnly(ctx, errors.New("validation: bad request shape")) {
+		t.Error("a non-provider error failed over")
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if llm.FailoverTransientOnly(cancelled, llm.NewOverloadedError("p", "x")) {
+		t.Error("failed over with a cancelled caller context")
+	}
+}

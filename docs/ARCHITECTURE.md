@@ -64,9 +64,7 @@ github.com/bds421/rho-llm/
 ├── circuitbreaker.go    # CircuitBreaker (3-state: closed → open → half-open)
 ├── middleware.go        # LoggingClient decorator
 ├── errors.go            # APIError type + Is*() helpers
-├── llm_test.go          # Integration and unit tests
-├── retrypolicy_test.go  # RetryPolicy unit tests
-├── circuitbreaker_test.go # CircuitBreaker unit tests
+├── <concept>_test.go    # Tests by concept, named after the source they cover (package-internal ones <concept>_internal_test.go; fixtures_test.go holds shared fakes); live_*_test.go need API keys
 │
 └── provider/                        # Provider adapters (database/sql driver pattern)
     ├── all.go                       # Blank-imports all sub-packages
