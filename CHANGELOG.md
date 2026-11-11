@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-11
+
+### Removed
+
+- **`GetAvailableModels` and the hand-written `availableModels` list.** The registry
+  (`modelRegistry`) is the one model index; `Models()` / `ModelsByProvider(provider)`
+  enumerate it, sorted by ID. The curated list had drifted from the registry (46
+  registered models were missing from it, and it listed regional presets the registry
+  files under their family). `ModelsByProvider` now lists a family's catalog for a
+  preset that shares it (`dashscope-cn`, `qwen`, `kimi-cn`, …), as capability
+  validation already did. Callers of `GetAvailableModels(p)` map
+  `ModelsByProvider(p)` to `m.ID`.
+- **The package-level `llm.MaxErrorBodyBytes`, `MaxSSELineBytes`, `MaxResponseBodyBytes`,
+  `MaxBatchDownloadBytes` and `MaxToolInputBytes` vars.** A limit is set on `Config`
+  and read through its `Effective*` accessor, which falls back to the `Default*`
+  constant; the unsynchronised process-wide fallback is gone. A program that set a
+  var sets the `Config` field instead.
+
+### Changed
+
+- **Tests are organised by concept.** The 82 root test files named after hardening
+  passes, audit waves and versions (`harden_*`, `breaksystem*`, `v095_*`,
+  `*_adversarial`, `llm_test.go`) are regrouped into 48 files named after the source
+  concept they cover (`retry_test.go`, `pool_test.go`, `batch_test.go`, …;
+  package-internal tests in `<concept>_internal_test.go`, shared fakes in
+  `fixtures_test.go`). Two tests of the removed `GetAvailableModels` were dropped;
+  tests that used it now use `ModelsByProvider`, which also matches the provider
+  case- and whitespace-insensitively and lists runtime-registered `openai_responses`
+  models under `openai`.
+
 ## [0.16.1] - 2026-11-11
 
 ### Fixed

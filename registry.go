@@ -3,15 +3,14 @@ package llm
 import (
 	"fmt"
 	"math"
-	"slices"
 	"strings"
 	"sync"
 )
 
 // registryMu guards the registry maps (modelRegistry, modelAliases,
-// availableModels, defaultModels). The built-in data is written at package
-// init; RegisterModel/RegisterModelAlias extend it at runtime, so every
-// reader takes the read lock.
+// defaultModels). The built-in data is written at package init;
+// RegisterModel/RegisterModelAlias extend it at runtime, so every reader
+// takes the read lock.
 var registryMu sync.RWMutex
 
 // ModelInfo holds per-model metadata used to adapt API requests and UI.
@@ -437,171 +436,6 @@ var defaultModels = map[string]string{
 	"ollama":       "qwen3:8b",
 }
 
-var availableModels = map[string][]string{
-	"anthropic": {
-		"claude-fable-5-2",
-		"claude-fable-5-1",
-		"claude-opus-5-5",
-		"claude-sonnet-5-5",
-		"claude-haiku-5-5",
-		"claude-fable-5",
-		"claude-opus-5",
-		"claude-sonnet-5",
-		"claude-opus-4-8",
-		"claude-opus-4-7",
-		"claude-opus-4-6",
-		"claude-opus-4-5",
-		"claude-sonnet-4-6",
-		"claude-sonnet-4-5",
-		"claude-haiku-4-5",
-		"claude-haiku-4-5-20251001",
-	},
-	"xai": {
-		"grok-4.7",
-		"grok-4.6",
-		"grok-4.5",
-		"grok-4.3",
-		"grok-4.20-0309-reasoning",
-		"grok-4.20-0309-non-reasoning",
-		"grok-4.20-multi-agent-0309",
-		"grok-build-0.1",
-	},
-	"gemini": {
-		"gemini-4-argon",
-		"gemini-3.8-flash",
-		"gemini-3.7-flash",
-		"gemini-3.6-flash",
-		"gemini-3.5-flash",
-		"gemini-3.5-flash-lite",
-		"gemini-3.1-pro-preview",
-		"gemini-3.1-pro-preview-customtools",
-		"gemini-3.1-flash-lite",
-		"gemini-3-flash-preview",
-		"gemini-2.5-pro",
-		"gemini-2.5-flash",
-		"gemini-2.5-flash-lite",
-	},
-	"openai": {
-		"gpt-6.1-sol",
-		"gpt-6.1-terra",
-		"gpt-6-astra",
-		"gpt-6-sol",
-		"gpt-6-luna",
-		"gpt-5.6-sol",
-		"gpt-5.6-terra",
-		"gpt-5.6-luna",
-		"gpt-5.5-pro",
-		"gpt-5.5",
-		"gpt-5.4-pro",
-		"gpt-5.4",
-		"gpt-5.4-mini",
-		"gpt-5.4-nano",
-		"gpt-5.3-codex",
-		"gpt-5.2-pro",
-		"gpt-5.2",
-		"gpt-5.1",
-		"gpt-5-pro",
-		"gpt-5",
-		"gpt-5-mini",
-		"gpt-5-nano",
-		"gpt-4.1",
-		"gpt-4.1-mini",
-		"o3-pro",
-		"o3",
-	},
-	"meta": {
-		"muse-spark-1.3",
-		"muse-wonder-1.0",
-		"muse-ember-1.0",
-		"muse-spark-1.3-contributor",
-		"muse-spark-1.2",
-		"muse-spark-1.1",
-		"muse-spark-1.2-contributor",
-	},
-	"groq": {
-		"openai/gpt-oss-120b",
-		"openai/gpt-oss-20b",
-		"qwen/qwen3.8-27b",
-		"llama-3.3-70b-versatile",
-		"llama-3.1-8b-instant",
-	},
-	"mistral": {
-		"mistral-large-4-0",
-		"mistral-large-2512",
-		"mistral-large-latest",
-		"mistral-medium-latest",
-		"mistral-small-2603",
-		"codestral-2508",
-		"codestral-latest",
-		"ministral-3b-2512",
-		"ministral-8b-2512",
-		"ministral-14b-2512",
-		"mistral-embed",
-	},
-	"deepseek": {
-		"deepseek-flash",
-		"deepseek-v4-flash",
-		"deepseek-v4-pro",
-	},
-	"cohere": {
-		"command-a-plus-05-2026",
-		"command-a-03-2025",
-	},
-	"zai": {
-		"glm-5.3",
-		"glm-5.3-flash",
-		"glm-5.2",
-		"glm-4.7",
-		"glm-4.6",
-	},
-	"minimax": {
-		"MiniMax-M3",
-		"MiniMax-M3.1-Flash",
-		"MiniMax-M2.5",
-	},
-	"moonshot": {
-		"kimi-k3.1-pro",
-		"kimi-k3",
-		"kimi-k2.7-code",
-	},
-	"dashscope": {
-		"qwen3.8-max",
-		"qwen3.8-flash",
-		"qwen3.6-plus",
-		"qwen3.6-flash",
-		"qwen3-max",
-		"qwen3.5-omni-plus",
-		"qwen3.5-omni-flash",
-		"qwen3.5-omni-light",
-		"text-embedding-v3",
-		"text-embedding-v2",
-	},
-	// Regional aliases share the same model catalog as their primary brand.
-	"dashscope-cn": {
-		"qwen3.8-max", "qwen3.8-flash", "qwen3.6-plus", "qwen3.6-flash", "qwen3-max",
-		"qwen3.5-omni-plus", "qwen3.5-omni-flash", "qwen3.5-omni-light",
-		"text-embedding-v3", "text-embedding-v2",
-	},
-	"moonshot-cn": {
-		"kimi-k2.7-code",
-	},
-	"ollama": {
-		"deepseek-r1:14b",
-		"mistral-small3.2:24b",
-		"qwen3-coder:30b",
-		"qwen3.5:latest",
-		"qwen3.5:27b",
-		"qwen3:8b",
-		"qwen3:4b",
-		"gemma4:31b",
-		"gemma4:26b",
-		"gemma4:e4b",
-		"gemma3:12b",
-		"gemma3:4b",
-		"gemma2:2b",
-	},
-}
-
 var modelAliases = map[string]string{
 	// Anthropic aliases
 	"opus":   "claude-opus-5-5",
@@ -775,24 +609,7 @@ func RegisterModel(info ModelInfo) error {
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	prev, existed := modelRegistry[info.ID]
 	modelRegistry[info.ID] = info
-
-	// Keep availableModels (the discovery list) in sync with modelRegistry,
-	// independent of whether the model already existed. Two cases the old
-	// `if !existed` guard got wrong: (1) correcting a built-in that is in
-	// modelRegistry but absent from availableModels — it must now surface in
-	// discovery; (2) an override that moves a model to a different provider —
-	// it must leave the old provider's list.
-	if existed && prev.Provider != info.Provider {
-		availableModels[prev.Provider] = slices.DeleteFunc(
-			availableModels[prev.Provider],
-			func(id string) bool { return id == info.ID },
-		)
-	}
-	if !slices.Contains(availableModels[info.Provider], info.ID) {
-		availableModels[info.Provider] = append(availableModels[info.Provider], info.ID)
-	}
 	return nil
 }
 
@@ -834,21 +651,6 @@ func GetDefaultModel(provider string) string {
 		return model
 	}
 	return "claude-sonnet-5"
-}
-
-// GetAvailableModels returns the ordered model list for a provider.
-// Returns nil if the provider has no models registered.
-// Returns a copy to prevent callers from mutating global registry state.
-func GetAvailableModels(provider string) []string {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	src := availableModels[provider]
-	if src == nil {
-		return nil
-	}
-	dst := make([]string, len(src))
-	copy(dst, src)
-	return dst
 }
 
 // ResolveModelAlias resolves a model alias to its full name.

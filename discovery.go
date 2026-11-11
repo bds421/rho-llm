@@ -19,13 +19,16 @@ func Models() []ModelInfo {
 	return out
 }
 
-// ModelsByProvider returns the registered models for one provider, sorted by ID.
-// An unknown provider yields an empty (non-nil) slice.
+// ModelsByProvider returns the registered models of one provider, sorted by ID.
+// A preset that shares a provider's catalog lists that catalog: "dashscope-cn"
+// and "qwen" list DashScope's models, "kimi-cn" Moonshot's. An unknown provider
+// yields an empty (non-nil) slice.
 func ModelsByProvider(provider string) []ModelInfo {
+	family := canonicalProvider(provider)
 	registryMu.RLock()
 	out := make([]ModelInfo, 0)
 	for _, m := range modelRegistry {
-		if m.Provider == provider {
+		if canonicalProvider(m.Provider) == family {
 			out = append(out, m)
 		}
 	}

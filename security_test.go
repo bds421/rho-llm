@@ -12,15 +12,115 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bds421/rho-llm"
+	llm "github.com/bds421/rho-llm"
 	"github.com/bds421/rho-llm/provider/anthropic"
 	"github.com/bds421/rho-llm/provider/gemini"
 	"github.com/bds421/rho-llm/provider/openaicompat"
+	"github.com/bds421/rho-llm/provider/openairesponses"
 )
 
-// =============================================================================
-// SECURITY TESTS
-// =============================================================================
+// A per-key "apikey|baseurl" override can embed credentials in the BaseURL
+// (userinfo user:pass@ or a ?token= secret). When an upstream error echoes that
+// BaseURL, MarkFailed stores it in LastError and MarshalJSON serializes it — both
+// must strip the embedded secrets (AuthProfile.MarshalJSON already redacts the
+// BaseURL *field*, so leaving them in LastError is an inconsistency/leak).
+func TestAuthProfileDoesNotLeakBaseURLCredsInLastError(t *testing.T) {
+	const apiKey = "sk-minimax-abcdef123456"
+	const baseURL = "https://user:superSecretPw@proxy.internal:9000/v1?token=bearer_xyz987"
+	p := llm.AuthProfile{Name: "minimax-1", APIKey: apiKey, BaseURL: baseURL}
+
+	// Upstream error that echoes the full per-key BaseURL + the API key.
+	p.MarkFailed(fmt.Errorf("403 from %s using key %s", baseURL, apiKey), time.Second)
+
+	leaks := []string{"superSecretPw", "bearer_xyz987", apiKey}
+	for _, secret := range leaks {
+		if strings.Contains(p.LastError, secret) {
+			t.Errorf("MarkFailed left secret %q in LastError: %q", secret, p.LastError)
+		}
+	}
+	// Host must remain visible for debugging.
+	if !strings.Contains(p.LastError, "proxy.internal") {
+		t.Errorf("LastError dropped the host (needed for debugging): %q", p.LastError)
+	}
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	s := string(b)
+	for _, secret := range leaks {
+		if strings.Contains(s, secret) {
+			t.Errorf("AuthProfile JSON leaked secret %q: %s", secret, s)
+		}
+	}
+}
+
+// The model is interpolated into the request URL path; a model containing URL
+// metacharacters must be escaped, not injected (e.g. "m?x=1" must not add a
+// query parameter / change the endpoint).
+func TestGeminiEscapesModelInURL(t *testing.T) {
+	var rawQuery, path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawQuery, path = r.URL.RawQuery, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}],"role":"model"}}],"usageMetadata":{}}`))
+	}))
+	defer srv.Close()
+
+	c, err := gemini.New(llm.Config{Provider: "gemini", Model: "m?injected=1", APIKey: "k", BaseURL: srv.URL, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, _ = c.Complete(context.Background(), llm.Request{Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")}})
+
+	if strings.Contains(rawQuery, "injected=1") {
+		t.Fatalf("model name injected a query parameter (unescaped): rawQuery=%q path=%q", rawQuery, path)
+	}
+}
+
+func TestFixedPathAdaptersIgnoreHostileModelInURL(t *testing.T) {
+	const hostile = "m?inject=1/../../evil"
+
+	cases := []struct {
+		name     string
+		wantPath string
+		newC     func(cfg llm.Config) (llm.Client, error)
+		resp     string
+	}{
+		{"anthropic", "/messages", func(c llm.Config) (llm.Client, error) { return anthropic.New(c) },
+			`{"id":"m","model":"x","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`},
+		{"openaicompat", "/chat/completions", func(c llm.Config) (llm.Client, error) { return openaicompat.New(c) },
+			`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`},
+		{"openairesponses", "/responses", func(c llm.Config) (llm.Client, error) { return openairesponses.New(c) },
+			`{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{}}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath, gotQuery string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(tc.resp))
+			}))
+			defer srv.Close()
+
+			c, err := tc.newC(llm.Config{Provider: tc.name, Model: hostile, APIKey: "k", BaseURL: srv.URL, Timeout: 10 * time.Second,
+				ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityStream)})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, _ = c.Complete(context.Background(), llm.Request{MaxTokens: 16, Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")}})
+
+			if gotPath != tc.wantPath {
+				t.Fatalf("hostile model altered the request path: got %q, want %q", gotPath, tc.wantPath)
+			}
+			if gotQuery != "" {
+				t.Fatalf("hostile model injected a query: %q", gotQuery)
+			}
+		})
+	}
+}
 
 // TestGeminiAPIKeyNotInURL verifies that the Gemini adapter sends the API key
 // via the x-goog-api-key header, NOT as a URL query parameter. API keys in
@@ -335,10 +435,6 @@ func TestRedirectDoesNotLeakOpenAIKey(t *testing.T) {
 		}
 	}
 }
-
-// =============================================================================
-// ROUND 2: Unbounded success body decode, inputBuffer accumulation, SSE errors
-// =============================================================================
 
 // TestSuccessResponseBodyBounded verifies that JSON decoding of success
 // response bodies is bounded. Without a limit, a malicious endpoint returning
@@ -657,10 +753,6 @@ func TestMalformedSSEEventYieldsError(t *testing.T) {
 		}
 	})
 }
-
-// =============================================================================
-// ROUND 3: JSON Redaction & Scheme Validation
-// =============================================================================
 
 // TestConfigMarshalJSONRedactsAPIKey verifies that Config.MarshalJSON replaces
 // the APIKey with "REDACTED" so secrets don't leak into logs or debug output.

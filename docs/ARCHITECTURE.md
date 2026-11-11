@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of November 2026 (v0.16.1).
+> **Status:** Reflects the current implementation as of November 2026 (v0.17.0).
 
 ---
 
@@ -64,9 +64,7 @@ github.com/bds421/rho-llm/
 ├── circuitbreaker.go    # CircuitBreaker (3-state: closed → open → half-open)
 ├── middleware.go        # LoggingClient decorator
 ├── errors.go            # APIError type + Is*() helpers
-├── llm_test.go          # Integration and unit tests
-├── retrypolicy_test.go  # RetryPolicy unit tests
-├── circuitbreaker_test.go # CircuitBreaker unit tests
+├── <concept>_test.go    # Tests by concept, named after the source they cover (package-internal ones <concept>_internal_test.go; fixtures_test.go holds shared fakes); live_*_test.go need API keys
 │
 └── provider/                        # Provider adapters (database/sql driver pattern)
     ├── all.go                       # Blank-imports all sub-packages
@@ -642,7 +640,8 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 The full list (19 providers with curated rows, including Groq, Mistral, DeepSeek,
 Cohere, Z.ai, MiniMax, Moonshot, DashScope, Meta, Perplexity, Fireworks, Together,
 DeepInfra, NVIDIA and Ollama) lives in `registry.go`; `Models()` /
-`GetAvailableModels(provider)` enumerate it. IDs a provider has shut down move to
+`ModelsByProvider(provider)` enumerate it (a regional preset such as
+`dashscope-cn` lists its family's catalog). IDs a provider has shut down move to
 `retiredModels`, so a request naming one fails with the replacement instead of a
 provider 404.
 
