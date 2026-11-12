@@ -278,6 +278,11 @@ func (c *Client) Results(ctx context.Context, handle llm.BatchHandle) ([]llm.Bat
 		return nil, err
 	}
 	if len(state.InlinedResponses) == 0 && len(state.InlinedEmbedResponses) == 0 {
+		if state.ResponsesFile != "" {
+			// Results the API wrote to a file instead of inline: report it
+			// rather than returning an empty, successful result set.
+			return nil, fmt.Errorf("geminibatch: results are in file %q, which this driver does not download", state.ResponsesFile)
+		}
 		return nil, nil
 	}
 	switch handle.Operation {
@@ -315,23 +320,78 @@ func (c *Client) Cancel(ctx context.Context, handle llm.BatchHandle) (*llm.Batch
 type batchResource struct {
 	Name     string `json:"name"`
 	Metadata struct {
-		State string `json:"state"`
+		State  string       `json:"state"`
+		Output *batchOutput `json:"output"`
 	} `json:"metadata"`
 	State string `json:"state"`
 	Done  bool   `json:"done"`
-	// dest may appear as response or dest depending on API revision
-	Dest *struct {
-		InlinedResponses []json.RawMessage `json:"inlinedResponses"`
-		InlinedEmbeds    []json.RawMessage `json:"inlinedEmbedContentResponses"`
-		FileName         string            `json:"fileName"`
-	} `json:"dest"`
+	// Results appear under response (the operation's result), response.output
+	// (embedding batches), metadata.output, or dest, depending on the batch
+	// kind and API revision.
+	Dest     *batchOutput `json:"dest"`
 	Response *struct {
-		InlinedResponses []json.RawMessage `json:"inlinedResponses"`
-		InlinedEmbeds    []json.RawMessage `json:"inlinedEmbedContentResponses"`
+		batchOutput
+		Output *batchOutput `json:"output"`
 	} `json:"response"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// batchOutput is a batch's output: inline results or a results file.
+type batchOutput struct {
+	InlinedResponses inlinedList `json:"inlinedResponses"`
+	InlinedEmbeds    inlinedList `json:"inlinedEmbedContentResponses"`
+	ResponsesFile    string      `json:"responsesFile"`
+	FileName         string      `json:"fileName"`
+}
+
+// inlinedList decodes inline results. The API documents them as an object
+// wrapping the array ({"inlinedResponses":{"inlinedResponses":[…]}}); a bare
+// array is accepted too. Only the bare array was read, so documented results
+// failed to decode (B28).
+type inlinedList []json.RawMessage
+
+func (l *inlinedList) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*l = nil
+		return nil
+	}
+	if trimmed[0] == '[' {
+		var rows []json.RawMessage
+		if err := json.Unmarshal(trimmed, &rows); err != nil {
+			return err
+		}
+		*l = rows
+		return nil
+	}
+	var wrapped struct {
+		InlinedResponses []json.RawMessage `json:"inlinedResponses"`
+	}
+	if err := json.Unmarshal(trimmed, &wrapped); err != nil {
+		return err
+	}
+	*l = wrapped.InlinedResponses
+	return nil
+}
+
+// outputs returns every place the resource may carry its output, in order.
+func (w *batchResource) outputs() []*batchOutput {
+	var out []*batchOutput
+	if w.Dest != nil {
+		out = append(out, w.Dest)
+	}
+	if w.Response != nil {
+		out = append(out, &w.Response.batchOutput)
+		if w.Response.Output != nil {
+			out = append(out, w.Response.Output)
+		}
+	}
+	if w.Metadata.Output != nil {
+		out = append(out, w.Metadata.Output)
+	}
+	return out
 }
 
 type adapterState struct {
@@ -339,6 +399,7 @@ type adapterState struct {
 	Model                 string            `json:"model"`
 	InlinedResponses      []json.RawMessage `json:"inlined_responses,omitempty"`
 	InlinedEmbedResponses []json.RawMessage `json:"inlined_embed_responses,omitempty"`
+	ResponsesFile         string            `json:"responses_file,omitempty"`
 }
 
 func (c *Client) toHandle(wire *batchResource, op llm.BatchOperationKind, model string) (*llm.BatchHandle, error) {
@@ -354,16 +415,22 @@ func (c *Client) toHandle(wire *batchResource, op llm.BatchOperationKind, model 
 		return nil, err
 	}
 	st := adapterState{Name: wire.Name, Model: model}
-	if wire.Dest != nil {
-		st.InlinedResponses = wire.Dest.InlinedResponses
-		st.InlinedEmbedResponses = wire.Dest.InlinedEmbeds
-	}
-	if wire.Response != nil {
-		if len(st.InlinedResponses) == 0 {
-			st.InlinedResponses = wire.Response.InlinedResponses
+	for _, o := range wire.outputs() {
+		// Embedding batches put their inline results under inlinedResponses
+		// too (EmbedContentBatchOutput); older revisions used
+		// inlinedEmbedContentResponses.
+		embeds := o.InlinedEmbeds
+		if len(embeds) == 0 && op == llm.BatchOperationEmbedding {
+			embeds = o.InlinedResponses
+		}
+		if len(st.InlinedResponses) == 0 && op != llm.BatchOperationEmbedding {
+			st.InlinedResponses = o.InlinedResponses
 		}
 		if len(st.InlinedEmbedResponses) == 0 {
-			st.InlinedEmbedResponses = wire.Response.InlinedEmbeds
+			st.InlinedEmbedResponses = embeds
+		}
+		if st.ResponsesFile == "" {
+			st.ResponsesFile = o.ResponsesFile
 		}
 	}
 	raw, err := json.Marshal(st)

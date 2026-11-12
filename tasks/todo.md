@@ -29,8 +29,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 ### Session & conversation
 
 ### Gemini / batch wire details
-- 🟡 **B28 — Gemini batch results don't decode the documented shape** (*doc-verified, not
-  live*). `inlinedResponses` is an object wrapping an array (`geminibatch.go:302-318`).
 - 🟢 **B30 — Gemini tool results: `IsError` ignored, images dropped, no id on Gemini 3+.**
   Always `{"result": text}` (`gemini.go:408-417`).
 

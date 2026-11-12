@@ -179,6 +179,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supposedly said. It is now dropped: no adapter replays it. Thinking from
   another provider is still converted to text on a handoff, and signed
   Anthropic thinking is replayed as before.
+- **Gemini batch results in the documented shape failed to decode** (B28).
+  Google's batch reference nests inline results in an object
+  (`inlinedResponses: {inlinedResponses: […]}`) under `response`,
+  `response.output` or `metadata.output`; the driver read only a bare array
+  under `dest` or `response`. All these shapes now decode, embedding results
+  are also read from `inlinedResponses`, and results written to a
+  `responsesFile` are reported as an error instead of an empty result set.
+  (Checked against the reference docs, not a live batch.)
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".
