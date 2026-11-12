@@ -199,14 +199,17 @@ func DecodeJSONResponse(resp *http.Response, cfg Config, out any) error {
 	return json.NewDecoder(io.LimitReader(resp.Body, cfg.EffectiveMaxResponseBodyBytes())).Decode(out)
 }
 
-// SSEData extracts the payload of a server-sent-events "data: " line.
+// SSEData extracts the payload of a server-sent-events "data:" line. The
+// space after the colon is optional in the SSE spec ("data:{...}" is valid and
+// some gateways send it), so one leading space is stripped when present.
 // ok is false for every other line (event names, comments, blank keep-alives),
 // which SSE consumers skip. Shared by all streaming adapters.
 func SSEData(line string) (data string, ok bool) {
-	if !strings.HasPrefix(line, "data: ") {
+	data, found := strings.CutPrefix(line, "data:")
+	if !found {
 		return "", false
 	}
-	data = strings.TrimPrefix(line, "data: ")
+	data = strings.TrimPrefix(data, " ")
 	if data == "" {
 		// "data: " with an empty value carries no event (keep-alive/padding some
 		// servers emit). Report not-ok so callers skip it instead of trying — and

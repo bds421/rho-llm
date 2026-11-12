@@ -138,6 +138,9 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	if err := llm.DecodeJSONResponse(resp, c.config, &apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+	if apiResp.Error != nil && len(apiResp.Choices) == 0 {
+		return nil, c.inBandError(apiResp.Error)
+	}
 
 	return c.parseResponse(&apiResp), nil
 }
@@ -253,6 +256,7 @@ type openaiResponse struct {
 		TotalTokens         int                 `json:"total_tokens"`
 		PromptTokensDetails promptTokensDetails `json:"prompt_tokens_details"`
 	} `json:"usage"`
+	Error *providerError `json:"error"` // an error sent with status 200
 }
 
 // promptTokensDetails is the prompt breakdown of an OpenAI-style usage
@@ -450,7 +454,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		if msg.Role == llm.RoleAssistant {
 			for _, part := range msg.Content {
 				if part.Type == llm.ContentToolUse {
-					inputJSON, err := json.Marshal(part.ToolInput)
+					inputJSON, err := json.Marshal(llm.ToolInputObject(part.ToolInput))
 					if err != nil {
 						slog.Debug("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
 						inputJSON = []byte("{}")
@@ -617,10 +621,9 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 
 		// Extract tool calls
 		for _, tc := range choice.Message.ToolCalls {
-			var input any
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+			input, err := llm.DecodeToolInput(tc.Function.Arguments)
+			if err != nil {
 				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", tc.Function.Name, "error", err)
-				input = tc.Function.Arguments
 			}
 			resp.ToolCalls = append(resp.ToolCalls, llm.ToolCall{
 				ID:    tc.ID,
@@ -680,10 +683,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		sc.emitted = true
 		raw := sc.args.String()
 		pendingBytes -= len(raw)
-		var input any
-		if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		input, err := llm.DecodeToolInput(raw)
+		if err != nil {
 			slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", sc.call.Name, "error", err)
-			input = raw
 		}
 		sc.call.Input = input
 		emittedToolCall = true
@@ -732,6 +734,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				CompletionTokens    int                 `json:"completion_tokens"`
 				PromptTokensDetails promptTokensDetails `json:"prompt_tokens_details"`
 			} `json:"usage"`
+			Error *providerError `json:"error"` // OpenRouter, vLLM, Together: an error chunk mid-stream
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -749,6 +752,13 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				return
 			}
 			continue
+		}
+
+		// A server that fails after the 200 sends an error chunk (and often
+		// [DONE] after it). It ends the turn: whatever was streamed is partial.
+		if event.Error != nil {
+			yield(llm.StreamEvent{}, c.inBandError(event.Error))
+			return
 		}
 
 		// Capture usage if present (may arrive in a separate chunk with empty choices).
@@ -833,6 +843,13 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					sc.args.WriteString(tc.Function.Arguments)
 					pendingBytes += len(tc.Function.Arguments)
 				}
+			}
+
+			// finish_reason "error" (OpenRouter) ends a failed turn; without an
+			// error object there is no detail, but it is not a completion.
+			if choice.FinishReason == "error" {
+				yield(llm.StreamEvent{}, c.inBandError(&providerError{Message: "stream ended with finish_reason \"error\""}))
+				return
 			}
 
 			// Capture finish reason (usage may arrive in next chunk)

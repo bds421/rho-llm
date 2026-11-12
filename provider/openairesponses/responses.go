@@ -328,14 +328,13 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			if ev.CallID == "" {
 				ev.CallID = call.callID
 			}
-			var input any
 			args := ev.Arguments
 			if args == "" {
 				args = buffered
 			}
-			if err := json.Unmarshal([]byte(args), &input); err != nil {
+			input, err := llm.DecodeToolInput(args)
+			if err != nil {
 				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", ev.Name, "error", err)
-				input = args
 			}
 			if !yield(llm.StreamEvent{
 				Type: llm.EventToolUse,
@@ -826,7 +825,7 @@ func (c *Client) buildAssistantMessage(apiReq *responsesRequest, msg llm.Message
 				textParts = nil
 			}
 			// Serialize tool input to JSON string
-			inputJSON, err := json.Marshal(part.ToolInput)
+			inputJSON, err := json.Marshal(llm.ToolInputObject(part.ToolInput))
 			if err != nil {
 				slog.Debug("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
 				inputJSON = []byte("{}")
@@ -901,10 +900,9 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 				}
 			}
 		case "function_call":
-			var input any
-			if err := json.Unmarshal([]byte(item.Arguments), &input); err != nil {
+			input, err := llm.DecodeToolInput(item.Arguments)
+			if err != nil {
 				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", item.Name, "error", err)
-				input = item.Arguments
 			}
 			resp.ToolCalls = append(resp.ToolCalls, llm.ToolCall{
 				ID:    item.CallID,

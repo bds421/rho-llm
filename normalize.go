@@ -185,10 +185,12 @@ func isVersionSuffixOf(long, short string) bool {
 	return ok && versionSuffix.MatchString(rest)
 }
 
-// uniqueToolID returns the first "<base>#<n>" not already present in used.
+// uniqueToolID returns the first "<base>_dup<n>" not already present in used.
+// The suffix keeps to [a-zA-Z0-9_-], the tool-ID pattern Anthropic enforces,
+// so a renamed ID stays valid on every provider (B7).
 func uniqueToolID(base string, used map[string]bool) string {
 	for i := 1; ; i++ {
-		cand := fmt.Sprintf("%s#%d", base, i)
+		cand := fmt.Sprintf("%s_dup%d", base, i)
 		if !used[cand] {
 			return cand
 		}

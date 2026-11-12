@@ -333,6 +333,11 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		}
 	}
 
+	// functionResponse.name must be the called function's name. Look it up
+	// from the call in the same transcript: IDs are opaque once normalization
+	// renamed a duplicate or another provider made the call (B6).
+	toolNames := toolNamesByID(req.Messages)
+
 	// Convert messages
 	for _, msg := range req.Messages {
 		content := geminiContent{}
@@ -396,7 +401,7 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				gp := geminiPart{
 					FunctionCall: &geminiFunctionCall{
 						Name: part.ToolName,
-						Args: part.ToolInput,
+						Args: llm.ToolInputObject(part.ToolInput),
 					},
 				}
 				// Gemini 3: thoughtSignature is at the Part level, sibling to functionCall
@@ -406,7 +411,10 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				content.Parts = append(content.Parts, gp)
 
 			case llm.ContentToolResult:
-				funcName := resolveToolName(part.ToolResultID)
+				funcName, ok := toolNames[part.ToolResultID]
+				if !ok {
+					funcName = resolveToolName(part.ToolResultID)
+				}
 				content.Parts = append(content.Parts, geminiPart{
 					FunctionResponse: &geminiFunctionResponse{
 						Name: funcName,
@@ -746,12 +754,26 @@ func normalizeStopReason(reason string) string {
 //
 // Format: "call_<index>_<name>" where index ensures uniqueness for parallel calls.
 
+// toolNamesByID maps every tool-use ID in msgs to its function name.
+func toolNamesByID(msgs []llm.Message) map[string]string {
+	names := make(map[string]string)
+	for _, m := range msgs {
+		for _, p := range m.Content {
+			if p.Type == llm.ContentToolUse && p.ToolUseID != "" && p.ToolName != "" {
+				names[p.ToolUseID] = p.ToolName
+			}
+		}
+	}
+	return names
+}
+
 // makeToolCallID generates a synthetic tool call ID. See resolveToolName for inverse.
 func makeToolCallID(index int, name string) string {
 	return fmt.Sprintf("call_%d_%s", index, name)
 }
 
-// resolveToolName recovers the function name from a synthetic tool_use_id.
+// resolveToolName recovers the function name from a synthetic tool_use_id when
+// the transcript does not carry the call (toolNamesByID finds no match).
 // It is the strict inverse of makeToolCallID. Values outside the current
 // synthetic-ID grammar pass through unchanged; callers must not reinterpret
 // an older or provider-owned ID as a Gemini function name.

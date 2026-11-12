@@ -536,10 +536,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					})
 				}
 			case llm.ContentToolUse:
-				input := part.ToolInput
-				if input == nil {
-					input = map[string]any{} // Anthropic requires input to be an object, not null
-				}
+				input := llm.ToolInputObject(part.ToolInput) // Anthropic requires an object
 				apiMsg.Content = append(apiMsg.Content, map[string]any{
 					"type":  "tool_use",
 					"id":    part.ToolUseID,
@@ -859,11 +856,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		if currentToolCall == nil {
 			return true
 		}
-		var input any
-		raw := inputBuffer.String()
-		if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		input, err := llm.DecodeToolInput(inputBuffer.String())
+		if err != nil {
 			slog.Debug("failed to parse tool input JSON", "provider", "anthropic", "tool", currentToolCall.Name, "error", err)
-			input = raw
 		}
 		currentToolCall.Input = input
 		tc := currentToolCall

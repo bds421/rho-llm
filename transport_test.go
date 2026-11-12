@@ -68,3 +68,33 @@ func TestNewJSONRequest(t *testing.T) {
 		t.Errorf("body = %q", body)
 	}
 }
+
+// The space after "data:" is optional in the SSE spec. Lines without it were
+// skipped, so a spec-valid stream from a gateway that omits the space ended
+// as a retryable "unexpected EOF" in every adapter (B5).
+func TestSSEDataAcceptsBothSpacings(t *testing.T) {
+	cases := []struct {
+		line string
+		data string
+		ok   bool
+	}{
+		{`data: {"a":1}`, `{"a":1}`, true},
+		{`data:{"a":1}`, `{"a":1}`, true},
+		{`data:  {"a":1}`, ` {"a":1}`, true}, // only one space is part of the syntax
+		{`data: [DONE]`, `[DONE]`, true},
+		{`data:[DONE]`, `[DONE]`, true},
+		{`data: `, ``, false}, // keep-alive
+		{`data:`, ``, false},
+		{`event: message_start`, ``, false},
+		{`: comment`, ``, false},
+		{``, ``, false},
+		{`datax: {}`, ``, false},
+		{` data: {}`, ``, false},
+	}
+	for _, tc := range cases {
+		data, ok := llm.SSEData(tc.line)
+		if data != tc.data || ok != tc.ok {
+			t.Errorf("SSEData(%q) = %q, %v; want %q, %v", tc.line, data, ok, tc.data, tc.ok)
+		}
+	}
+}

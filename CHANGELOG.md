@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **An API key was sent to a redirect target on the second hop** (B1). The
+  redirect policy compared each hop with the previous one, but net/http copies
+  the original request's headers onto every hop. A chain A → B → B/other
+  stripped the key on the first hop and sent `x-api-key` / `x-goog-api-key`
+  (and `Authorization`, when B shared A's hostname on another port) to B on the
+  second. Every hop is now compared with the original request.
+
+### Fixed
+
+- **openai_compat: a provider error in the stream ended as a successful turn**
+  (B2). An error chunk (`data: {"error":…}`, as OpenRouter, vLLM and Together
+  send after the 200), with or without `[DONE]` after it, ended as `end_turn`
+  with truncated content, or as a retryable "unexpected EOF" that re-sent a
+  400. `finish_reason: "error"` ended as stop reason `"error"` without an
+  error. Both now end the stream with an `*APIError` whose status comes from the
+  error's numeric code or type (`invalid_api_key` → 401, `rate_limit_exceeded`
+  → 429, unknown → 500), so `IsRetryable` and failover classify it like the
+  same error sent as an HTTP status. A 200 `Complete` response that carries
+  only an error object returns that error instead of an empty response.
+- **SSE lines without a space after `data:` were ignored by every adapter**
+  (B5). The space is optional in the SSE spec; a stream from a gateway that
+  omits it ended as a retryable "unexpected EOF".
+- **Gemini tool results carried the wrong function name** (B6). Gemini numbers
+  its synthetic tool-call IDs from 0 in every response, so a session that called
+  the same tool first in two turns produced the same ID twice; normalization
+  renamed the second, and `functionResponse.name` — parsed back out of the ID —
+  became `get_weather#1`. After a handoff the other provider's ID (`toolu_…`)
+  was sent as the name. The name now comes from the matching tool call in the
+  transcript; parsing the synthetic ID is only the fallback.
+- **Renamed duplicate tool-call IDs were invalid on Anthropic** (B7).
+  `NormalizeForProvider` renamed a repeated ID to `<id>#<n>`; Anthropic accepts
+  only `[a-zA-Z0-9_-]`. The suffix is now `_dup<n>`.
+- **A tool call without arguments was stored as the string `""`** (B8). An
+  empty Anthropic `partial_json` (or none) and `"arguments":""` from OpenAI-
+  compatible servers and the Responses API became `ToolCall.Input == ""`, and the
+  next request replayed `"input":""` / `"arguments":"\"\""`. Empty and `null`
+  arguments now decode to `{}`, and every adapter sends an object when it replays
+  a tool call, including from transcripts persisted before this fix. New
+  `DecodeToolInput` and `ToolInputObject` share this between the adapters.
+
 ## [0.17.0] - 2026-11-11
 
 ### Removed

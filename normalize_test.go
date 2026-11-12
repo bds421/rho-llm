@@ -3,6 +3,7 @@ package llm_test
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"testing"
 
 	llm "github.com/bds421/rho-llm"
@@ -455,5 +456,53 @@ func TestNormalizeForProviderKeepsSameProviderThinking(t *testing.T) {
 		if p.Type == llm.ContentThinking {
 			t.Errorf("cross-provider thinking should be degraded, got %+v", diff[0].Content)
 		}
+	}
+}
+
+// Renamed duplicate IDs must stay inside [a-zA-Z0-9_-]: Anthropic rejects any
+// other tool_use.id, and the old "#n" suffix broke exactly the Gemini →
+// Anthropic handoff dedup exists for (B7).
+func TestNormalizeDedupIDsMatchTheAnthropicPattern(t *testing.T) {
+	valid := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	var msgs []llm.Message
+	for i := 0; i < 4; i++ {
+		msgs = append(msgs,
+			llm.Message{Role: llm.RoleAssistant, Provider: "gemini", Content: []llm.ContentPart{
+				{Type: llm.ContentToolUse, ToolUseID: "call_0_get_weather", ToolName: "get_weather", ToolInput: map[string]any{}},
+			}},
+			llm.NewToolResultMessage("call_0_get_weather", "r", false),
+		)
+	}
+	// A literal ID equal to the first rename target must not collide.
+	msgs = append(msgs,
+		llm.Message{Role: llm.RoleAssistant, Provider: "gemini", Content: []llm.ContentPart{
+			{Type: llm.ContentToolUse, ToolUseID: "call_0_get_weather_dup1", ToolName: "get_weather", ToolInput: map[string]any{}},
+		}},
+		llm.NewToolResultMessage("call_0_get_weather_dup1", "r", false),
+	)
+	out := llm.NormalizeForProvider(msgs, "anthropic")
+	seen := map[string]bool{}
+	results := 0
+	for _, m := range out {
+		for _, p := range m.Content {
+			switch p.Type {
+			case llm.ContentToolUse:
+				if !valid.MatchString(p.ToolUseID) {
+					t.Errorf("tool_use id %q is outside [a-zA-Z0-9_-]", p.ToolUseID)
+				}
+				if seen[p.ToolUseID] {
+					t.Errorf("tool_use id %q emitted twice", p.ToolUseID)
+				}
+				seen[p.ToolUseID] = true
+			case llm.ContentToolResult:
+				results++
+				if !seen[p.ToolResultID] {
+					t.Errorf("tool_result %q pairs with no emitted call", p.ToolResultID)
+				}
+			}
+		}
+	}
+	if len(seen) != 5 || results != 5 {
+		t.Fatalf("got %d calls and %d results, want 5 each", len(seen), results)
 	}
 }
