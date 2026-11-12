@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning on OpenAI-compatible hosts** (P2, with the per-host data of P3).
+  `openai_compat` refused every `ThinkingLevel`. It now sends it in each
+  host's documented format, kept as data in `provider/openaicompat/compat.go`:
+  `reasoning_effort` (OpenAI, Groq, Fireworks, DeepInfra, Cerebras, NVIDIA,
+  vLLM, Ollama, LM Studio, Kimi K3), `thinking: {type: "enabled"}` (DeepSeek,
+  with `reasoning_effort`; older Kimi; Z.ai), `enable_thinking` (DashScope),
+  `reasoning: {effort}` (OpenRouter) and `reasoning: {enabled}` (Together). A
+  custom provider name is matched by its BaseURL. Hosts without a documented
+  control still refuse the level. Reasoning read from `reasoning_content` or
+  `reasoning` records its field in the new `ContentPart.ReasoningField` /
+  `Response.ReasoningField` / `StreamEvent.ReasoningField`, and is sent back on
+  later assistant turns to hosts that document taking it (DeepSeek, Kimi,
+  Z.ai, DashScope, MiniMax, OpenRouter, Together, Fireworks); DeepSeek, which
+  answers a 400 when a tool conversation does not pass `reasoning_content`
+  back, also gets `""` on turns without reasoning. Normalization keeps such
+  reasoning for the same provider. Thinking models on these hosts now get
+  `CapabilityReasoning` by default. Checked against the hosts' docs
+  (2026-11-12), not live.
+
 - **Overflow, quota and retry-advice classification** (P5, after pi-ai's
   `overflow.ts` / `retry.ts`). `IsContextLength` now recognises an HTTP 413
   and the overflow messages of xAI, Groq, OpenRouter, Together, llama.cpp,

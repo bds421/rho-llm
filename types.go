@@ -337,6 +337,13 @@ type ContentPart struct {
 	ToolInput        any    `json:"input,omitempty"`
 	ThoughtSignature string `json:"thought_signature,omitempty"` // Gemini 3: preserved for tool result round-trip
 
+	// ReasoningField (thinking parts, openai_compat) is the response field
+	// the reasoning arrived in ("reasoning_content" or "reasoning"). A host
+	// that takes reasoning back (DeepSeek, Kimi, Qwen, …) gets it on later
+	// turns under the same name; normalization keeps such a part for the
+	// same provider instead of dropping it as unsigned.
+	ReasoningField string `json:"reasoning_field,omitempty"`
+
 	// Tool result (from user)
 	ToolResultID      string `json:"tool_use_id,omitempty"`
 	ToolResultContent string `json:"content,omitempty"`
@@ -642,6 +649,7 @@ func NewAssistantMessage(resp *Response) Message {
 			Thinking:          resp.Thinking,
 			ThinkingSignature: resp.ThinkingSignature,
 			Redacted:          resp.ThinkingRedacted,
+			ReasoningField:    resp.ReasoningField,
 		})
 	}
 	if resp.Content != "" {
@@ -842,6 +850,7 @@ type Response struct {
 	Thinking          string     `json:"thinking"`                     // Extended thinking content
 	ThinkingSignature string     `json:"thinking_signature,omitempty"` // Anthropic: authenticates the thinking block for replay on the next turn
 	ThinkingRedacted  bool       `json:"thinking_redacted,omitempty"`  // Anthropic: thinking block is redacted (encrypted)
+	ReasoningField    string     `json:"reasoning_field,omitempty"`    // openai_compat: the field Thinking arrived in (see ContentPart.ReasoningField)
 	StopReason        string     `json:"stop_reason"`                  // end_turn, tool_use, max_tokens
 	RawStopReason     string     `json:"raw_stop_reason,omitempty"`    // the provider's own stop reason before normalization (e.g. "STOP", "length", "stop_sequence")
 	// InputTokens is the UNCACHED input only. Cache-token contract (identical
@@ -910,6 +919,9 @@ type StreamEvent struct {
 	// assistant turn can be reassembled with a replayable thinking block.
 	ThinkingSignature string `json:"thinking_signature,omitempty"`
 	ThinkingRedacted  bool   `json:"thinking_redacted,omitempty"`
+	// ReasoningField (EventDone, openai_compat): the field the streamed
+	// reasoning arrived in, as on Response.
+	ReasoningField string `json:"reasoning_field,omitempty"`
 
 	// Usage event. InputTokens is the uncached input only — same disjoint
 	// cache-token contract as Response.InputTokens.

@@ -307,6 +307,9 @@ func protocolCapabilityEnvelope(protocol string) CapabilitySet {
 			CapabilityVision, CapabilityDocumentInput, CapabilityEmbeddings,
 			CapabilityBatch, CapabilityImageGeneration, CapabilitySpeechSynthesis,
 			CapabilityTranscription, CapabilityTemperature,
+			// Reasoning goes out in each host's dialect; a host without a
+			// documented control refuses the level in the adapter (P2).
+			CapabilityReasoning,
 		)
 	default:
 		return 0
@@ -343,7 +346,7 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 	if !info.NoToolSupport {
 		set |= CapabilitySet(CapabilityTools)
 	}
-	if info.SupportsThinking || info.ResponsesAPI {
+	if info.SupportsThinking || info.ResponsesAPI || (info.Thinking && compatReasoningHosts[canonicalProvider(info.Provider)]) {
 		set |= CapabilitySet(CapabilityReasoning)
 	}
 	if supportsSamplingTemperature(info) {
@@ -466,4 +469,15 @@ func AnthropicSamplingError(cfg Config, req Request) error {
 		}
 	}
 	return nil
+}
+
+// compatReasoningHosts are the OpenAI-compatible hosts with a documented
+// reasoning control (the adapter's dialect table is provider/openaicompat
+// compat.go; keep the two in step). A Thinking model there gets
+// CapabilityReasoning by default (P2).
+var compatReasoningHosts = map[string]bool{
+	"deepseek": true, "moonshot": true, "zai": true, "dashscope": true,
+	"openrouter": true, "together": true, "fireworks": true, "cerebras": true,
+	"deepinfra": true, "groq": true, "nvidia": true, "vllm": true,
+	"ollama": true, "lmstudio": true, "openai": true,
 }

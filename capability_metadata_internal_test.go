@@ -237,9 +237,14 @@ func TestReasoningCapabilityMeansEffortIsEnforceable(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Responses reasoning effort rejected: %v", err)
 	}
+	// A thinking model on an OpenAI-compatible host with a documented control
+	// (Ollama's reasoning_effort) is enforceable since P2.
+	if err := ValidateRequestCapabilities(Config{Provider: "ollama", Model: "qwen3:8b"}, Request{ThinkingLevel: ThinkingLow}, false); err != nil {
+		t.Fatalf("ollama reasoning effort rejected: %v", err)
+	}
 	for _, cfg := range []Config{
 		{Provider: "openai", Model: "gpt-4.1-mini"},
-		{Provider: "ollama", Model: "qwen3:8b"},
+		{Provider: "minimax", Model: "MiniMax-M3.1-Flash"}, // thinking, but no control mapped
 		{Provider: "gemini", Model: "gemini-2.5-flash"},
 	} {
 		if err := ValidateRequestCapabilities(cfg, Request{ThinkingLevel: ThinkingLow}, false); err == nil {

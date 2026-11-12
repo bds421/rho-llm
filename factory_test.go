@@ -321,10 +321,12 @@ func TestNegativeTemperatureRejected(t *testing.T) {
 	}
 }
 
-// TestThinkingLevelRejectedForOpenAICompat verifies that setting ThinkingLevel
-// on an OpenAI-compatible provider returns an error instead of silently dropping it.
+// TestThinkingLevelRejectedForOpenAICompat verifies that ThinkingLevel on an
+// OpenAI-compatible host without a documented reasoning control returns an
+// error instead of being dropped silently. Hosts with one (openai, groq,
+// deepseek, …) send it in their own dialect since P2.
 func TestThinkingLevelRejectedForOpenAICompat(t *testing.T) {
-	providers := []string{"openai", "xai", "groq", "mistral"}
+	providers := []string{"xai", "mistral", "cohere", "minimax"}
 
 	for _, provider := range providers {
 		t.Run(provider, func(t *testing.T) {
@@ -353,7 +355,7 @@ func TestThinkingLevelRejectedForOpenAICompat(t *testing.T) {
 			if err == nil {
 				t.Fatal("Complete with ThinkingLevel on openai_compat should fail")
 			}
-			if !strings.Contains(err.Error(), "reasoning") {
+			if !strings.Contains(err.Error(), "ThinkingLevel is not supported") {
 				t.Errorf("error = %q, want pre-transport reasoning rejection", err.Error())
 			}
 		})

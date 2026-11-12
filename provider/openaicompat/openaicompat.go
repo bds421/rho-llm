@@ -206,6 +206,21 @@ type openaiRequest struct {
 	ToolChoice          any                  `json:"tool_choice,omitempty"`
 	Stop                []string             `json:"stop,omitempty"`
 	ResponseFormat      any                  `json:"response_format,omitempty"`
+
+	// Reasoning controls; which one a host takes is in compat.go (P2).
+	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
+	Thinking        *openaiThinking  `json:"thinking,omitempty"`
+	EnableThinking  *bool            `json:"enable_thinking,omitempty"`
+	Reasoning       *openaiReasoning `json:"reasoning,omitempty"`
+}
+
+type openaiThinking struct {
+	Type string `json:"type"`
+}
+
+type openaiReasoning struct {
+	Effort  string `json:"effort,omitempty"`
+	Enabled *bool  `json:"enabled,omitempty"`
 }
 
 type openaiStreamOptions struct {
@@ -215,8 +230,8 @@ type openaiStreamOptions struct {
 type openaiMessage struct {
 	Role             string           `json:"role"`
 	Content          any              `json:"content"`                     // string or array
-	ReasoningContent string           `json:"reasoning_content,omitempty"` // thinking/reasoning output (OpenAI, DeepSeek, etc.)
-	Reasoning        string           `json:"reasoning,omitempty"`         // thinking/reasoning output (Ollama)
+	ReasoningContent *string          `json:"reasoning_content,omitempty"` // reasoning (DeepSeek, Kimi, Qwen, …); a pointer so DeepSeek can be sent ""
+	Reasoning        *string          `json:"reasoning,omitempty"`         // reasoning (Ollama, vLLM, OpenRouter, …)
 	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 }
@@ -324,6 +339,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		Model:  model,
 		Stream: stream,
 	}
+	compat := detectCompat(c.providerName, c.baseURL)
 
 	// OpenAI and xAI reasoning models require max_completion_tokens instead
 	// of max_tokens, and reject custom temperature. Other providers (Mistral,
@@ -452,6 +468,12 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 			oaiMsg.Content = strings.Join(textParts, "\n")
 		}
 
+		// Reasoning from earlier turns goes back to a host that takes it,
+		// under the field it arrived in (P2).
+		if msg.Role == llm.RoleAssistant && compat.replayReasoning {
+			replayReasoning(&oaiMsg, msg.Content, compat.emptyReasoningOnAssistant)
+		}
+
 		// Check for tool calls in assistant messages
 		if msg.Role == llm.RoleAssistant {
 			for _, part := range msg.Content {
@@ -477,9 +499,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		}
 
 		// Skip a message left with neither content nor tool calls — e.g. an
-		// assistant turn that carried only a thinking block (which this protocol
-		// does not replay). OpenAI rejects a message with null content and no
-		// tool_calls.
+		// assistant turn that carried only a thinking block. OpenAI rejects a
+		// message with null content and no tool_calls; reasoning alone is not
+		// a turn a host can continue from.
 		if oaiMsg.Content == nil && len(oaiMsg.ToolCalls) == 0 {
 			continue
 		}
@@ -487,17 +509,19 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		apiReq.Messages = append(apiReq.Messages, oaiMsg)
 	}
 
-	// Reject ThinkingLevel — OpenAI-compatible providers do not support it.
-	// Without this check, the field is silently dropped and users get no feedback.
+	// ThinkingLevel goes out in the host's own dialect (compat.go, P2). A host
+	// without a documented control refuses it rather than dropping it
+	// silently. No level set: nothing is sent and the host default applies.
 	thinkingLevel := req.ThinkingLevel
 	if thinkingLevel == llm.ThinkingNone && c.config.ThinkingLevel != llm.ThinkingNone {
 		thinkingLevel = c.config.ThinkingLevel
 	}
 	if thinkingLevel != llm.ThinkingNone {
-		return openaiRequest{}, fmt.Errorf(
-			"%s adapter does not support ThinkingLevel (set on model %q); "+
-				"ThinkingLevel is only supported by anthropic and gemini providers",
-			c.providerName, apiReq.Model)
+		if !compat.applyThinking(&apiReq, thinkingLevel, apiReq.Model) {
+			return openaiRequest{}, fmt.Errorf(
+				"%s: ThinkingLevel is not supported on this host (model %q); set the host's own field through SamplingParams",
+				c.providerName, apiReq.Model)
+		}
 	}
 	if req.Effort != "" {
 		return openaiRequest{}, fmt.Errorf("%s adapter does not support Effort (Chat Completions has no effort control here)", c.providerName)
@@ -610,15 +634,18 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 		// Extract reasoning/thinking content.
 		// Most providers use "reasoning_content"; Ollama uses "reasoning";
 		// Mistral reasoning models send thinking chunks inside content.
-		reasoning := choice.Message.ReasoningContent
-		if reasoning == "" {
-			reasoning = choice.Message.Reasoning
+		reasoning, field := "", ""
+		if v := choice.Message.ReasoningContent; v != nil && *v != "" {
+			reasoning, field = *v, "reasoning_content"
+		} else if v := choice.Message.Reasoning; v != nil && *v != "" {
+			reasoning, field = *v, "reasoning"
 		}
 		if reasoning == "" {
 			reasoning = chunkThinking
 		}
 		if reasoning != "" {
 			resp.Thinking = reasoning
+			resp.ReasoningField = field
 		}
 
 		// Extract tool calls
@@ -652,6 +679,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// a usage chunk (connection dropped, provider doesn't support it), callers
 	// can distinguish "not reported" from "zero tokens" (0).
 	var finishReason string
+	var reasoningField string // the delta field reasoning arrived in, for replay
 	// rawFinishReason keeps the provider's own finish_reason verbatim. It stays
 	// EMPTY when the stop reason is synthesized below (a [DONE] with no
 	// finish_reason), because the provider never sent one — reporting a raw
@@ -780,8 +808,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// Most providers use "reasoning_content"; Ollama uses "reasoning";
 			// Mistral reasoning models send thinking chunks inside content.
 			reasoningDelta := choice.Delta.ReasoningContent
-			if reasoningDelta == "" {
-				reasoningDelta = choice.Delta.Reasoning
+			if reasoningDelta != "" {
+				reasoningField = "reasoning_content"
+			} else if reasoningDelta = choice.Delta.Reasoning; reasoningDelta != "" && reasoningField == "" {
+				reasoningField = "reasoning"
 			}
 			if reasoningDelta == "" {
 				reasoningDelta = chunkThinking
@@ -893,6 +923,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			InputTokens:     inputTokens,
 			OutputTokens:    outputTokens,
 			CacheReadTokens: cacheReadTokens,
+			ReasoningField:  reasoningField,
 		}, nil) {
 			return
 		}

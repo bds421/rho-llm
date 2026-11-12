@@ -133,13 +133,15 @@ func normalize(msgs []Message, provider, model string) []Message {
 				// continuation. Elsewhere a signed-but-empty block has nothing to
 				// preserve and is dropped.
 				//
-				// Unsigned thinking from the same provider is dropped: its own
-				// adapter does not replay it (only signed Anthropic blocks go
-				// back), and as text the model read its reasoning — every Gemini
-				// thought summary, a DeepSeek reasoning_content — as something
-				// it had said (B24). Only a handoff turns reasoning into text.
+				// Other unsigned thinking from the same provider is dropped: its
+				// adapter does not replay it, and as text the model read its
+				// reasoning — every Gemini thought summary — as something it had
+				// said (B24). Only a handoff turns reasoning into text. Reasoning an
+				// OpenAI-compatible host returned in a named field
+				// (ReasoningField) goes back to that host unchanged: DeepSeek
+				// and others require it on tool conversations (P2).
 				switch {
-				case sameProvider && (p.Redacted || p.ThinkingSignature != ""):
+				case sameProvider && (p.Redacted || p.ThinkingSignature != "" || (p.ReasoningField != "" && p.Thinking != "")):
 					nm.Content = append(nm.Content, p)
 				case sameProvider:
 					// unsigned, same provider → drop

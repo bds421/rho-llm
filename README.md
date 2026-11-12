@@ -422,7 +422,21 @@ see [Cost Estimation](#cost-estimation).
 
 Many modern models support reasoning (chain-of-thought) capabilities where they expose their internal thought processes before outputting the final answer. 
 
-You can check if a given model natively supports extended thinking by checking the registry. ThinkingLevel is supported by `anthropic`, `gemini`, and `openai` (via the Responses API for GPT-5 family models, where it maps to reasoning effort). The OpenAI Chat Completions adapter (`openai_compat`) returns an error if ThinkingLevel is set — use the `openai` provider instead, which auto-routes GPT-5 models to the Responses API. All four adapters **parse** thinking content from responses: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, OpenAI Responses via `reasoning_summary`, and OpenAI-compat via the `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.).
+You can check if a given model natively supports extended thinking by checking the registry. ThinkingLevel is supported by `anthropic`, `gemini`, and `openai` (via the Responses API for GPT-5 family models, where it maps to reasoning effort). The OpenAI-compatible adapter (`openai_compat`) sends ThinkingLevel in each host's own format:
+
+| Hosts | Sent for a ThinkingLevel |
+|---|---|
+| OpenAI, Groq, Fireworks, DeepInfra, Cerebras, NVIDIA, vLLM, Ollama, LM Studio | `reasoning_effort: "<level>"` |
+| DeepSeek | `thinking: {type: "enabled"}` + `reasoning_effort` |
+| Kimi K3 / K3.1 Pro | `reasoning_effort` (thinking is always on) |
+| Kimi K2.x, Z.ai GLM | `thinking: {type: "enabled"}` |
+| DashScope / Qwen | `enable_thinking: true` |
+| OpenRouter | `reasoning: {effort: "<level>"}` |
+| Together | `reasoning: {enabled: true}` |
+
+The level name (`low`, `high`, `max`, …) goes out as the effort, and the host checks it against what the model accepts. With no level set nothing is sent and the host's default applies. Mistral, Cohere, xAI, MiniMax, Perplexity and unknown hosts return an error for a ThinkingLevel; pass a host-specific field through `SamplingParams` there. A custom provider name is matched by its `BaseURL` (e.g. `api.deepseek.com`). For GPT-5 models use the `openai` provider, which routes them to the Responses API.
+
+All four adapters **parse** thinking content: Anthropic via `thinking` blocks, Gemini via `thought: true` parts, OpenAI Responses via `reasoning_summary`, and OpenAI-compat via `reasoning_content` or `reasoning`. Hosts that take reasoning back on later turns (DeepSeek, Kimi, Z.ai, DashScope, MiniMax, OpenRouter, Together, Fireworks) get it under the field it arrived in, tracked as `ContentPart.ReasoningField`; DeepSeek requires it in tool conversations and answers a 400 without it. Other hosts never receive it.
 
 ```go
 info, ok := llm.GetModelInfo("claude-opus-4-6")
@@ -539,7 +553,7 @@ if err != nil {
 }
 ```
 
-On a handoff, `NormalizeForModel` (applied automatically by `Session`; it and `NormalizeForProvider` are exported for direct `Client` users) prepares the transcript for the target model: thinking from a **different model** is dropped, because a model shown another model's reasoning tends to imitate it; thinking from the same model is replayed verbatim only to the **same** provider with a valid signature (Anthropic requires the original signature); unsigned thinking from that provider is dropped (no adapter replays it), and thinking handed to **another** provider degrades to plain text; orphaned tool calls get a synthetic error result (every provider rejects an unanswered tool call); dangling tool results are dropped; and errored/aborted turns are dropped. Text, images, documents, and tool calls carry over unchanged.
+On a handoff, `NormalizeForModel` (applied automatically by `Session`; it and `NormalizeForProvider` are exported for direct `Client` users) prepares the transcript for the target model: thinking from a **different model** is dropped, because a model shown another model's reasoning tends to imitate it; thinking from the same model is replayed verbatim only to the **same** provider with a valid signature (Anthropic requires the original signature); unsigned thinking from that provider is dropped unless it carries a `ReasoningField` (OpenAI-compatible reasoning the host takes back), and thinking handed to **another** provider degrades to plain text; orphaned tool calls get a synthetic error result (every provider rejects an unanswered tool call); dangling tool results are dropped; and errored/aborted turns are dropped. Text, images, documents, and tool calls carry over unchanged.
 
 > **Thinking replay requires thinking enabled.** Anthropic only accepts replayed thinking blocks when extended thinking is on for the request, so keep it enabled across turns (e.g. `llm.NewSession(client, llm.WithBaseRequest(llm.Request{ThinkingLevel: llm.ThinkingLow}))`, or set `ThinkingLevel` on the client `Config`). With thinking off, historical thinking blocks are simply dropped (no error). A failed `Send`/`Stream` rolls back its appended input, so the transcript stays consistent and retryable.
 

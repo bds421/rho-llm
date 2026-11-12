@@ -127,9 +127,11 @@ Layered decorator stack over a stateless `Client` interface (`Complete`/`Stream`
   `ThoughtSignature`); assistant messages carry `Provider`/`Model`/`StopReason` provenance.
 - **Cross-provider handoff is lossy by design** for reasoning (signatures don't transfer) but
   lossless for text/images/documents/tools. All handoff translation belongs in one place —
-  `NormalizeForProvider` — not scattered across adapters. Only the Anthropic adapter replays
-  thinking blocks (it captures the signature); other adapters skip thinking parts, and
-  normalization degrades cross-provider thinking to text before it reaches them.
+  `NormalizeForProvider` — not scattered across adapters. Two adapters replay thinking: Anthropic
+  (signed blocks) and openai_compat (reasoning tagged with `ReasoningField`, only to hosts that
+  document taking it back — DeepSeek requires it with tools). Gemini and Responses skip thinking
+  parts, and normalization degrades cross-provider thinking to text before it reaches them.
+  Per-host Chat Completions differences live as data in `provider/openaicompat/compat.go`.
 - **Serialized formats are versioned and language-agnostic.** Stamp a `schema_version`, key by
   explicit JSON tags, and never tie the on-disk shape to Go type/package names (so persisted
   conversations survive refactors).

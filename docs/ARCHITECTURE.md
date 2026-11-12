@@ -636,9 +636,23 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 1. **API-Controlled Reasoning (`SupportsThinking: true` or `ResponsesAPI: true`)**
    `ThinkingLevel` maps to a token budget or effort according to the model and
    protocol. Anthropic, Gemini, and OpenAI Responses support requesting reasoning
-   for reviewed models. The OpenAI-compatible Chat Completions adapter rejects an
-   explicit `ThinkingLevel`; it can still parse reasoning returned by models that
-   reason by default. All four adapters parse reasoning output where available.
+   for reviewed models. The OpenAI-compatible Chat Completions adapter sends
+   `ThinkingLevel` in each host's own dialect, read from a per-host table
+   (`provider/openaicompat/compat.go`, detected from the provider name, else the
+   BaseURL): `reasoning_effort` (OpenAI, Groq, Fireworks, DeepInfra, Cerebras,
+   NVIDIA, vLLM, Ollama, LM Studio), `thinking:{type:enabled}` plus
+   `reasoning_effort` (DeepSeek), `reasoning_effort` (Kimi K3) or
+   `thinking:{type:enabled}` (older Kimi, Z.ai), `enable_thinking` (DashScope),
+   `reasoning:{effort}` (OpenRouter), `reasoning:{enabled}` (Together). The level
+   name goes out as the effort and the host validates it; with no level nothing is
+   sent. A host without a documented control (Mistral, Cohere, xAI, MiniMax,
+   Perplexity, unknown hosts) refuses the level. Reasoning is read from
+   `reasoning_content` or `reasoning`, and the field it came in is kept as
+   `ReasoningField` so a host that takes reasoning back (DeepSeek, Kimi, Z.ai,
+   DashScope, MiniMax, OpenRouter, Together, Fireworks) gets it on later
+   assistant turns under the same name; DeepSeek also gets `reasoning_content: ""`
+   on assistant turns without reasoning. All four adapters parse reasoning output
+   where available.
 
    **Thinking block binding (Anthropic).** Newer Claude models bind each thinking
    block to the conversation that produced it (system prompt, tools, earlier
@@ -856,8 +870,9 @@ for all handoff concerns and never mutates its input:
    a recorded `Model` fall through to step 1.
 1. **Thinking degradation** — a thinking block is kept verbatim only when `msg.Provider ==
    targetProvider` *and* it carries a provider-valid signature (or is redacted). Unsigned
-   thinking from the target provider itself is dropped (no adapter replays it, and as text the
-   model would read its reasoning as something it said). Thinking from another provider is
+   thinking from the target provider itself is dropped (as text the model would read its
+   reasoning as something it said), except reasoning tagged with `ReasoningField`, which the
+   openai_compat adapter sends back to hosts that take it. Thinking from another provider is
    converted to a plain text block. (A foreign/unsigned thinking block would be rejected, e.g.
    Anthropic requires the original `signature` on replay.)
 2. **Orphan tool-call repair** — a `tool_use` with no matching `tool_result` anywhere gets a
@@ -866,10 +881,12 @@ for all handoff concerns and never mutates its input:
    along with the tool results that referenced their now-gone calls.
 4. **Empty-message drop** — messages left contentless by the above are removed.
 
-Only the Anthropic adapter replays thinking blocks (it captures the `signature` from both the
+The Anthropic adapter replays signed thinking blocks (it captures the `signature` from both the
 non-streaming response and the streaming `signature_delta`, surfaced on `EventDone` as
-`StreamEvent.ThinkingSignature`). The other three adapters skip thinking parts by
-switch-omission; by the time history reaches them, normalization has already degraded any
+`StreamEvent.ThinkingSignature`). The openai_compat adapter replays reasoning tagged with
+`ReasoningField` to hosts that take it back; normalization keeps such a part for the same
+provider (and drops other unsigned same-provider thinking). Gemini and Responses skip thinking
+parts by switch-omission; by the time history reaches them, normalization has already degraded any
 cross-provider thinking to text. So **cross-provider handoff is intentionally lossy for
 reasoning** (signatures don't transfer) but lossless for text, images, documents, and tools —
 matching the reality that every surveyed library either drops reasoning on a switch or pins it

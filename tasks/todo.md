@@ -44,16 +44,13 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
 ---
 
 ## 🟠 Next up — features (minor releases)
-- **P2 — Reasoning on OpenAI-compatible hosts — M.** `openai_compat` refuses any
-  `ThinkingLevel`; DeepSeek, Kimi, Qwen, GLM, OpenRouter, Together, Groq, vLLM support it in
-  host-specific dialects (pi: 11 `thinkingFormat`s, `openai-completions.ts:871-968`). Includes
-  replaying `reasoning_content` on tool-call turns, which DeepSeek V4 / Kimi K3 require
-  (*400 without it unverified*), and reading `reasoning_text` / OpenRouter `reasoning_details`.
-- **P3 — Per-host compat flags as data — M.** Detected defaults from provider/BaseURL,
-  overridable per model (pi `compat-schema.ts`): `max_tokens` vs `max_completion_tokens`,
-  `developer` role, `store:false`, non-null assistant content, tool-ID format, usage field
-  variants (DeepSeek `prompt_cache_hit_tokens`, Kimi top-level `cached_tokens`,
-  `reasoning_tokens`). Replaces scattered `provider == …` checks.
+- **P3 — Per-host compat flags as data, remainder — M.** The reasoning dialects and replay
+  rules are data since P2 (`provider/openaicompat/compat.go`); still scattered: `max_tokens` vs
+  `max_completion_tokens`, `developer` role, `store:false`, non-null assistant content, tool-ID
+  format, usage field variants (DeepSeek `prompt_cache_hit_tokens`, Kimi top-level
+  `cached_tokens`, `reasoning_tokens`), and a per-model override (pi `compat-schema.ts`).
+  Also: OpenRouter `reasoning_details` (structured, signed reasoning) is not read or replayed;
+  per-model effort value maps (Kimi K3 has no `medium`, GLM-5.3 only low/high/max).
 - **P4 — Anthropic message threads — M.** Beta `message-threads-2026-08-12`: send only new
   messages; full request when the prefix changed or the server can't continue.
 - **F1 — Chat fallback + per-attempt usage — M.** `OperationChat` usage events and a

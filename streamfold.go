@@ -71,6 +71,7 @@ func (a *StreamAccumulator) Response() *Response {
 		ServerToolUse:         f.ServerToolUse,
 		Iterations:            f.Iterations,
 		ContainerID:           f.ContainerID,
+		ReasoningField:        f.ReasoningField,
 		InputTransformations:  f.InputTransformations,
 	}
 	// An adapter that assembles the turn (Anthropic) sends it as Parts; the
