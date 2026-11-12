@@ -117,14 +117,17 @@ func defaultRedirectPolicy(_ *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// safeRedirect strips sensitiveHeaders on a cross-origin redirect and, with
-// block set, refuses a redirect target that checkHost refuses (localhost, a
-// private literal, a non-canonical IPv4 host). It then applies next, the
+// safeRedirect strips sensitiveHeaders on a redirect to any origin other than
+// the original request's. net/http copies the original headers onto every hop,
+// so the comparison is with via[0], not the previous hop: A → B → B/other must
+// not hand the key to B on the second hop. With block set, it also refuses a
+// redirect target that checkHost refuses (localhost, a private literal, a
+// non-canonical IPv4 host). It then applies next, the
 // caller's policy; without one it stops after 10 redirects and returns the
 // last response.
 func safeRedirect(block bool, next func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
-		if len(via) > 0 && !sameOrigin(via[len(via)-1].URL, req.URL) {
+		if len(via) > 0 && !sameOrigin(via[0].URL, req.URL) {
 			for _, h := range sensitiveHeaders {
 				req.Header.Del(h)
 			}

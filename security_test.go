@@ -351,6 +351,88 @@ func TestRedirectDoesNotLeakAuthHeaders(t *testing.T) {
 	}
 }
 
+// A redirect chain that leaves the original origin and then stays on the new
+// one: A → B/first → B/second. net/http copies the original request's headers
+// onto every hop, so comparing each hop only with the previous one strips them
+// on A → B and hands them to B on B → B (B1). The second variant keeps the
+// hostname and changes only the port, where Go's own Authorization strip
+// (which compares hostnames) does not help either.
+func TestRedirectChainNeverReturnsKeysToAForeignOrigin(t *testing.T) {
+	for _, foreignHost := range []string{"localhost", "127.0.0.1"} {
+		for _, header := range []string{"Authorization", "x-api-key", "x-goog-api-key"} {
+			var seen []string
+			foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seen = append(seen, r.URL.Path+"="+r.Header.Get(header))
+				if r.URL.Path == "/first" {
+					http.Redirect(w, r, "/second", http.StatusTemporaryRedirect)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			target := strings.Replace(foreign.URL, "127.0.0.1", foreignHost, 1) + "/first"
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+			}))
+
+			req, err := http.NewRequest(http.MethodPost, origin.URL+"/v1/messages", strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set(header, "secret-key-do-not-leak")
+			resp, err := llm.SafeHTTPClient(5 * time.Second).Do(req)
+			if err != nil {
+				t.Fatalf("%s via %s: %v", header, foreignHost, err)
+			}
+			resp.Body.Close()
+			origin.Close()
+			foreign.Close()
+
+			if len(seen) != 2 {
+				t.Fatalf("%s via %s: foreign origin saw %v, want both hops", header, foreignHost, seen)
+			}
+			for _, hop := range seen {
+				if strings.Contains(hop, "secret-key-do-not-leak") {
+					t.Errorf("%s via %s: key reached the foreign origin: %v", header, foreignHost, seen)
+				}
+			}
+		}
+	}
+}
+
+// A chain that goes away and comes back keeps the key on the way back: the
+// original origin is the one the caller sent it to. localhost:<port> is a
+// different origin from 127.0.0.1:<port>.
+func TestRedirectChainBackToTheOriginKeepsKeys(t *testing.T) {
+	var originURL, gotBack string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/back":
+			gotBack = r.Header.Get("x-api-key")
+			w.WriteHeader(http.StatusOK)
+		case "/away":
+			http.Redirect(w, r, originURL+"/back", http.StatusTemporaryRedirect)
+		default:
+			http.Redirect(w, r, strings.Replace(originURL, "127.0.0.1", "localhost", 1)+"/away", http.StatusTemporaryRedirect)
+		}
+	}))
+	defer origin.Close()
+	originURL = origin.URL
+
+	req, err := http.NewRequest(http.MethodGet, origin.URL+"/start", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("x-api-key", "secret-key")
+	resp, err := llm.SafeHTTPClient(5 * time.Second).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if gotBack != "secret-key" {
+		t.Fatalf("back on the original origin the key is %q, want it kept", gotBack)
+	}
+}
+
 // TestRedirectDoesNotLeakAnthropicKey tests redirect stripping for Anthropic's x-api-key.
 func TestRedirectDoesNotLeakAnthropicKey(t *testing.T) {
 	var capturedHeaders http.Header
