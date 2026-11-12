@@ -28,8 +28,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   (`MaxRetries: 10`) a single-key chat client makes 3 attempts, a modality/batch call 10.
   Options: cap DoHTTP at max(1, 3) like chat (fewer retries, lower cost), or let chat use
   `MaxRetries` as the count (more retries). Behaviour change either way.
-- 🟡 **B17 — Stream idle watchdog counts consumer time — S.** Measures since the last `Read`,
-  not time blocked in `Read`; a slow loop body trips a retryable timeout (`config.go:218-227`).
 - 🟢 **B18 — `rc.Release()` in pool `Stream` not deferred** (*suspected*) (`pool.go:613-656`).
 
 ### Session & conversation

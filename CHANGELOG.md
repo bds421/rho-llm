@@ -143,6 +143,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request with `ThinkingLevel` never produced `EventThinking` or
   `Response.Thinking`. It is now sent with every thinking config (per Google's
   thinking docs; not yet confirmed against the live API with this library).
+- **The stream idle timeout counted the caller's time** (B17). The watchdog
+  ran from one read to the next, so a loop body slower than `Config.Timeout`
+  (a tool call run mid-stream, a slow writer) killed a stream whose server
+  never paused, with a retryable timeout. It now times only the wait for the
+  server.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

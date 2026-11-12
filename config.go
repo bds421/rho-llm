@@ -195,6 +195,7 @@ func (t *idleTimeoutTransport) RoundTrip(req *http.Request) (*http.Response, err
 	}
 	body := &idleTimeoutBody{rc: resp.Body, idle: t.idle}
 	body.timer = time.AfterFunc(t.idle, body.expire)
+	body.timer.Stop() // runs only while a Read waits for the server
 	resp.Body = body
 	return resp, nil
 }
@@ -219,13 +220,19 @@ func (b *idleTimeoutBody) expire() {
 	_ = b.rc.Close() // unblocks a pending Read
 }
 
+// Read times only the wait for the server. The timer ran from one Read to the
+// next, so time the caller spent between reads — a slow loop body, a tool call
+// run mid-stream — counted as server silence and killed a healthy stream with
+// a retryable timeout (B17).
 func (b *idleTimeoutBody) Read(p []byte) (int, error) {
+	if b.expired.Load() {
+		return 0, &StreamIdleTimeoutError{Idle: b.idle}
+	}
+	b.timer.Reset(b.idle)
 	n, err := b.rc.Read(p)
+	b.timer.Stop()
 	if b.expired.Load() {
 		return n, &StreamIdleTimeoutError{Idle: b.idle}
-	}
-	if n > 0 {
-		b.timer.Reset(b.idle)
 	}
 	return n, err
 }

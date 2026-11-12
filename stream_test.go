@@ -1101,6 +1101,31 @@ func TestStreamIdleGapFailsAfterTimeout(t *testing.T) {
 	}
 }
 
+// The watchdog measures server silence, not the caller: a loop body slower
+// than Timeout (here a 300 ms pause per event, Timeout 200 ms) killed a stream
+// whose server never paused (B17).
+func TestStreamIdleTimeoutIgnoresASlowConsumer(t *testing.T) {
+	for _, fx := range streamFixtures() {
+		t.Run(fx.name, func(t *testing.T) {
+			srv := pacedSSEServer(t, fx.chunks, 0, -1)
+			client := newStreamClient(t, fx.cfg(srv.URL), 200*time.Millisecond)
+			var done bool
+			for ev, err := range client.Stream(context.Background(), llm.Request{
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+			}) {
+				if err != nil {
+					t.Fatalf("slow consumer killed the stream: %v", err)
+				}
+				done = done || ev.Type == llm.EventDone
+				time.Sleep(300 * time.Millisecond)
+			}
+			if !done {
+				t.Fatal("stream ended without EventDone")
+			}
+		})
+	}
+}
+
 // Non-stream calls keep the whole-request Timeout.
 func TestCompleteStillBoundedByTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
