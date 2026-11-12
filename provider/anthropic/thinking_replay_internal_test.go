@@ -301,19 +301,21 @@ func TestHandBuiltEmptySignedThinkingIsSent(t *testing.T) {
 }
 
 // TestThinkingReplayPerModelWithoutThinkingLevel: without a ThinkingLevel a
-// model gets its own "off" form. Always-on models (thinking omitted) and
-// between_tools (Sonnet 5.5) still write thinking blocks, which must go back
-// unchanged; a model sent {"type":"disabled"} gets them dropped (the API
-// rejects thinking blocks then).
+// model gets its own "off" form. Always-on models and between_tools (Sonnet
+// 5.5) still write thinking blocks, which must go back unchanged; a model sent
+// {"type":"disabled"} gets them dropped (the API rejects thinking blocks
+// then). An always-on model replaying thinking is sent {"type":"adaptive"}
+// (what it runs with the parameter omitted) to carry block_binding (P1);
+// between_tools rejects that field.
 func TestThinkingReplayPerModelWithoutThinkingLevel(t *testing.T) {
 	want := `{"type":"thinking","thinking":"","signature":"sig-m"}`
 	cases := []struct {
 		model, thinking string
 		replayed        bool
 	}{
-		{"claude-opus-5-5", "", true},
-		{"claude-fable-5-2", "", true},
-		{"claude-fable-5-1", "", true},
+		{"claude-opus-5-5", "adaptive", true},
+		{"claude-fable-5-2", "adaptive", true},
+		{"claude-fable-5-1", "adaptive", true},
 		{"claude-sonnet-5-5", "between_tools", true},
 		{"claude-sonnet-5", "disabled", false},
 		{"claude-opus-4-8", "disabled", false},
@@ -343,6 +345,10 @@ func TestThinkingReplayPerModelWithoutThinkingLevel(t *testing.T) {
 			}
 			if gotThinking != tc.thinking {
 				t.Fatalf("thinking = %q, want %q", gotThinking, tc.thinking)
+			}
+			hasBinding := apiReq.Thinking != nil && apiReq.Thinking.BlockBinding != nil
+			if wantBinding := tc.thinking == "adaptive"; hasBinding != wantBinding {
+				t.Fatalf("block_binding sent = %v, want %v", hasBinding, wantBinding)
 			}
 			first, _ := json.Marshal(apiReq.Messages[1].Content[0])
 			if replayed := string(first) == want; replayed != tc.replayed {

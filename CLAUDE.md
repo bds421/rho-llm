@@ -138,6 +138,10 @@ Layered decorator stack over a stateless `Client` interface (`Complete`/`Stream`
   or `Config`), or historical thinking blocks are silently dropped (no error). Models whose
   thinking is always on (Fable 5/5.1/5.2, Opus 5.5) and Sonnet 5.5 (`between_tools`) count as enabled. Signed blocks go back unchanged,
   also with empty text (the default `display: "omitted"`); only a provider handoff drops them.
+  Newer Claude models also bind each block to its conversation: an edited system prompt, tool set
+  or earlier message makes them stale. Requests replaying signed thinking under adaptive thinking
+  carry `thinking.block_binding` (`Config.ThinkingBinding`, default `drop_block`); drops come back
+  in `Response.InputTransformations`. Adapter code must not rewrite history it replays.
 - **Mind the `TokensNotReported` (-1) sentinel.** A streamed turn may carry it when the provider
   omits usage; clamp token counts to `>= 0` before accumulating or estimating cost (negatives
   corrupt `Usage`).

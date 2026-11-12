@@ -80,3 +80,38 @@ func TestBatchSendsBetasAndFormat(t *testing.T) {
 		t.Errorf("unsupported ResponseFormat: err %v, sent %v", err, params)
 	}
 }
+
+// An item replaying signed thinking carries thinking.block_binding, which is a
+// 400 without its beta (P1).
+func TestBatchSendsThinkingBindingBeta(t *testing.T) {
+	var beta string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		beta = r.Header.Get("anthropic-beta")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msgbatch_01","type":"message_batch","processing_status":"in_progress",
+			"request_counts":{"processing":1,"succeeded":0,"errored":0,"canceled":0,"expired":0},
+			"created_at":"2026-08-06T10:00:00Z","expires_at":"2026-08-07T10:00:00Z"}`))
+	}))
+	defer srv.Close()
+	bc, err := llm.NewBatchClient(llm.Config{Provider: "anthropic", Model: "claude-opus-5-5", APIKey: "k", BaseURL: srv.URL,
+		DisableProxy: true, DisableRetries: true, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+	msgs := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "q"),
+		{Role: llm.RoleAssistant, Provider: "anthropic", Content: []llm.ContentPart{
+			{Type: llm.ContentThinking, ThinkingSignature: "sig"},
+			{Type: llm.ContentToolUse, ToolUseID: "toolu_1", ToolName: "f", ToolInput: map[string]any{}},
+		}},
+		llm.NewToolResultMessage("toolu_1", "ok", false),
+	}
+	items := []llm.BatchItem{{ItemID: "a", Request: &llm.Request{Model: "claude-opus-5-5", MaxTokens: 64, Messages: msgs}}}
+	if _, err := bc.Submit(context.Background(), items, llm.BatchOptions{MaxTurnaround: 24 * time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if beta != "thinking-binding-controls-2026-08-01" {
+		t.Errorf("anthropic-beta = %q", beta)
+	}
+}

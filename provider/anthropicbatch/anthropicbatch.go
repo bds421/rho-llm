@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,7 +113,7 @@ func (c *Client) Submit(ctx context.Context, items []llm.BatchItem, opts llm.Bat
 		Params   json.RawMessage `json:"params"`
 	}
 	requests := make([]batchReq, 0, len(items))
-	budgetThinking := false
+	budgetThinking, blockBinding := false, false
 	digestParts := make([][]byte, 0, len(items))
 	for _, item := range items {
 		if err := item.Validate(); err != nil {
@@ -139,6 +140,7 @@ func (c *Client) Submit(ctx context.Context, items []llm.BatchItem, opts llm.Bat
 			return nil, fmt.Errorf("anthropicbatch: item %q: %w", item.ItemID, err)
 		}
 		budgetThinking = budgetThinking || usesBudgetThinking(params)
+		blockBinding = blockBinding || usesBlockBinding(params)
 		requests = append(requests, batchReq{CustomID: item.ItemID, Params: params})
 		digestParts = append(digestParts, append([]byte(item.ItemID+"\n"), params...))
 	}
@@ -148,7 +150,12 @@ func (c *Client) Submit(ctx context.Context, items []llm.BatchItem, opts llm.Bat
 	}
 	digest := "sha256:" + hex.EncodeToString(sha256Sum(body))
 
-	resp, err := c.doJSONWithOptions(ctx, http.MethodPost, c.baseURL+"/messages/batches", body, anthropic.BetaFeatures(c.cfg.BetaFeatures, budgetThinking), llm.HTTPCallOptions{NonIdempotent: true})
+	betas := anthropic.BetaFeatures(c.cfg.BetaFeatures, budgetThinking)
+	if blockBinding && !slices.Contains(betas, anthropic.ThinkingBindingBeta) {
+		// An item carrying thinking.block_binding is a 400 without it.
+		betas = append(betas, anthropic.ThinkingBindingBeta)
+	}
+	resp, err := c.doJSONWithOptions(ctx, http.MethodPost, c.baseURL+"/messages/batches", body, betas, llm.HTTPCallOptions{NonIdempotent: true})
 	if err != nil {
 		return nil, err
 	}
@@ -557,6 +564,16 @@ func sha256Sum(b []byte) []byte {
 
 // usesBudgetThinking reports whether built params enable budget thinking, the
 // one case the interleaved-thinking beta is sent for.
+// usesBlockBinding reports whether a batch item sets thinking.block_binding.
+func usesBlockBinding(params json.RawMessage) bool {
+	var p struct {
+		Thinking *struct {
+			BlockBinding json.RawMessage `json:"block_binding"`
+		} `json:"thinking"`
+	}
+	return json.Unmarshal(params, &p) == nil && p.Thinking != nil && len(p.Thinking.BlockBinding) > 0
+}
+
 func usesBudgetThinking(params json.RawMessage) bool {
 	var p struct {
 		Thinking *struct {

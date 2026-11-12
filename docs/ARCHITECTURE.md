@@ -630,6 +630,20 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
    explicit `ThinkingLevel`; it can still parse reasoning returned by models that
    reason by default. All four adapters parse reasoning output where available.
 
+   **Thinking block binding (Anthropic).** Newer Claude models bind each thinking
+   block to the conversation that produced it (system prompt, tools, earlier
+   messages). `buildRequest` records whether it replays a signed or redacted block;
+   if so and thinking is adaptive, `applyThinkingBinding` sets
+   `thinking.block_binding.prefix_mismatch_behavior` from
+   `Config.EffectiveThinkingBinding()` (`drop_block` by default, `error`, or `off`)
+   and `setBetaHeader` adds `thinking-binding-controls-2026-08-01` (the batch driver
+   does the same per batch). Always-on models, which run adaptive with the
+   parameter omitted, get an explicit `{"type":"adaptive"}` to carry the field;
+   `between_tools` and budget thinking reject it and get none. The response's
+   `input_transformations` (body, or `message_start` when streaming) is parsed
+   leniently into `Response.InputTransformations` / `EventDone`, and each
+   `thinking_dropped` entry is logged as a warning.
+
 2. **Intrinsic Reasoning (`Thinking: true`)**
    Models like DeepSeek-R1 and Grok 4 Reasoning emit chain-of-thought intrinsically inside their standard output streams. They do not require specific API flags to enable this, but the registry flags them so your application knows they will consume output tokens for reasoning before answering.
 

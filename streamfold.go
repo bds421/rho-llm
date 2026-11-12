@@ -71,6 +71,7 @@ func (a *StreamAccumulator) Response() *Response {
 		ServerToolUse:         f.ServerToolUse,
 		Iterations:            f.Iterations,
 		ContainerID:           f.ContainerID,
+		InputTransformations:  f.InputTransformations,
 	}
 	// An adapter that assembles the turn (Anthropic) sends it as Parts; the
 	// flat fields then come from those, not from the deltas.

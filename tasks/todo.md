@@ -44,12 +44,6 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
 ---
 
 ## 🟠 Next up — features (minor releases)
-- **P1 — Anthropic `thinking.block_binding` — S/M.** Send
-  `{"prefix_mismatch_behavior":"drop_block"}` (beta `thinking-binding-controls-2026-08-01`)
-  and parse `input_transformations`. Without it Fable 5.2 / Mythos 5.2 (every account) and
-  Opus / Sonnet / Haiku 5.5, Fable 5.1 (accounts created after 2026-08-31) answer 400
-  "…bound to a different conversation" when a session changes tools, system or history. The
-  adapter itself edits history (hoists `RoleSystem`, drops empty parts). Not reproduced live.
 - **P2 — Reasoning on OpenAI-compatible hosts — M.** `openai_compat` refuses any
   `ThinkingLevel`; DeepSeek, Kimi, Qwen, GLM, OpenRouter, Together, Groq, vLLM support it in
   host-specific dialects (pi: 11 `thinkingFormat`s, `openai-completions.ts:871-968`). Includes
@@ -76,6 +70,9 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   `session-id` affinity header, retention; optional automatic cache markers.
 - 🟡 **P8 — Mid-conversation effort/system/tool changes that keep the cache — L.** In-place
   `{"role":"system"}` was tried in v0.12.2 and dropped (Haiku 5.5 ignored it, 3 of 3 live).
+  Since P1 this also matters for thinking: the Anthropic adapter hoists every `RoleSystem`
+  message into the top-level `system`, which changes it and makes replayed thinking stale, so
+  those blocks are dropped (`drop_block`) instead of replayed.
 - 🟡 **R1 — Long-context price tiers — S.** Haiku 5.5 >100K, GPT >272K, Grok/Gemini >200K,
   MiniMax >512K, Qwen >256K, Muse Ember >200K; Azure keeps OpenAI's tier.
 - 🟡 **R2 — OpenAI cache writes — S.** GPT-5.6+ bill writes at 1.25× input (30 min) and 2.5×

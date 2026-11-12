@@ -179,6 +179,37 @@ func (e Effort) Valid() bool {
 	return false
 }
 
+// ThinkingBinding says what Anthropic does with a replayed thinking block
+// whose conversation changed after the block was produced (an edited system
+// prompt, tool set or earlier message). Newer Claude models bind each block to
+// the conversation that produced it and answer a 400 for such a block.
+type ThinkingBinding string
+
+const (
+	// ThinkingBindingDropBlock (the default) asks Anthropic to drop the stale
+	// block and every thinking block after it, and answer without that
+	// reasoning. Each drop is reported in Response.InputTransformations.
+	ThinkingBindingDropBlock ThinkingBinding = "drop_block"
+	// ThinkingBindingError keeps the 400, for tests that must catch an edit.
+	ThinkingBindingError ThinkingBinding = "error"
+	// ThinkingBindingOff sends no binding control: the account's default
+	// applies, and no InputTransformations are reported.
+	ThinkingBindingOff ThinkingBinding = "off"
+)
+
+// InputTransformation is one change the provider made to the request before
+// the model read it (Anthropic input_transformations). Type is
+// "thinking_dropped" or "thinking_mismatch_allowed"; Path indexes the
+// messages as sent ("messages.3.content.0"); Reason is
+// "prefix_binding_mismatch" (the history changed), "model_binding_mismatch"
+// (another model wrote the block) or "organization_binding_mismatch" (another
+// account did). Later API versions may add values.
+type InputTransformation struct {
+	Type   string `json:"type"`
+	Path   string `json:"path,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // ReasoningSummary controls whether reasoning summary text is included in responses.
 type ReasoningSummary string
 
@@ -851,6 +882,11 @@ type Response struct {
 
 	// ContainerID is the provider container the response ran in, if any.
 	ContainerID string `json:"container_id,omitempty"`
+
+	// InputTransformations lists what the provider changed in the request
+	// before the model read it: replayed thinking blocks dropped or let
+	// through (see ThinkingBinding). Empty when nothing changed.
+	InputTransformations []InputTransformation `json:"input_transformations,omitempty"`
 }
 
 // =============================================================================
@@ -898,6 +934,9 @@ type StreamEvent struct {
 	// as on Response.
 	CacheCreation1hTokens int          `json:"cache_creation_1h_input_tokens,omitempty"`
 	StopDetails           *StopDetails `json:"stop_details,omitempty"`
+
+	// Done event: request changes the provider reported, as on Response.
+	InputTransformations []InputTransformation `json:"input_transformations,omitempty"`
 
 	// Done event: server tool usage, usage iterations, the assembled
 	// assistant content and the container, as on Response.

@@ -12,6 +12,7 @@ import (
 	"iter"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	llm "github.com/bds421/rho-llm"
@@ -160,10 +161,22 @@ func cacheControl(ttl string) (*anthropicCacheControl, error) {
 }
 
 type anthropicThinking struct {
-	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens,omitempty"`
-	Display      string `json:"display,omitempty"`
+	Type         string                 `json:"type"`
+	BudgetTokens int                    `json:"budget_tokens,omitempty"`
+	Display      string                 `json:"display,omitempty"`
+	BlockBinding *anthropicBlockBinding `json:"block_binding,omitempty"`
 }
+
+// anthropicBlockBinding is thinking.block_binding (beta
+// ThinkingBindingBeta): what to do with a replayed block whose conversation
+// changed.
+type anthropicBlockBinding struct {
+	PrefixMismatchBehavior string `json:"prefix_mismatch_behavior"`
+}
+
+// ThinkingBindingBeta is the anthropic-beta value thinking.block_binding
+// requires; the field without it is a 400. The batch client sends it too.
+const ThinkingBindingBeta = "thinking-binding-controls-2026-08-01"
 
 type anthropicOutputConfig struct {
 	Effort string                 `json:"effort,omitempty"`
@@ -188,6 +201,7 @@ type anthropicResponse struct {
 	Container   *struct {
 		ID string `json:"id"`
 	} `json:"container,omitempty"`
+	InputTransformations json.RawMessage `json:"input_transformations,omitempty"`
 }
 
 // interleavedThinkingBeta is DefaultConfig's beta flag. It only does anything
@@ -200,7 +214,11 @@ const interleavedThinkingBeta = "interleaved-thinking-2025-05-14"
 // thinking), except the interleaved-thinking flag without budget thinking.
 func (c *Client) setBetaHeader(httpReq *http.Request, apiReq anthropicRequest) {
 	budgetThinking := apiReq.Thinking != nil && apiReq.Thinking.Type == "enabled"
-	if betas := BetaFeatures(c.config.BetaFeatures, budgetThinking); len(betas) > 0 {
+	betas := BetaFeatures(c.config.BetaFeatures, budgetThinking)
+	if apiReq.Thinking != nil && apiReq.Thinking.BlockBinding != nil && !slices.Contains(betas, ThinkingBindingBeta) {
+		betas = append(betas, ThinkingBindingBeta)
+	}
+	if len(betas) > 0 {
 		httpReq.Header.Set("anthropic-beta", strings.Join(betas, ","))
 	}
 }
@@ -402,6 +420,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	profile, adaptive := adaptiveThinkingModels[llm.ResolveModelAlias(apiReq.Model)]
 	thinkingOn := req.ThinkingLevel != llm.ThinkingNone ||
 		(adaptive && (profile.off == thinkingOffOmit || profile.off == thinkingOffBetweenTools))
+	replayedThinking := false // a signed or redacted thinking block goes back
 
 	// Build system prompt. Collect all system text first (from req.System and RoleSystem messages).
 	var systemTexts []string
@@ -519,6 +538,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				if !thinkingOn {
 					continue
 				}
+				before := len(apiMsg.Content)
 				// A signed block goes back unchanged even with empty text (the
 				// default display "omitted" returns exactly that): dropping or
 				// editing it breaks a continuation and the cached prefix.
@@ -539,6 +559,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 						"thinking":  part.Thinking,
 						"signature": part.ThinkingSignature,
 					})
+				}
+				if len(apiMsg.Content) > before {
+					replayedThinking = true
 				}
 			case llm.ContentToolUse:
 				input := toolinput.Object(part.ToolInput) // Anthropic requires an object
@@ -764,7 +787,39 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		}
 	}
 
+	if replayedThinking {
+		if err := applyThinkingBinding(&apiReq, c.config.EffectiveThinkingBinding(), adaptive && profile.off == thinkingOffOmit); err != nil {
+			return anthropicRequest{}, err
+		}
+	}
 	return apiReq, nil
+}
+
+// applyThinkingBinding attaches thinking.block_binding to a request that
+// replays signed thinking. Newer Claude models bind each thinking block to the
+// conversation that produced it and answer a 400 when the system prompt, tools
+// or an earlier message changed since; this adapter alone can cause that (it
+// hoists RoleSystem messages into the top-level system prompt). Only adaptive
+// thinking takes the field: between_tools and budget thinking reject it. A
+// model whose thinking is always on runs adaptive with the parameter omitted,
+// so there the parameter is sent as adaptive to carry the field (P1).
+func applyThinkingBinding(apiReq *anthropicRequest, mode llm.ThinkingBinding, alwaysOn bool) error {
+	switch mode {
+	case llm.ThinkingBindingOff:
+		return nil
+	case llm.ThinkingBindingDropBlock, llm.ThinkingBindingError:
+	default:
+		return fmt.Errorf("anthropic: unknown ThinkingBinding %q (use %q, %q or %q)", mode,
+			llm.ThinkingBindingDropBlock, llm.ThinkingBindingError, llm.ThinkingBindingOff)
+	}
+	if apiReq.Thinking == nil && alwaysOn {
+		apiReq.Thinking = &anthropicThinking{Type: "adaptive"}
+	}
+	if apiReq.Thinking == nil || apiReq.Thinking.Type != "adaptive" {
+		return nil
+	}
+	apiReq.Thinking.BlockBinding = &anthropicBlockBinding{PrefixMismatchBehavior: string(mode)}
+	return nil
 }
 
 // toolChoiceWire maps the neutral ToolChoice onto Anthropic's shape, which is an
@@ -813,7 +868,9 @@ func (c *Client) parseResponse(apiResp *anthropicResponse) *llm.Response {
 		CacheCreation1hTokens: apiResp.Usage.CacheCreation.Ephemeral1h,
 		StopDetails:           llm.StopDetailsFromRaw(apiResp.StopDetails),
 		Iterations:            apiResp.Usage.iterations(),
+		InputTransformations:  parseInputTransformations(apiResp.InputTransformations),
 	}
+	logInputTransformations(apiResp.Model, resp.InputTransformations)
 	if apiResp.Container != nil {
 		resp.ContainerID = apiResp.Container.ID
 	}
@@ -843,6 +900,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	var started bool
 	var model string
 	var containerID string
+	var inputTransformations []llm.InputTransformation
 	var thinkingSignature string
 	blocks := newStreamBlocks()
 
@@ -868,6 +926,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			Iterations:            startUsage.iterations(),
 			Parts:                 blocks.parts(),
 			ContainerID:           containerID,
+			InputTransformations:  inputTransformations,
 		}, err)
 	}
 
@@ -934,6 +993,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				Container  *struct {
 					ID string `json:"id"`
 				} `json:"container"`
+				InputTransformations json.RawMessage `json:"input_transformations"`
 			} `json:"message"`
 			// message_delta puts usage at top level (not inside message)
 			Usage anthropicUsage `json:"usage"`
@@ -1084,6 +1144,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				Iterations:            iterations,
 				Parts:                 blocks.parts(),
 				ContainerID:           containerID,
+				InputTransformations:  inputTransformations,
 			}, nil)
 			return
 
@@ -1102,6 +1163,13 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			startUsage = event.Message.Usage
 			started = true
 			model = event.Message.Model
+			if t := parseInputTransformations(event.Message.InputTransformations); t != nil {
+				// Reported on message_start. (After a mid-stream server-side
+				// fallback the docs say it comes again in the final
+				// message_delta; that shape is not read here yet.)
+				inputTransformations = t
+				logInputTransformations(model, t)
+			}
 			if event.Message.Container != nil {
 				containerID = event.Message.Container.ID
 			}
@@ -1177,4 +1245,38 @@ func toolInputSchema(name string, schema map[string]any) (map[string]any, error)
 	}
 	withType["type"] = "object"
 	return withType, nil
+}
+
+// logInputTransformations warns about thinking the API dropped: the model
+// answered without that reasoning, usually because the history was edited.
+func logInputTransformations(model string, transformations []llm.InputTransformation) {
+	for _, t := range transformations {
+		if t.Type == "thinking_dropped" {
+			slog.Warn("anthropic dropped a replayed thinking block",
+				"provider", "anthropic", "model", model, "path", t.Path, "reason", t.Reason)
+		}
+	}
+}
+
+// parseInputTransformations reads input_transformations leniently: a report
+// in an unexpected shape is ignored rather than failing the response, and
+// entries without a type are skipped.
+func parseInputTransformations(raw json.RawMessage) []llm.InputTransformation {
+	if len(raw) == 0 {
+		return nil
+	}
+	var entries []llm.InputTransformation
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	out := entries[:0]
+	for _, e := range entries {
+		if e.Type != "" {
+			out = append(out, e)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

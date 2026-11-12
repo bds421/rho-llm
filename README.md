@@ -543,6 +543,8 @@ On a handoff, `NormalizeForModel` (applied automatically by `Session`; it and `N
 
 > **Thinking replay requires thinking enabled.** Anthropic only accepts replayed thinking blocks when extended thinking is on for the request, so keep it enabled across turns (e.g. `llm.NewSession(client, llm.WithBaseRequest(llm.Request{ThinkingLevel: llm.ThinkingLow}))`, or set `ThinkingLevel` on the client `Config`). With thinking off, historical thinking blocks are simply dropped (no error). A failed `Send`/`Stream` rolls back its appended input, so the transcript stays consistent and retryable.
 
+> **Thinking is bound to its conversation (Anthropic).** Newer Claude models (Fable 5.1/5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5) accept a replayed thinking block only while the system prompt, the tools and every earlier message are unchanged since it was produced; otherwise they answer a 400 ("bound to a different conversation"). When a request replays signed thinking under adaptive thinking, the adapter asks the API to drop such blocks instead (`thinking.block_binding.prefix_mismatch_behavior: "drop_block"`, with its beta header). The model then answers without that reasoning; each drop is listed in `Response.InputTransformations` (and on the stream's `EventDone`) and logged as a warning. `Config.ThinkingBinding` changes this: `llm.ThinkingBindingError` keeps the 400 (useful in tests that must catch an edit), `llm.ThinkingBindingOff` sends no control. Keep the history append-only to keep the reasoning: change the system prompt or tools only between conversations.
+
 > **Tool loops:** after a `Send` that returns `resp.ToolCalls`, run your tools and continue with `sess.SendMessages(ctx, llm.NewToolResultMessage(id, result, isError))`.
 
 ## Context Caching

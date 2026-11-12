@@ -503,6 +503,12 @@ type Config struct {
 	// models.
 	AnthropicVersion string `json:"anthropic_version,omitempty"`
 
+	// ThinkingBinding (Anthropic) sets what happens to a replayed thinking
+	// block whose conversation changed since it was produced. The control
+	// goes out only on requests that replay signed thinking with adaptive
+	// thinking. Default ("") is ThinkingBindingDropBlock.
+	ThinkingBinding ThinkingBinding `json:"thinking_binding,omitempty"`
+
 	// Safety limits — zero values use the corresponding Default* constants.
 	MaxErrorBodyBytes     int `json:"max_error_body_bytes,omitempty"`
 	MaxSSELineBytes       int `json:"max_sse_line_bytes,omitempty"`
@@ -630,6 +636,15 @@ func (c Config) EffectiveAnthropicVersion() string {
 		return c.AnthropicVersion
 	}
 	return DefaultAnthropicVersion
+}
+
+// EffectiveThinkingBinding returns the configured binding mode, or
+// ThinkingBindingDropBlock when unset.
+func (c Config) EffectiveThinkingBinding() ThinkingBinding {
+	if c.ThinkingBinding == "" {
+		return ThinkingBindingDropBlock
+	}
+	return c.ThinkingBinding
 }
 
 // AnthropicStrictVersion reports whether the effective Anthropic API version

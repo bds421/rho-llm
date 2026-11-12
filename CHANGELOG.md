@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Anthropic thinking block binding** (P1). Claude Fable 5.1/5.2, Opus 5.5,
+  Sonnet 5.5 and Haiku 5.5 bind each thinking block to the conversation that
+  produced it and answer a 400 ("bound to a different conversation") when the
+  system prompt, tools or an earlier message changed since. A request that
+  replays signed thinking under adaptive thinking now sends
+  `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` with the
+  `thinking-binding-controls-2026-08-01` beta (batch submissions too), so the
+  API drops the stale blocks and answers. New: `Config.ThinkingBinding`
+  (`ThinkingBindingDropBlock` default, `ThinkingBindingError`,
+  `ThinkingBindingOff`), `Response.InputTransformations` and
+  `StreamEvent.InputTransformations` (`InputTransformation{Type, Path,
+  Reason}`), and a warning log per dropped block. Always-on models replaying
+  thinking are sent `{"type":"adaptive"}` (equivalent to omitting it) to carry
+  the field. Checked live on Claude Haiku 5.5 (2026-11-12): an edited system
+  prompt returned 200 with a `thinking_dropped` entry; with
+  `ThinkingBindingError` it returned the 400.
+
 ## [0.17.2] - 2026-11-12
 
 ### Changed
