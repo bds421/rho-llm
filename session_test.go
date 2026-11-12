@@ -903,3 +903,31 @@ func TestSessionRecordsTheAnsweringModel(t *testing.T) {
 		t.Errorf("provenance model: %+v", msgs)
 	}
 }
+
+// The session kept the caller's *Conversation and wrote to it on every turn,
+// racing with a caller that still read or saved it (B23). Run with -race.
+func TestWithConversationDoesNotShareTheCallersPointer(t *testing.T) {
+	conv := llm.NewConversation("sys")
+	conv.Append(llm.NewTextMessage(llm.RoleUser, "earlier"))
+	fc := &fakeClient{provider: "anthropic", model: "m", resp: &llm.Response{Content: "ok", StopReason: "end_turn"}}
+	s := llm.NewSession(fc, llm.WithConversation(conv))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			_, _ = json.Marshal(conv) // the caller saving its copy
+		}
+	}()
+	for i := 0; i < 5; i++ {
+		if _, err := s.Send(context.Background(), "q"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-done
+	if len(conv.Messages) != 1 {
+		t.Fatalf("caller's conversation changed: %d messages", len(conv.Messages))
+	}
+	if n := len(s.Conversation().Messages); n != 11 {
+		t.Fatalf("session has %d messages, want 11", n)
+	}
+}

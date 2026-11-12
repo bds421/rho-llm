@@ -59,11 +59,14 @@ func WithBaseRequest(base Request) SessionOption {
 }
 
 // WithConversation resumes from an existing (e.g. restored) Conversation instead
-// of starting a fresh, empty one.
+// of starting a fresh, empty one. The session works on a copy: it kept the
+// caller's pointer and wrote to it from every turn, a data race with a caller
+// still reading or saving it (B23). Read the live transcript through
+// Session.Conversation.
 func WithConversation(conv *Conversation) SessionOption {
 	return func(s *Session) {
 		if conv != nil {
-			s.conv = conv
+			s.conv = conv.Clone()
 		}
 	}
 }

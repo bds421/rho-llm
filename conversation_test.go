@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -360,5 +361,73 @@ func TestConversationCloneIsDeep(t *testing.T) {
 	}
 	if conv.System != "sys" {
 		t.Fatal("Clone shares top-level fields")
+	}
+}
+
+// A tool argument holding a 64-bit ID changed on a save/load round trip:
+// float64 holds integers exactly only up to 2^53 (B23).
+func TestConversationRoundTripKeepsLargeIntegers(t *testing.T) {
+	conv := llm.NewConversation("")
+	conv.Append(llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentPart{{
+		Type: llm.ContentToolUse, ToolUseID: "t1", ToolName: "get_order",
+		ToolInput: map[string]any{"order_id": json.Number("9007199254740993"), "qty": 2.0, "price": 1.5, "nested": []any{json.Number("-9223372036854775807")}},
+	}}})
+	data, err := json.Marshal(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := llm.LoadConversation(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := loaded.Messages[0].Content[0].ToolInput.(map[string]any)
+	if got := fmt.Sprint(in["order_id"]); got != "9007199254740993" {
+		t.Errorf("order_id = %v (%T), want 9007199254740993", in["order_id"], in["order_id"])
+	}
+	if got := fmt.Sprint(in["nested"].([]any)[0]); got != "-9223372036854775807" {
+		t.Errorf("nested = %v", got)
+	}
+	// Ordinary numbers keep the float64 type callers assert on.
+	if _, ok := in["qty"].(float64); !ok {
+		t.Errorf("qty is %T, want float64", in["qty"])
+	}
+	if _, ok := loaded.Clone().Messages[0].Content[0].ToolInput.(map[string]any)["price"].(float64); !ok {
+		t.Error("Clone changed an ordinary number's type")
+	}
+	if fmt.Sprint(loaded.Clone().Messages[0].Content[0].ToolInput.(map[string]any)["order_id"]) != "9007199254740993" {
+		t.Error("Clone lost the large integer")
+	}
+}
+
+// A stored negative token count (the -1 sentinel, or a tampered file) loaded
+// as is and corrupted every later total (B23).
+func TestLoadConversationClampsNegativeUsage(t *testing.T) {
+	c, err := llm.LoadConversation([]byte(`{"schema_version":1,"usage":{"input_tokens":-1,"output_tokens":-50,"cache_read_tokens":-3,"cost":-2.5}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := c.Usage; u.InputTokens != 0 || u.OutputTokens != 0 || u.CacheReadTokens != 0 || u.Cost != 0 {
+		t.Fatalf("usage = %+v, want zeros", u)
+	}
+	if _, err := llm.LoadConversation([]byte(`{"schema_version":1} {"x":1}`)); err == nil {
+		t.Error("trailing data accepted")
+	}
+}
+
+// ToRequest shared the conversation's backing array: appending to the
+// request's messages could overwrite the conversation's next message (B23).
+func TestToRequestDoesNotShareSpareCapacity(t *testing.T) {
+	conv := llm.NewConversation("")
+	msgs := make([]llm.Message, 0, 8)
+	msgs = append(msgs, llm.NewTextMessage(llm.RoleUser, "one"))
+	conv.Messages = msgs
+	req := conv.ToRequest(llm.Request{})
+	req.Messages = append(req.Messages, llm.NewTextMessage(llm.RoleUser, "request-only"))
+	conv.Append(llm.NewTextMessage(llm.RoleAssistant, "two"))
+	if got := conv.Messages[1].Content[0].Text; got != "two" {
+		t.Fatalf("conversation message = %q", got)
+	}
+	if got := req.Messages[1].Content[0].Text; got != "request-only" {
+		t.Fatalf("request message overwritten by the conversation: %q", got)
 	}
 }

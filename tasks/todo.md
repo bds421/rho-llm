@@ -27,10 +27,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   `MaxRetries` as the count (more retries). Behaviour change either way.
 
 ### Session & conversation
-- 🟢 **B23 — Conversation round trip not exact; `LoadConversation` permissive — S.**
-  `ToolInput` integers > 2^53 change (decode with `UseNumber`); `null`/`{}` load as empty;
-  negative usage loads as-is; `ToRequest` shares the backing array (`conversation.go:158`);
-  `WithConversation` keeps the caller's pointer (`session.go:65`).
 - 🟢 **B24 — Same-provider unsigned thinking is replayed as visible text** (design; pinned by
   `TestNormalizeUnsignedThinkingDegradesEvenSameProvider`). Decide: drop instead.
 

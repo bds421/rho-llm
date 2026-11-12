@@ -161,6 +161,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The pool's `Stream` leaked the client when the caller's loop body
   panicked** (B18). The in-flight reference was released only on normal
   paths, so a rotated-out client was never closed.
+- **Saved conversations did not round-trip exactly, and sessions shared the
+  caller's conversation** (B23). A tool argument holding an integer beyond
+  ±2^53 (a 64-bit ID) changed on `LoadConversation` and `Clone`; such integers
+  now load as `json.Number` (other numbers stay `float64`). A stored negative
+  token count or cost loaded as is and corrupted later totals; it is clamped to
+  zero, and trailing data after the object is refused. `ToRequest` returned the
+  conversation's own backing array, so appending to the request could overwrite
+  the conversation's next message; the slices are now clipped. `WithConversation`
+  kept the caller's pointer and wrote to it on every turn, a data race with a
+  caller saving it; the session now works on a copy (read it through
+  `Session.Conversation`, as before).
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

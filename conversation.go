@@ -1,8 +1,11 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
+	"slices"
 )
 
 // ConversationSchemaVersion is stamped into every serialized Conversation so the
@@ -116,6 +119,42 @@ type Conversation struct {
 
 // NewConversation creates an empty conversation with an optional system prompt
 // and tool set.
+// exactNumbers converts the json.Number values of a UseNumber decode to
+// float64, except an integer that float64 cannot hold exactly.
+func exactNumbers(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		if f, err := t.Float64(); err == nil {
+			if i, err := t.Int64(); err != nil || (i <= 1<<53 && i >= -(1<<53)) {
+				return f
+			}
+		}
+		return t
+	case map[string]any:
+		for k, e := range t {
+			t[k] = exactNumbers(e)
+		}
+		return t
+	case []any:
+		for i, e := range t {
+			t[i] = exactNumbers(e)
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+// clampNegative sets negative token counts and cost to zero.
+func (u *Usage) clampNegative() {
+	for _, n := range []*int{&u.InputTokens, &u.OutputTokens, &u.ThinkingTokens, &u.CacheCreationTokens, &u.CacheReadTokens, &u.CacheCreation1hTokens} {
+		*n = max(*n, 0)
+	}
+	if u.Cost < 0 || math.IsNaN(u.Cost) {
+		u.Cost = 0
+	}
+}
+
 func NewConversation(system string, tools ...Tool) *Conversation {
 	return &Conversation{
 		SchemaVersion: ConversationSchemaVersion,
@@ -155,7 +194,10 @@ func (c *Conversation) ToRequest(base Request) Request {
 	if len(c.ServerTools) > 0 {
 		req.ServerTools = c.ServerTools
 	}
-	req.Messages = c.Messages
+	// Clipped, so a caller appending to req.Messages (or Tools) gets a new
+	// array instead of writing into the conversation's spare capacity (B23).
+	req.Messages = slices.Clip(c.Messages)
+	req.Tools = slices.Clip(req.Tools)
 	return req
 }
 
@@ -304,9 +346,36 @@ func (c Conversation) MarshalJSON() ([]byte, error) {
 // than silently mis-read.
 func LoadConversation(data []byte) (*Conversation, error) {
 	var c Conversation
-	if err := json.Unmarshal(data, &c); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("llm: decode conversation: %w", err)
 	}
+	if dec.More() {
+		return nil, fmt.Errorf("llm: decode conversation: trailing data")
+	}
+	// Numbers decode as float64, as with json.Unmarshal, except integers
+	// beyond ±2^53, which float64 would change (a tool argument holding an
+	// ID): those stay json.Number, so a save/load round trip is exact (B23).
+	for i := range c.Messages {
+		for j := range c.Messages[i].Content {
+			p := &c.Messages[i].Content[j]
+			p.ToolInput = exactNumbers(p.ToolInput)
+		}
+	}
+	for i := range c.Tools {
+		if c.Tools[i].InputSchema != nil {
+			c.Tools[i].InputSchema = exactNumbers(c.Tools[i].InputSchema).(map[string]any)
+		}
+	}
+	for i := range c.ServerTools {
+		if c.ServerTools[i].Params != nil {
+			c.ServerTools[i].Params = exactNumbers(c.ServerTools[i].Params).(map[string]any)
+		}
+	}
+	// Token counts are never negative; a stored -1 (TokensNotReported) or a
+	// tampered file would corrupt every later total.
+	c.Usage.clampNegative()
 	if c.SchemaVersion <= 0 {
 		c.SchemaVersion = ConversationSchemaVersion // absent/zero/negative → treat as v1
 	}
