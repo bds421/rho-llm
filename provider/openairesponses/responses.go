@@ -825,6 +825,7 @@ func toolChoiceWire(tc *llm.ToolChoice) any {
 func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) error {
 	var textParts []string
 	var imageParts []llm.ContentPart
+	var docParts []llm.ContentPart
 
 	for _, part := range msg.Content {
 		switch part.Type {
@@ -845,15 +846,21 @@ func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) err
 			}
 			imageParts = append(imageParts, part)
 		case llm.ContentDocument:
-			// The Responses API expects PDFs as input_file items (file_id or
-			// file_data), which this adapter does not yet build. Fail loudly
-			// rather than silently dropping the document.
-			return fmt.Errorf("%s adapter does not support document content (ContentDocument); use the gemini or anthropic provider for PDFs", c.providerName)
+			// PDFs go as input_file items with the bytes as a data URL. The
+			// adapter refused them, so a session that had read a PDF on
+			// another provider failed every turn after a handoff (B20).
+			if err := llm.ValidateDocumentSource(part); err != nil {
+				return err
+			}
+			if llm.IsTextDocument(part) {
+				return fmt.Errorf("%s: text documents are Anthropic-only; send the text as a text part", c.providerName)
+			}
+			docParts = append(docParts, part)
 		}
 	}
 
-	// Build multipart content for images
-	if len(imageParts) > 0 {
+	// Build multipart content for images and documents
+	if len(imageParts) > 0 || len(docParts) > 0 {
 		var contentArray []any
 		if len(textParts) > 0 {
 			contentArray = append(contentArray, map[string]any{
@@ -866,6 +873,17 @@ func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) err
 			contentArray = append(contentArray, map[string]any{
 				"type":      "input_image",
 				"image_url": dataURI,
+			})
+		}
+		for i, doc := range docParts {
+			filename := doc.Title
+			if filename == "" {
+				filename = fmt.Sprintf("document-%d.pdf", i+1)
+			}
+			contentArray = append(contentArray, map[string]any{
+				"type":      "input_file",
+				"filename":  filename,
+				"file_data": fmt.Sprintf("data:%s;base64,%s", doc.Document.MediaType, doc.Document.Data),
 			})
 		}
 		apiReq.Input = append(apiReq.Input, responsesInputMsg{

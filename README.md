@@ -185,7 +185,7 @@ Supported media types: `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
 
 ## Document / PDF Support
 
-Send PDFs to document-capable models using `ContentDocument` parts with base64-encoded data. Gemini and Anthropic parse PDFs natively (preserving text layout); OpenAI-compatible vision models (e.g. xAI Grok) receive the PDF as an `image_url` data URI. The Responses API adapter returns an explicit error rather than silently dropping a document.
+Send PDFs to document-capable models using `ContentDocument` parts with base64-encoded data. Gemini and Anthropic parse PDFs natively (preserving text layout); OpenAI-compatible vision models (e.g. xAI Grok) receive the PDF as an `image_url` data URI. The Responses API adapter sends PDFs as `input_file` items, with `ContentPart.Title` as the filename.
 
 ```go
 pdfBytes, err := os.ReadFile("invoice.pdf")

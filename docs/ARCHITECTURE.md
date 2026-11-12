@@ -201,7 +201,7 @@ Gemini uses `inlineData` parts; OpenAI-compatible uses `image_url` data URIs; an
 OpenAI Responses uses `input_image`. Supported media types: `image/jpeg`,
 `image/png`, `image/gif`, `image/webp`.
 
-`ContentDocument` parts carry inline PDFs (base64), validated via `ValidateDocumentSource()`. Gemini serializes them as `inlineData` and Anthropic as native `document` blocks (both parse the PDF text layer); OpenAI-compatible adapters emit an `image_url` data URI for vision models such as xAI Grok. The OpenAI Responses adapter returns an explicit error for documents rather than dropping them silently. Supported media types: `application/pdf`. Anthropic also takes plain-text documents (`DocumentSourceText`, `text/plain`, the text as `Data`) with optional `ContentPart.Title` / `Context`; the other adapters refuse them.
+`ContentDocument` parts carry inline PDFs (base64), validated via `ValidateDocumentSource()`. Gemini serializes them as `inlineData` and Anthropic as native `document` blocks (both parse the PDF text layer); OpenAI-compatible adapters emit an `image_url` data URI for vision models such as xAI Grok. The OpenAI Responses adapter sends them as `input_file` items (`file_data` data URL, `filename` from `ContentPart.Title`). Supported media types: `application/pdf`. Anthropic also takes plain-text documents (`DocumentSourceText`, `text/plain`, the text as `Data`) with optional `ContentPart.Title` / `Context`; the other adapters refuse them.
 
 `ThoughtSignature` on `tool_use` parts is a Gemini 3 requirement — the model returns an opaque signature that must be echoed back in the corresponding `tool_result` message. The adapters handle this automatically.
 

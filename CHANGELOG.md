@@ -148,6 +148,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a tool call run mid-stream, a slow writer) killed a stream whose server
   never paused, with a retryable timeout. It now times only the wait for the
   server.
+- **OpenAI Responses refused PDFs** (B20). The adapter returned an error for
+  every `ContentDocument`, so a session that had read a PDF on Anthropic or
+  Gemini failed every turn after a handoff to a GPT-5 model. PDFs are now sent
+  as `input_file` items (`file_data` data URL; `ContentPart.Title` as the
+  filename), as the Responses API documents.
+- **Normalization paired results with the wrong call** (B7). A message that
+  repeated a tool-call ID (servers that number every call `call_0`) paired both
+  results with the second call; a tool call without an ID kept the call,
+  dropped its result and skipped orphan repair. Results now pair with calls in
+  order, and an ID-less call gets an ID (`call_noid_<n>`).
+- **The pool's `Stream` leaked the client when the caller's loop body
+  panicked** (B18). The in-flight reference was released only on normal
+  paths, so a rotated-out client was never closed.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

@@ -19,21 +19,14 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 ## 🔴 Bugs — next patch release
 
 ### Tool calls
-- 🟢 **B7b — Normalize edge cases — S.** Duplicate IDs inside one assistant message remap both
-  results to the second call; a tool call with an empty ID keeps the call, drops its result
-  and skips orphan repair (`normalize.go:77-99, 159`).
 
 ### Key pool, retry, fallback
 - 🟡 **B15b — `MaxRetries` still differs per path — decision.** Under `DefaultConfig()`
   (`MaxRetries: 10`) a single-key chat client makes 3 attempts, a modality/batch call 10.
   Options: cap DoHTTP at max(1, 3) like chat (fewer retries, lower cost), or let chat use
   `MaxRetries` as the count (more retries). Behaviour change either way.
-- 🟢 **B18 — `rc.Release()` in pool `Stream` not deferred** (*suspected*) (`pool.go:613-656`).
 
 ### Session & conversation
-- **B20 — A PDF in the history breaks an openai_responses session after a handoff — S/M.**
-  The Responses adapter refuses `ContentDocument`; build `input_file` items (`file_data` as a
-  PDF data URL) instead (`responses.go:833-837`). Text documents are degraded since B20's fix.
 - 🟢 **B23 — Conversation round trip not exact; `LoadConversation` permissive — S.**
   `ToolInput` integers > 2^53 change (decode with `UseNumber`); `null`/`{}` load as empty;
   negative usage loads as-is; `ToRequest` shares the backing array (`conversation.go:158`);

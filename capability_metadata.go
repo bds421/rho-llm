@@ -300,7 +300,7 @@ func protocolCapabilityEnvelope(protocol string) CapabilitySet {
 			CapabilityEmbeddings, CapabilityImageGeneration, CapabilityBatch, CapabilityTranscription,
 		)
 	case "openai_responses":
-		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput, CapabilityVision, CapabilityBatch, CapabilityReasoning)
+		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch, CapabilityReasoning)
 	case "openai_compat":
 		return Capabilities(
 			CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput,
