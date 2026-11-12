@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/bds421/rho-llm/internal/urlerr"
 	"io"
 	"log/slog"
 	"net/http"
@@ -91,6 +92,7 @@ func DoHTTPWithOptions(
 			return nil, err
 		}
 		resp, err := client.Do(req)
+		err = urlerr.Redact(err) // the request URL may carry a key (B32)
 		if err == nil && !retryableHTTPStatus(resp.StatusCode) {
 			return resp, nil
 		}

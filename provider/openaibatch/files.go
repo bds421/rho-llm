@@ -11,6 +11,7 @@ import (
 	"net/url"
 
 	"github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/internal/urlerr"
 )
 
 // setAuth applies the bearer (or custom) authorization header. No-op when the provider
@@ -64,7 +65,7 @@ func (c *Client) doJSONWithConfig(
 		return req, nil
 	})
 	if err != nil {
-		return fmt.Errorf("openaibatch: request failed: %w", err)
+		return fmt.Errorf("openaibatch: request failed: %w", urlerr.Redact(err))
 	}
 	defer resp.Body.Close()
 
@@ -113,7 +114,7 @@ func (c *Client) uploadInputFile(ctx context.Context, jsonl []byte) (string, err
 		return req, nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("openaibatch: file upload failed: %w", err)
+		return "", fmt.Errorf("openaibatch: file upload failed: %w", urlerr.Redact(err))
 	}
 	defer resp.Body.Close()
 
@@ -147,7 +148,7 @@ func (c *Client) downloadFile(ctx context.Context, fileID string) ([]byte, error
 		return req, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("openaibatch: download failed: %w", err)
+		return nil, fmt.Errorf("openaibatch: download failed: %w", urlerr.Redact(err))
 	}
 	defer resp.Body.Close()
 

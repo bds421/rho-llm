@@ -19,6 +19,7 @@ import (
 
 	llm "github.com/bds421/rho-llm"
 	"github.com/bds421/rho-llm/internal/toolinput"
+	"github.com/bds421/rho-llm/internal/urlerr"
 )
 
 func init() {
@@ -126,7 +127,7 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", urlerr.Redact(err))
 	}
 	defer resp.Body.Close()
 
@@ -174,7 +175,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 
 		resp, err := c.streamHTTPClient().Do(httpReq)
 		if err != nil {
-			yield(llm.StreamEvent{}, fmt.Errorf("request failed: %w", err))
+			yield(llm.StreamEvent{}, fmt.Errorf("request failed: %w", urlerr.Redact(err)))
 			return
 		}
 		defer resp.Body.Close()

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	llm "github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/internal/urlerr"
 )
 
 // modalityDriver keeps OpenAI-compatible endpoint and format knowledge inside
@@ -428,7 +429,7 @@ func (c *Client) doModalityRequestWithOptions(
 ) (*http.Response, error) {
 	response, err := llm.DoHTTPWithOptions(ctx, c.config, c.httpClient, build, opts)
 	if err != nil {
-		return nil, fmt.Errorf("openaicompat: request failed: %w", err)
+		return nil, fmt.Errorf("openaicompat: request failed: %w", urlerr.Redact(err))
 	}
 	if response.StatusCode/100 != 2 {
 		defer response.Body.Close()

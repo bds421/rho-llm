@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1199,5 +1200,44 @@ func TestConfigAndProfileRedactInEveryPrintedForm(t *testing.T) {
 	}
 	if !strings.Contains(outputs["%+v cfg"], "Provider:anthropic") {
 		t.Errorf("%%+v lost the non-secret fields: %.200s", outputs["%+v cfg"])
+	}
+}
+
+// A BaseURL carrying the key as its username or in ?key= reached the returned
+// transport error: net/http prints the request URL and strips only a password
+// (B32).
+func TestTransportErrorsDoNotCarryBaseURLCredentials(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	for _, base := range []string{"http://sk-user-secret@" + addr + "/v1", "http://" + addr + "/v1?key=q-secret"} {
+		for _, provider := range []string{"openai", "anthropic", "gemini", "openai_responses"} {
+			c, err := llm.NewClient(llm.Config{Provider: provider, Model: "m-" + provider, APIKey: "k", BaseURL: base,
+				DisableRetries: true, DisableProxy: true, Timeout: time.Second,
+				ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityStream)})
+			if err != nil {
+				t.Fatalf("%s: %v", provider, err)
+			}
+			req := llm.Request{Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "x")}}
+			_, cErr := c.Complete(context.Background(), req)
+			var sErr error
+			for _, e := range c.Stream(context.Background(), req) {
+				if e != nil {
+					sErr = e
+				}
+			}
+			for name, e := range map[string]error{"Complete": cErr, "Stream": sErr} {
+				if e == nil || strings.Contains(e.Error(), "secret") {
+					t.Errorf("%s %s via %s: err = %v", provider, name, base, e)
+				}
+				if !llm.IsRetryable(e) {
+					t.Errorf("%s %s: a refused connection must stay retryable: %v", provider, name, e)
+				}
+			}
+			_ = c.Close()
+		}
 	}
 }

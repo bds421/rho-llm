@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now uses the `x-goog-api-key` header and `SafeHTTPClient`, and checks the
   cache name before building the delete URL.
 
+- **A key in the BaseURL reached transport errors** (B32). net/http prints the
+  request URL in every transport error and strips only a password, so a key
+  carried as the URL's username or in `?key=` appeared in the error a caller
+  logs. Every adapter, batch driver and `DoHTTP` now scrubs it; the error keeps
+  its type, so retry classification is unchanged.
+
 ### Fixed
 
 - **openai_compat: a provider error in the stream ended as a successful turn**

@@ -34,9 +34,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 - ⚪ **B31b — Not changed (rejection undocumented):** images inside `is_error` tool results and
   a tool schema whose root is `anyOf`/`oneOf` are sent as is. Confirm against the live API
   before refusing them.
-- 🟢 **B32 — BaseURL credentials in returned transport errors.** A BaseURL with a
-  userinfo username or a query secret reaches `*url.Error` text unredacted (`%+v` and slog
-  are redacted since B32's fix).
 - 🟢 **B33 — Registry API edges.** `RegisterModel` accepts an ID an alias shadows (entry
   unreachable); whitespace IDs/aliases accepted; `GetDefaultModel` falls back to
   `claude-sonnet-5` for 10 presets and keeps a non-preset `"gpt"` key (`registry.go:418, 593,
