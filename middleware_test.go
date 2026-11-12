@@ -3,6 +3,8 @@ package llm_test
 import (
 	"context"
 	"iter"
+	"log/slog"
+	"strings"
 	"testing"
 
 	llm "github.com/bds421/rho-llm"
@@ -204,5 +206,48 @@ func TestLoggingClientStreamError(t *testing.T) {
 			}
 			break
 		}
+	}
+}
+
+// eventsClient streams fixed events.
+type eventsClient struct {
+	mockClient
+	events []llm.StreamEvent
+}
+
+func (e *eventsClient) Stream(context.Context, llm.Request) iter.Seq2[llm.StreamEvent, error] {
+	return func(yield func(llm.StreamEvent, error) bool) {
+		for _, ev := range e.events {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	}
+}
+
+// A stream the caller left before EventDone was logged as "stream done" with
+// tokens_in=-1, and a completed stream without usage logged the -1 sentinel
+// as a token count (B34).
+func TestLoggingClientNeverLogsTheTokenSentinel(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	inner := &eventsClient{mockClient: mockClient{provider: "anthropic", model: "m"}, events: []llm.StreamEvent{
+		{Type: llm.EventContent, Text: "a"},
+		{Type: llm.EventDone, StopReason: "end_turn", InputTokens: llm.TokensNotReported, OutputTokens: llm.TokensNotReported},
+	}}
+	c := llm.WithLogging(inner)
+	for range c.Stream(context.Background(), llm.Request{}) {
+		break // abandoned after the first event
+	}
+	for range c.Stream(context.Background(), llm.Request{}) {
+	}
+	out := buf.String()
+	if strings.Contains(out, "=-1") {
+		t.Fatalf("log carries the -1 sentinel:\n%s", out)
+	}
+	if !strings.Contains(out, `msg="stream abandoned"`) || !strings.Contains(out, "usage_reported=false") {
+		t.Fatalf("log = %s", out)
 	}
 }

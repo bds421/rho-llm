@@ -72,8 +72,11 @@ func (l *LoggingClient) Complete(ctx context.Context, req Request) (*Response, e
 	attrs := []any{
 		"provider", l.inner.Provider(), "model", model,
 		"elapsed", elapsed.Round(time.Millisecond),
-		"tokens_in", resp.InputTokens, "tokens_out", resp.OutputTokens,
+		"tokens_in", max(resp.InputTokens, 0), "tokens_out", max(resp.OutputTokens, 0),
 		"stop", resp.StopReason, "cost", cost,
+	}
+	if resp.InputTokens == TokensNotReported || resp.OutputTokens == TokensNotReported {
+		attrs = append(attrs, "usage_reported", false)
 	}
 	if resp.ThinkingTokens > 0 {
 		attrs = append(attrs, "tokens_thinking", resp.ThinkingTokens)
@@ -116,6 +119,15 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 					"elapsed", elapsed.Round(time.Millisecond), "chunks", chunks, "error", streamErr)
 				return
 			}
+			if lastStopReason == "" {
+				// The caller stopped reading before EventDone: there is no
+				// usage to report. It was logged as "stream done" with
+				// tokens_in=-1 (B34).
+				l.logger.Info("stream abandoned",
+					"provider", l.inner.Provider(), "model", model,
+					"elapsed", elapsed.Round(time.Millisecond), "chunks", chunks)
+				return
+			}
 			cost := EstimateCost(CostInput{
 				Model:             model,
 				InputTokens:       lastInputTokens,
@@ -127,8 +139,11 @@ func (l *LoggingClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			attrs := []any{
 				"provider", l.inner.Provider(), "model", model,
 				"elapsed", elapsed.Round(time.Millisecond),
-				"chunks", chunks, "tokens_in", lastInputTokens, "tokens_out", lastOutputTokens,
+				"chunks", chunks, "tokens_in", max(lastInputTokens, 0), "tokens_out", max(lastOutputTokens, 0),
 				"stop", lastStopReason, "cost", cost,
+			}
+			if lastInputTokens == TokensNotReported || lastOutputTokens == TokensNotReported {
+				attrs = append(attrs, "usage_reported", false)
 			}
 			if lastThinkingTokens > 0 {
 				attrs = append(attrs, "tokens_thinking", lastThinkingTokens)

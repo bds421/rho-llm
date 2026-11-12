@@ -211,6 +211,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to the current Anthropic default. `RegisterModel` refused nothing it
   could never find: an ID that is an alias key (`sonnet`) or has surrounding
   whitespace is now an error, as is an alias with surrounding whitespace.
+- **The logging middleware logged the `-1` token sentinel** (B34). A stream the
+  caller stopped reading before it finished was logged as `stream done` with
+  `tokens_in=-1`, and a turn without reported usage logged `-1` as a token
+  count. An unfinished stream now logs `stream abandoned`, and missing usage
+  logs `0` with `usage_reported=false`.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".
