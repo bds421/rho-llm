@@ -29,8 +29,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 ### Session & conversation
 
 ### Gemini / batch wire details
-- 🟢 **B30 — Gemini tool results: `IsError` ignored, images dropped, no id on Gemini 3+.**
-  Always `{"result": text}` (`gemini.go:408-417`).
 
 ### Smaller correctness items
 - 🟢 **B31 — Anthropic wire edge cases** (*rejection unverified*): forced `tool_choice` with

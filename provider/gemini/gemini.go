@@ -458,11 +458,18 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				if !ok {
 					funcName = resolveToolName(part.ToolResultID)
 				}
+				// A failed tool goes under "error", the key Gemini's
+				// FunctionResponse reference names for error details; IsError
+				// was dropped, so the model read a failure as a result (B30).
+				resultKey := "result"
+				if part.IsError {
+					resultKey = "error"
+				}
 				content.Parts = append(content.Parts, geminiPart{
 					FunctionResponse: &geminiFunctionResponse{
 						Name: funcName,
 						Response: map[string]string{
-							"result": part.ToolResultText(),
+							resultKey: part.ToolResultText(),
 						},
 					},
 				})

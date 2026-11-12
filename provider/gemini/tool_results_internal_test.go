@@ -100,3 +100,27 @@ func TestFunctionResponseNameFallsBackToTheSyntheticID(t *testing.T) {
 		t.Fatalf("functionResponse names = %s, want [lookup]", b)
 	}
 }
+
+// A failed tool's result was sent like a success: IsError was dropped (B30).
+func TestFailedToolResultGoesUnderError(t *testing.T) {
+	c := &Client{config: llm.Config{Model: "gemini-3.8-flash"}, baseURL: defaultGeminiBase, providerName: "gemini"}
+	msgs := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "x"),
+		{Role: llm.RoleAssistant, Provider: "gemini", Content: []llm.ContentPart{
+			{Type: llm.ContentToolUse, ToolUseID: "call_0_a", ToolName: "a", ToolInput: map[string]any{}},
+			{Type: llm.ContentToolUse, ToolUseID: "call_1_b", ToolName: "b", ToolInput: map[string]any{}},
+		}},
+		{Role: llm.RoleUser, Content: []llm.ContentPart{
+			{Type: llm.ContentToolResult, ToolResultID: "call_0_a", ToolResultContent: "timeout", IsError: true},
+			{Type: llm.ContentToolResult, ToolResultID: "call_1_b", ToolResultContent: "42"},
+		}},
+	}
+	apiReq, err := c.buildRequest(llm.Request{Messages: msgs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(apiReq.Contents[2])
+	if !strings.Contains(string(b), `"name":"a","response":{"error":"timeout"}`) || !strings.Contains(string(b), `"name":"b","response":{"result":"42"}`) {
+		t.Fatalf("function responses = %s", b)
+	}
+}

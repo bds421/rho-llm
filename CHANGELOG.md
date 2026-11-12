@@ -187,6 +187,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are also read from `inlinedResponses`, and results written to a
   `responsesFile` are reported as an error instead of an empty result set.
   (Checked against the reference docs, not a live batch.)
+- **Gemini: a failed tool result was sent as a success** (B30). `IsError` was
+  ignored, so the model read the error text as the tool's result. A failed
+  result now goes under `error` in the `functionResponse` (the key Gemini's
+  reference names for error details); a successful one stays under `result`.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".
