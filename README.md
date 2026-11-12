@@ -739,13 +739,14 @@ When a key fails, the pool rotates to the next profile — which may use an enti
 **Error handling:**
 - **Transient errors (429, 503, 502, 500, 408, network):** Backoff and retry, rotating to other keys if available
 - **401:** Key is permanently disabled (invalid or revoked); rotates to other keys or fails immediately if none remain
+- **Exhausted quota** (a 429 naming `insufficient_quota`, "quota exceeded", Z.ai code 1308, …, or a `Retry-After` longer than 60s): the key rests for five minutes and the pool tries the next key; with no other key the error is returned at once instead of being retried (`llm.IsQuotaExhausted`)
 - **403:** Key rests for five minutes and the pool rotates. A 403 is often about the request (a model or region the organization may not use), so when a second key answers 403 to the same request, that error is returned without trying more keys
 - **Bad request (400):** Returns immediately — the request is broken, not the key
 
 ## Structured Errors
 
 All API errors are returned as `*APIError` with HTTP status code, enabling reliable classification. 
-*(Note: If using `NewClientWithKeys` for Auth Pool Rotation, retries happen automatically. These helpers are useful for manual flow control with a single client or application-level retries).* `APIError.RetryAfter` carries the provider's `Retry-After` hint (0 when absent, capped at `llm.MaxRetryAfter`).
+*(Note: If using `NewClientWithKeys` for Auth Pool Rotation, retries happen automatically. These helpers are useful for manual flow control with a single client or application-level retries).* `APIError.RetryAfter` carries the provider's `Retry-After` hint (0 when absent, capped at `llm.MaxRetryAfter`). The provider's `x-should-retry` header, when sent, decides `IsRetryable`.
 
 ```go
 resp, err := client.Complete(ctx, req)
@@ -758,7 +759,9 @@ if err != nil {
     case llm.IsAuthError(err):
         // 401/403 - check API key
     case llm.IsContextLength(err):
-        // 400 - input too long, truncate
+        // 413, or a 4xx overflow message from any host - input too long, truncate
+    case llm.IsQuotaExhausted(err):
+        // quota/budget exhausted (resets in hours) - don't retry this key
     case llm.IsRetryable(err):
         // Any retryable error (429, 503, 500, 502, 408)
     default:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -2015,4 +2016,87 @@ func callPoolReq(ctx context.Context, pc *llm.PooledClient, stream bool, req llm
 		}
 	}
 	return last
+}
+
+// A quota 429 on one key used to end the call (non-retryable, no rotation)
+// or, before P5, burn retries on the same key. Now the pool rests that key and
+// answers from the next; with no other key it gives up after one attempt
+// without opening the breaker.
+func TestPoolRotatesPastExhaustedQuota(t *testing.T) {
+	var hits sync.Map
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		n, _ := hits.LoadOrStore(key, new(atomic.Int32))
+		n.(*atomic.Int32).Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if key == "key-a" {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}`))
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"stream":true`) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n")
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"x","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+	count := func(key string) int32 {
+		n, ok := hits.Load(key)
+		if !ok {
+			return 0
+		}
+		return n.(*atomic.Int32).Load()
+	}
+	cfg := llm.Config{Provider: "openai", Model: "m", BaseURL: srv.URL, DisableProxy: true, Timeout: 5 * time.Second,
+		RetryPolicy:       &llm.RetryPolicy{BaseDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, Factor: 2},
+		ModelCapabilities: llm.Capabilities(llm.CapabilityChat, llm.CapabilityStream)}
+	req := llm.Request{Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "q")}}
+
+	two, err := llm.NewClientWithKeys(cfg, []string{"key-a", "key-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer two.Close()
+	for i := range 2 { // the second call must skip the resting key
+		resp, err := two.Complete(context.Background(), req)
+		if err != nil || resp.Content != "ok" {
+			t.Fatalf("call %d: resp=%v err=%v", i, resp, err)
+		}
+	}
+	if count("key-a") != 1 || count("key-b") != 2 {
+		t.Errorf("hits a=%d b=%d, want 1/2", count("key-a"), count("key-b"))
+	}
+	// The exhausted key rests as long as a 403 (5m), not a throttle's cooldown.
+	if pc, ok := two.(*llm.PooledClient); !ok || !strings.Contains(pc.PoolStatus(), "cooldown 5m0s") {
+		t.Errorf("pool status = %v", two)
+	}
+	var gotErr error
+	for _, e := range two.Stream(context.Background(), req) {
+		if e != nil {
+			gotErr = e
+		}
+	}
+	if gotErr != nil || count("key-a") != 1 {
+		t.Errorf("stream: err=%v hits a=%d", gotErr, count("key-a"))
+	}
+
+	hits = sync.Map{}
+	one, err := llm.NewClientWithKeys(cfg, []string{"key-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer one.Close()
+	for range 3 {
+		if _, err := one.Complete(context.Background(), req); !llm.IsQuotaExhausted(err) {
+			t.Fatalf("single key: err = %v, want the quota error", err)
+		}
+	}
+	// One attempt per call (the resting key is still the only one), and the
+	// breaker stays closed: a fourth call still reaches the server.
+	if got := count("key-a"); got != 3 {
+		t.Errorf("single key: %d attempts over 3 calls, want 3", got)
+	}
 }

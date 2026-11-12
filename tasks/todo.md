@@ -56,10 +56,6 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   `reasoning_tokens`). Replaces scattered `provider == …` checks.
 - **P4 — Anthropic message threads — M.** Beta `message-threads-2026-08-12`: send only new
   messages; full request when the prefix changed or the server can't continue.
-- **P5 — Overflow and retryability classifiers — S.** ~27 overflow patterns + exclusions
-  (Anthropic 413, llama.cpp, MiniMax, DashScope, z.ai, xAI, Groq); quota/billing 429s
-  non-retryable; honour `x-should-retry`; fail fast when `Retry-After` exceeds the cap
-  (pi `overflow.ts`, `retry.ts`). Includes the OpenRouter "input + max_tokens" false positive.
 - **F1 — Chat fallback + per-attempt usage — M.** `OperationChat` usage events and a
   `NewFallbackClient` for chat reusing `tryEach`/`FailoverPolicy`.
 

@@ -28,6 +28,21 @@ const MaxRetryAfter = 60 * time.Second
 // false when no usable hint is present. Negative, zero and past values report
 // false; a value above MaxRetryAfter is clamped to it.
 func parseRetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
+	wait, ok := rawRetryAfter(header, now)
+	return clampRetryAfter(wait), ok
+}
+
+// retryAfterBeyondCap reports whether the provider asked to wait longer than
+// MaxRetryAfter: a retry inside the cap would come too early (P5).
+func retryAfterBeyondCap(header http.Header, now time.Time) bool {
+	wait, ok := rawRetryAfter(header, now)
+	return ok && wait > MaxRetryAfter
+}
+
+// rawRetryAfter parses the hint without the MaxRetryAfter clamp; values are
+// bounded at 24h so a huge number cannot overflow a Duration.
+func rawRetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
+	const ceiling = 24 * time.Hour
 	if header == nil {
 		return 0, false
 	}
@@ -35,8 +50,8 @@ func parseRetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 		// ParseFloat accepts "NaN"/"Inf"; v > 0 rejects NaN, and the clamp is
 		// done in float space so +Inf or 1e300 cannot overflow a Duration.
 		if v, err := strconv.ParseFloat(ms, 64); err == nil && v > 0 {
-			if v*float64(time.Millisecond) >= float64(MaxRetryAfter) {
-				return MaxRetryAfter, true
+			if v*float64(time.Millisecond) >= float64(ceiling) {
+				return ceiling, true
 			}
 			return time.Duration(v * float64(time.Millisecond)), true
 		}
@@ -45,12 +60,15 @@ func parseRetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 	if raw == "" {
 		return 0, false
 	}
-	if secs, err := strconv.ParseInt(raw, 10, 64); err == nil {
+	if secs, err := strconv.ParseInt(raw, 10, 64); errors.Is(err, strconv.ErrRange) && !strings.HasPrefix(raw, "-") {
+		// More seconds than int64 holds: a very long wait, not a missing hint.
+		return ceiling, true
+	} else if err == nil {
 		if secs <= 0 {
 			return 0, false
 		}
-		if secs > int64(MaxRetryAfter/time.Second) {
-			return MaxRetryAfter, true
+		if secs > int64(ceiling/time.Second) {
+			return ceiling, true
 		}
 		return time.Duration(secs) * time.Second, true
 	}
@@ -59,7 +77,7 @@ func parseRetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 		if wait <= 0 {
 			return 0, false
 		}
-		return clampRetryAfter(wait), true
+		return min(wait, ceiling), true
 	}
 	return 0, false
 }

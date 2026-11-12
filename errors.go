@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +25,11 @@ type APIError struct {
 	// OpenAI's retry-after-ms), clamped to MaxRetryAfter; 0 when absent. The
 	// built-in retry loops use it as a floor for the next backoff.
 	RetryAfter time.Duration
+
+	// keyExhausted: this credential cannot serve requests for longer than a
+	// retry waits (quota or billing exhausted, or a Retry-After beyond
+	// MaxRetryAfter). See IsQuotaExhausted.
+	keyExhausted bool
 }
 
 func (e *APIError) Error() string {
@@ -95,7 +101,14 @@ func NewAPIErrorFromStatusWithLimit(provider string, status int, body string, ma
 	body = truncateErrorBody(body, maxMsgLen)
 	switch {
 	case status == 429:
-		return NewRateLimitError(provider, body)
+		rl := NewRateLimitError(provider, body)
+		if isQuotaMessage(body) {
+			// Quota or billing exhausted: it resets in hours, not seconds,
+			// so retrying the same key only burns the retry budget (P5).
+			rl.Retryable = false
+			rl.keyExhausted = true
+		}
+		return rl
 	case status == 503 || status == 529:
 		// 529 is Anthropic's "overloaded_error".
 		overloaded := NewOverloadedError(provider, body)
@@ -103,8 +116,13 @@ func NewAPIErrorFromStatusWithLimit(provider string, status int, body string, ma
 		return overloaded
 	case status == 401 || status == 403:
 		return NewAuthError(provider, body, status)
-	case status == 400 && isContextLengthMessage(body):
-		return NewContextLengthError(provider, body)
+	case status == 413 || (status >= 400 && status < 500 && status != 429 && isContextLengthMessage(body)):
+		// 413 is a request too large for the endpoint whatever the body says
+		// (Anthropic request_too_large, Cerebras without a body); other 4xx
+		// overflow errors are recognised by their text (P5).
+		cl := NewContextLengthError(provider, body)
+		cl.StatusCode = status
+		return cl
 	default:
 		return &APIError{
 			StatusCode: status,
@@ -200,25 +218,94 @@ func IsAuthError(err error) bool {
 	return false
 }
 
-// IsContextLength reports whether err is a context window exceeded error.
+// IsContextLength reports whether err says the request exceeds the model's
+// context window or the endpoint's request size: an HTTP 413, or another
+// client error (or a stream error without a status) whose text is a known
+// overflow message. A 429 never counts, whatever its text.
 func IsContextLength(err error) bool {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		return apiErr.StatusCode == 400 && isContextLengthMessage(apiErr.Message)
+		switch {
+		case apiErr.StatusCode == 413:
+			return true
+		case apiErr.StatusCode == 429:
+			return false
+		case apiErr.StatusCode == 0 || (apiErr.StatusCode >= 400 && apiErr.StatusCode < 500):
+			return isContextLengthMessage(apiErr.Message)
+		}
 	}
 	return false
 }
 
-// isContextLengthMessage checks if a 400 error body indicates context length exceeded.
-// Patterns are chosen to avoid false positives with rate-limit messages (e.g. "token limit
-// temporarily reached") and ambiguous phrases (e.g. "too many tokens" in a rate-limit context).
+// IsQuotaExhausted reports whether err says the credential cannot serve
+// requests for longer than a retry would wait: a 429 whose body names an
+// exhausted quota or budget (OpenAI insufficient_quota, Z.ai code 1308, …), or
+// a response whose Retry-After exceeds MaxRetryAfter. Such an error is not
+// retryable on the same key; a key pool rests the key and tries another.
+func IsQuotaExhausted(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.keyExhausted
+}
+
+// contextLengthPhrases are overflow messages, lower-cased (from pi-ai's
+// overflow.ts and the providers' docs). Each is specific enough that an
+// unrelated 4xx does not contain it.
+var contextLengthPhrases = []string{
+	"context length", "context_length", "maximum context", "context window",
+	"prompt is too long", "prompt too long", "prompt exceeds max length",
+	"input too long", "input is too long", "request too large", "request_too_large",
+	"token count exceeds", "input token count",
+	"maximum prompt length is",               // xAI
+	"reduce the length of the messages",      // Groq
+	"maximum allowed input length",           // OpenRouter
+	"longer than the model's context length", // Together
+	"exceeds the available context size",     // llama.cpp
+	"greater than the context length",        // LM Studio
+	"context window exceeds limit",           // MiniMax
+	"exceeded model token limit",             // Kimi
+	"range of input length should be",        // DashScope / Qwen
+	"model_context_window_exceeded",          // Z.ai
+	// Not "too many tokens" or "token limit exceeded": rate limits use them
+	// too ("per token limit exceeded").
+}
+
+// notContextLengthPhrases mark rate limiting worded like an overflow, e.g.
+// Bedrock's "ThrottlingException: Too many tokens, please wait".
+var notContextLengthPhrases = []string{"rate limit", "rate_limit", "too many requests", "throttl", "please wait"}
+
+// isContextLengthMessage reports whether an error body is an overflow message.
 func isContextLengthMessage(body string) bool {
 	lower := strings.ToLower(body)
-	return strings.Contains(lower, "context length") ||
-		strings.Contains(lower, "context_length") ||
-		strings.Contains(lower, "maximum context") ||
-		strings.Contains(lower, "prompt is too long") ||
-		strings.Contains(lower, "input too long") ||
-		strings.Contains(lower, "request too large") ||
-		strings.Contains(lower, "token count exceeds") // Gemini: "input token count exceeds the maximum number of tokens allowed"
+	for _, p := range notContextLengthPhrases {
+		if strings.Contains(lower, p) {
+			return false
+		}
+	}
+	for _, p := range contextLengthPhrases {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
 }
+
+// quotaPhrases mark a 429 that is an exhausted quota or budget, not a
+// throttle (from pi-ai's retry.ts). "billing" alone is left out: Gemini's
+// ordinary per-minute 429 says "check your plan and billing details".
+var quotaPhrases = []string{
+	"insufficient_quota", "quota exceeded", "out of budget", "monthly usage limit reached",
+	"usage_limit_exceeded", "credit balance is too low",
+}
+
+func isQuotaMessage(body string) bool {
+	lower := strings.ToLower(body)
+	for _, p := range quotaPhrases {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return zaiPlanLimit.MatchString(body)
+}
+
+// zaiPlanLimit is Z.ai error code 1308: the plan's usage limit, sent as 429.
+var zaiPlanLimit = regexp.MustCompile(`"code"\s*:\s*"?1308(?:[^0-9]|$)`)

@@ -168,7 +168,11 @@ func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimi
 
 	var cooldown time.Duration
 	// Cooldown based on error type
-	if IsAuthError(err) { // 403
+	if IsQuotaExhausted(err) {
+		// Quota resets in hours: rest the key as long as a 403 (P5).
+		cooldown = cooldownForbidden
+		slog.Warn("profile quota exhausted, resting", "profile", profile.Name, "cooldown", cooldown)
+	} else if IsAuthError(err) { // 403
 		cooldown = cooldownForbidden
 		slog.Warn("profile forbidden, resting", "profile", profile.Name, "cooldown", cooldown,
 			"error", redactProfileSecrets(err.Error(), profile.APIKey, profile.BaseURL))
@@ -424,7 +428,7 @@ func isForbidden(err error) bool {
 // the whole pool although another key was healthy. With a single usable key
 // the endpoint is unavailable to this caller, so it counts.
 func (pc *PooledClient) countsAgainstEndpoint(err error) bool {
-	if IsAuthError(err) {
+	if IsAuthError(err) || IsQuotaExhausted(err) {
 		return false
 	}
 	if IsRateLimited(err) && pc.pool.HealthyCount() > 1 {
@@ -561,7 +565,7 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 		// Other errors (400 bad request, etc.) are not key-related — return immediately.
 		// A reachable endpoint that returns a client-side error is not a breaker
 		// failure; re-arm a consumed half-open probe so it doesn't wedge.
-		if !IsRetryable(err) && !IsAuthError(err) {
+		if !rotatable(err) {
 			pc.breaker.ReleaseProbe(probeTok)
 			return nil, err
 		}
@@ -589,8 +593,8 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 			}
 			// Rotation failed (all keys in cooldown or single-key pool).
 			// Auth errors are permanent — no point retrying with the same dead key.
-			if IsAuthError(err) {
-				slog.Debug("auth error with no healthy keys, giving up", "error", pc.redactErr(err))
+			if IsAuthError(err) || IsQuotaExhausted(err) {
+				slog.Debug("auth or quota error with no healthy keys, giving up", "error", pc.redactErr(err))
 				return nil, err
 			}
 
@@ -694,7 +698,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 
 			for event, err := range rc.client.Stream(ctx, req) {
 				if err != nil {
-					if firstEvent && event.Type == "" && (IsRetryable(err) || IsAuthError(err)) {
+					if firstEvent && event.Type == "" && rotatable(err) {
 						// Connection failed before any data — safe to retry. An
 						// error event with usage (the provider started and billed the
 						// attempt) is passed on instead, so that cost is not lost.
@@ -712,7 +716,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 						// Caller cancelled — not a provider failure. Re-arm a
 						// consumed half-open probe so it doesn't strand traffic.
 						pc.breaker.ReleaseProbe(probeTok)
-					case IsRetryable(err) || IsAuthError(err):
+					case rotatable(err):
 						pc.recordFailedAttempt(usedName, err, probeTok)
 					default:
 						// Non-retryable, non-auth (e.g. 400): endpoint reachable,
@@ -774,8 +778,8 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				}
 				// Rotation failed (all keys in cooldown or single-key pool).
 				// Auth errors are permanent — no point retrying with the same dead key.
-				if IsAuthError(lastErr) {
-					slog.Debug("stream: auth error with no healthy keys, giving up", "error", pc.redactErr(lastErr))
+				if IsAuthError(lastErr) || IsQuotaExhausted(lastErr) {
+					slog.Debug("stream: auth or quota error with no healthy keys, giving up", "error", pc.redactErr(lastErr))
 					yield(StreamEvent{}, lastErr)
 					return
 				}
@@ -936,4 +940,10 @@ func (pc *PooledClient) Close() error {
 // PoolStatus returns the status of the auth pool.
 func (pc *PooledClient) PoolStatus() string {
 	return pc.pool.Status()
+}
+
+// rotatable reports whether a failed attempt may move on to another key: a
+// transient error, a key-specific auth error, or an exhausted quota (P5).
+func rotatable(err error) bool {
+	return IsRetryable(err) || IsAuthError(err) || IsQuotaExhausted(err)
 }

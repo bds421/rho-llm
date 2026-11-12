@@ -96,7 +96,11 @@ func DoHTTPWithOptions(
 		}
 		resp, err := client.Do(req)
 		err = urlerr.Redact(err) // the request URL may carry a key (B32)
-		if err == nil && !retryableHTTPStatus(resp.StatusCode) {
+		if err == nil && (resp.StatusCode < 400 || !shouldRetryStatus(resp)) {
+			if resp.StatusCode >= 400 && retryableHTTPStatus(resp.StatusCode) {
+				// The provider's headers ruled out a retry the status allows.
+				exhausted(attempt, NewAPIErrorFromStatus(provider, resp.StatusCode, resp.Status))
+			}
 			return resp, nil
 		}
 		var delay time.Duration
@@ -169,6 +173,31 @@ func idempotentSafeStatus(status int) bool {
 // retryableHTTPStatus matches the statuses the chat path retries (IsRetryable).
 // 529 was missing, so a batch or file call failed on the first Anthropic
 // overload (B16).
+// applyRetryHeaders lets the provider's own retry advice override the status
+// rule (P5): x-should-retry (sent by OpenAI and Anthropic, honoured by their
+// SDKs) says whether a retry can succeed, and a Retry-After beyond
+// MaxRetryAfter means a retry inside the cap comes too early.
+func applyRetryHeaders(apiErr *APIError, header http.Header, now time.Time) {
+	switch strings.ToLower(strings.TrimSpace(header.Get("X-Should-Retry"))) {
+	case "true":
+		apiErr.Retryable = true
+	case "false":
+		apiErr.Retryable = false
+	}
+	if retryAfterBeyondCap(header, now) {
+		apiErr.Retryable = false
+		apiErr.keyExhausted = true
+	}
+}
+
+// shouldRetryStatus is retryableHTTPStatus adjusted by the response's retry
+// headers (see applyRetryHeaders).
+func shouldRetryStatus(resp *http.Response) bool {
+	apiErr := &APIError{Retryable: retryableHTTPStatus(resp.StatusCode)}
+	applyRetryHeaders(apiErr, resp.Header, time.Now())
+	return apiErr.Retryable
+}
+
 func retryableHTTPStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests ||
 		status == http.StatusInternalServerError || status == http.StatusBadGateway ||
@@ -200,9 +229,11 @@ func ErrorFromResponse(provider string, resp *http.Response, cfg Config) error {
 	// that callers log or show.
 	message := redactProfileSecrets(string(body), cfg.APIKey, cfg.BaseURL)
 	apiErr := NewAPIErrorFromStatusWithLimit(provider, resp.StatusCode, message, cfg.EffectiveMaxErrorMessageLen())
-	if wait, ok := parseRetryAfter(resp.Header, time.Now()); ok {
+	now := time.Now()
+	if wait, ok := parseRetryAfter(resp.Header, now); ok {
 		apiErr.RetryAfter = wait
 	}
+	applyRetryHeaders(apiErr, resp.Header, now)
 	return apiErr
 }
 

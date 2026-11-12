@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Overflow, quota and retry-advice classification** (P5, after pi-ai's
+  `overflow.ts` / `retry.ts`). `IsContextLength` now recognises an HTTP 413
+  and the overflow messages of xAI, Groq, OpenRouter, Together, llama.cpp,
+  LM Studio, MiniMax, Kimi, DashScope and Z.ai on any 4xx or status-less
+  stream error (it matched seven phrases on a 400 only), and still ignores
+  rate-limit wording. New `IsQuotaExhausted`: a 429 naming an exhausted quota
+  or budget (`insufficient_quota`, "quota exceeded", Z.ai code 1308, …) or a
+  `Retry-After` beyond `MaxRetryAfter` is no longer retried on the same key; a
+  key pool rests that key for five minutes and answers from the next, without
+  opening the circuit breaker. The provider's `x-should-retry` header now
+  decides retryability in `ErrorFromResponse` and `DoHTTP`. A `Retry-After`
+  too large for an int64 now counts as a long wait instead of no hint.
+
 - **Anthropic thinking block binding** (P1). Claude Fable 5.1/5.2, Opus 5.5,
   Sonnet 5.5 and Haiku 5.5 bind each thinking block to the conversation that
   produced it and answer a 400 ("bound to a different conversation") when the

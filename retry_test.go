@@ -959,3 +959,23 @@ func TestDoHTTPHonoursALowMaxRetries(t *testing.T) {
 		}
 	}
 }
+
+// DoHTTP retried a status whatever the provider's headers said (P5).
+func TestDoHTTPHonoursShouldRetryHeader(t *testing.T) {
+	srv, hits := hitServer(t, func(_ int32, w http.ResponseWriter) {
+		w.Header().Set("X-Should-Retry", "false")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	_, _ = doGet(t, llm.Config{DisableProxy: true, RetryPolicy: fastPolicy}, srv.URL, llm.HTTPCallOptions{})
+	if got := hits.Load(); got != 1 {
+		t.Errorf("x-should-retry false: %d attempts, want 1", got)
+	}
+	srv2, hits2 := hitServer(t, func(_ int32, w http.ResponseWriter) {
+		w.Header().Set("X-Should-Retry", "true")
+		w.WriteHeader(http.StatusConflict)
+	})
+	_, _ = doGet(t, llm.Config{DisableProxy: true, RetryPolicy: fastPolicy}, srv2.URL, llm.HTTPCallOptions{})
+	if got := hits2.Load(); got != 3 {
+		t.Errorf("x-should-retry true on 409: %d attempts, want 3", got)
+	}
+}

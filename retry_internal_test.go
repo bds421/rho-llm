@@ -33,7 +33,10 @@ func TestParseRetryAfterHostileValues(t *testing.T) {
 		{"zero", "Retry-After", "0", 0, false},
 		{"negative", "Retry-After", "-3", 0, false},
 		{"huge", "Retry-After", "9223372036854775807", MaxRetryAfter, true},
-		{"overflow", "Retry-After", "99999999999999999999999", 0, false},
+		// Beyond int64 is a very long wait, like "huge" (it read as no hint, so
+		// a quota 429 asking for days was retried; P5).
+		{"overflow", "Retry-After", "99999999999999999999999", MaxRetryAfter, true},
+		{"overflow negative", "Retry-After", "-99999999999999999999999", 0, false},
 		{"garbage", "Retry-After", "soon", 0, false},
 		{"fraction", "Retry-After", "1.5", 0, false},
 		{"date future", "Retry-After", now.Add(10 * time.Second).Format(http.TimeFormat), 10 * time.Second, true},

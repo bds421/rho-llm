@@ -584,8 +584,18 @@ Classification helpers use `errors.As()`:
 | `IsRateLimited(err)` | StatusCode == 429 |
 | `IsOverloaded(err)` | StatusCode == 503 or 529 (Anthropic `overloaded_error`) |
 | `IsAuthError(err)` | StatusCode == 401 or 403 |
-| `IsContextLength(err)` | StatusCode == 400 + context-length keywords in body |
-| `IsRetryable(err)` | `APIError.Retryable == true` (429, 503, 500, 502, 408) |
+| `IsContextLength(err)` | StatusCode 413, or another 4xx (not 429) / status-less stream error whose text matches one of ~25 overflow phrases (OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, Together, llama.cpp, LM Studio, MiniMax, Kimi, DashScope, Z.ai), unless it reads as rate limiting |
+| `IsQuotaExhausted(err)` | a 429 naming an exhausted quota or budget (`insufficient_quota`, "quota exceeded", Z.ai code 1308, …), or any response whose `Retry-After` exceeds `MaxRetryAfter`; not retryable on that key |
+| `IsRetryable(err)` | `APIError.Retryable == true` (429, 503, 529, 500, 502, 504, 408), overridden by the provider's `x-should-retry` header |
+
+`ErrorFromResponse` applies the provider's retry advice on top of the status
+rule: `x-should-retry: true|false` (OpenAI, Anthropic) decides retryability, and a
+`Retry-After` beyond `MaxRetryAfter` (60s) makes the error non-retryable and
+quota-exhausted, since a retry inside the cap would come too early. `DoHTTP`
+honours the same two headers. A key pool treats a quota-exhausted error like a
+403: the key rests for five minutes, the pool tries the next key, and it gives up
+without backoff when no other key is healthy; such errors do not count against
+the circuit breaker.
 
 `NewAPIErrorFromStatus()` is the shared constructor used by all adapters to map HTTP responses to the appropriate `*APIError` subtype.
 
