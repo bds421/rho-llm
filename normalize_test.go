@@ -506,3 +506,33 @@ func TestNormalizeDedupIDsMatchTheAnthropicPattern(t *testing.T) {
 		t.Fatalf("got %d calls and %d results, want 5 each", len(seen), results)
 	}
 }
+
+// Text documents are Anthropic-only and every other adapter refuses them, so
+// one in the history failed every turn after a handoff, with no way to edit it
+// out of the session (B20). Normalization turns it into text elsewhere.
+func TestNormalizeTextDocumentForNonAnthropicTargets(t *testing.T) {
+	doc := llm.NewTextDocument("notes.txt", "Graz is in Styria.")
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.ContentPart{doc, {Type: llm.ContentText, Text: "Where is Graz?"}}},
+		{Role: llm.RoleAssistant, Provider: "anthropic", Content: []llm.ContentPart{{Type: llm.ContentText, Text: "Styria."}}},
+	}
+	for _, target := range []string{"gemini", "openai", "openai_responses", "mistral", "ollama", "some-custom-host"} {
+		out := llm.NormalizeForProvider(msgs, target)
+		first := out[0].Content[0]
+		if first.Type != llm.ContentText || first.Text != "notes.txt\n\nGraz is in Styria." {
+			t.Fatalf("%s: text document became %+v, want a text part with title and text", target, first)
+		}
+		if msgs[0].Content[0].Type != llm.ContentDocument {
+			t.Fatalf("%s: normalization mutated the caller's transcript", target)
+		}
+	}
+	for _, target := range []string{"anthropic", "claude"} {
+		if got := llm.NormalizeForProvider(msgs, target)[0].Content[0]; !llm.IsTextDocument(got) {
+			t.Fatalf("%s: text document was converted, want it kept: %+v", target, got)
+		}
+	}
+	untitled := []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{llm.NewTextDocument("", "body")}}}
+	if got := llm.NormalizeForProvider(untitled, "gemini")[0].Content[0].Text; got != "body" {
+		t.Fatalf("untitled document text = %q, want %q", got, "body")
+	}
+}

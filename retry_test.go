@@ -912,3 +912,27 @@ func TestModalityCreatesNotRetriedOn500(t *testing.T) {
 		}
 	}
 }
+
+// Anthropic answers 529 when overloaded. The chat path retries it, DoHTTP did
+// not: batch and file calls failed on the first overload (B16). Like a 503 the
+// request was not processed, so even a create is resent.
+func TestDoHTTPRetries529(t *testing.T) {
+	for _, nonIdempotent := range []bool{false, true} {
+		srv, hits := hitServer(t, func(hit int32, w http.ResponseWriter) {
+			if hit == 1 {
+				w.WriteHeader(529)
+				_, _ = w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		resp, err := llm.DoHTTPWithOptions(context.Background(), llm.Config{DisableProxy: true, RetryPolicy: fastPolicy}, nil,
+			func(ctx context.Context) (*http.Request, error) {
+				return http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, strings.NewReader("{}"))
+			}, llm.HTTPCallOptions{NonIdempotent: nonIdempotent})
+		if err != nil || resp.StatusCode != http.StatusOK || hits.Load() != 2 {
+			t.Fatalf("nonIdempotent=%v: resp=%v err=%v hits=%d, want a retry after the 529", nonIdempotent, resp, err, hits.Load())
+		}
+		_ = resp.Body.Close()
+	}
+}

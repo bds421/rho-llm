@@ -28,16 +28,14 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   attempts below 3); `DoHTTP`: attempts with a floor of 3; doc says "minimum 3"
   (`config.go:462`, `pool.go:424-440`, `transport.go:64-73`). Pick one meaning, fix README
   618/1242.
-- 🟡 **B16 — `DoHTTP` doesn't retry Anthropic 529 — S.** `retryableHTTPStatus` omits it
-  (`transport.go:160-164`); batch calls fail on the first overload.
 - 🟡 **B17 — Stream idle watchdog counts consumer time — S.** Measures since the last `Read`,
   not time blocked in `Read`; a slow loop body trips a retryable timeout (`config.go:218-227`).
 - 🟢 **B18 — `rc.Release()` in pool `Stream` not deferred** (*suspected*) (`pool.go:613-656`).
 
 ### Session & conversation
-- **B20 — A text document (or a PDF for openai_responses) bricks the session after a
-  handoff — S.** Not degraded in `NormalizeForProvider` (`normalize.go:129-131`); every later
-  turn fails and history can't be edited. Degrade to a text part for non-Anthropic targets.
+- **B20 — A PDF in the history breaks an openai_responses session after a handoff — S/M.**
+  The Responses adapter refuses `ContentDocument`; build `input_file` items (`file_data` as a
+  PDF data URL) instead (`responses.go:833-837`). Text documents are degraded since B20's fix.
 - 🟡 **B22 — Cost is $0 for snapshot-suffixed model IDs — S.** `pricingFor` is exact-match +
   alias; `gpt-5.4-2026-03-05`, `claude-opus-5-5-20260901` price 0; one unknown iteration
   model zeroes the response (`registry.go:747-783`). Strip the suffix via `versionSuffix`;

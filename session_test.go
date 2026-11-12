@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -148,6 +149,47 @@ func TestSwitchProviderDropsTheBaseModel(t *testing.T) {
 	}
 	if second.gotReq.MaxTokens != 321 {
 		t.Fatalf("other base settings must carry over: MaxTokens = %d", second.gotReq.MaxTokens)
+	}
+}
+
+// A session that read a text document on Anthropic must keep working after a
+// switch to a provider without text documents (B20): the Gemini adapter
+// refused the document on every later turn.
+func TestSwitchProviderAfterATextDocument(t *testing.T) {
+	var gotParts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Contents []struct {
+				Parts []json.RawMessage `json:"parts"`
+			} `json:"contents"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, c := range body.Contents {
+			gotParts += len(c.Parts)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`))
+	}))
+	defer srv.Close()
+
+	first := &fakeClient{provider: "anthropic", model: "claude-sonnet-5-5", resp: &llm.Response{Content: "read it", StopReason: "end_turn"}}
+	s := llm.NewSession(first)
+	if _, err := s.SendMessages(context.Background(), llm.Message{Role: llm.RoleUser, Content: []llm.ContentPart{
+		llm.NewTextDocument("notes.txt", "Graz is in Styria."), {Type: llm.ContentText, Text: "read this"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	gem, err := llm.NewClient(llm.Config{Provider: "gemini", Model: "gemini-3.8-flash", APIKey: "k", BaseURL: srv.URL, DisableRetries: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gem.Close()
+	s.SwitchProvider(gem)
+	if _, err := s.Send(context.Background(), "where is Graz?"); err != nil {
+		t.Fatalf("turn after the handoff failed: %v", err)
+	}
+	if gotParts != 4 {
+		t.Fatalf("Gemini got %d parts, want 4 (document as text, prompt, reply, new prompt)", gotParts)
 	}
 }
 

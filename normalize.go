@@ -126,6 +126,16 @@ func normalize(msgs []Message, provider, model string) []Message {
 					p.Citations = nil // citation locations point into provider-held results
 				}
 				nm.Content = append(nm.Content, p)
+			case ContentDocument:
+				// Text documents exist only on the Anthropic protocol; every
+				// other adapter refuses them, so one in the history failed
+				// every turn after a handoff and could not be edited away
+				// (B20). Elsewhere it becomes the text it holds.
+				if IsTextDocument(p) && !anthropicProtocol(provider) {
+					nm.Content = append(nm.Content, textDocumentAsText(p))
+					break
+				}
+				nm.Content = append(nm.Content, p)
 			default:
 				nm.Content = append(nm.Content, p)
 			}
@@ -183,6 +193,21 @@ var versionSuffix = regexp.MustCompile(`^-[0-9]{3,}(-[0-9]+)*$`)
 func isVersionSuffixOf(long, short string) bool {
 	rest, ok := strings.CutPrefix(long, short)
 	return ok && versionSuffix.MatchString(rest)
+}
+
+// anthropicProtocol reports whether provider speaks the Anthropic wire
+// protocol, the only one with text documents.
+func anthropicProtocol(provider string) bool {
+	return ResolveProtocol(Config{Provider: provider}) == "anthropic"
+}
+
+// textDocumentAsText turns a text document into a text part, keeping its title.
+func textDocumentAsText(p ContentPart) ContentPart {
+	text := p.Document.Data
+	if p.Title != "" {
+		text = p.Title + "\n\n" + text
+	}
+	return ContentPart{Type: ContentText, Text: text}
 }
 
 // uniqueToolID returns the first "<base>_dup<n>" not already present in used.

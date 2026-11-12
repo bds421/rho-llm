@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pool returned before recording the failure, and `NewClient` bypassed the pool
   entirely. With `CircuitThreshold` set, a retries-disabled client now goes
   through the pool and every failure is recorded; it still makes one attempt.
+- **`DoHTTP` did not retry Anthropic's 529 overload** (B16). The chat path
+  retries it; batch and file calls failed on the first overload. 529 is now
+  retried, and like a 503 it also allows resending a create
+  (`HTTPCallOptions.NonIdempotent`): the request was not processed.
+- **A text document in the history broke the session after a provider
+  switch** (B20). Text documents exist only on the Anthropic protocol and every
+  other adapter refuses them, so after `SwitchProvider` every turn failed and
+  the history could not be edited. `NormalizeForProvider` now turns a text
+  document into a text part (title, blank line, text) for any other provider.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

@@ -27,7 +27,8 @@ type HTTPCallOptions struct {
 	// resource — a batch job, generated images, synthesized speech. A resend
 	// after the provider already acted on it would duplicate the job or the
 	// charge, so such a request is retried only when the provider certainly
-	// did not act: HTTP 429 or 503 (rejected before processing) or a
+	// did not act: HTTP 429, 503 or Anthropic's 529 (rejected before
+	// processing) or a
 	// connection that was never established (DNS/dial/proxy-connect failure).
 	// 408/500/502/504 and transport errors after the request may have been
 	// sent are returned after the first attempt.
@@ -151,16 +152,25 @@ func DoHTTPWithOptions(
 	return nil, fmt.Errorf("llm: retry loop exhausted: %w", lastErr)
 }
 
+// statusOverloaded is Anthropic's 529 overloaded_error: like a 503, the
+// request was rejected before processing.
+const statusOverloaded = 529
+
 // idempotentSafeStatus reports a status at which the provider rejected the
 // request before acting on it, so even a create may be resent.
 func idempotentSafeStatus(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
+	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable ||
+		status == statusOverloaded
 }
 
+// retryableHTTPStatus matches the statuses the chat path retries (IsRetryable).
+// 529 was missing, so a batch or file call failed on the first Anthropic
+// overload (B16).
 func retryableHTTPStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests ||
 		status == http.StatusInternalServerError || status == http.StatusBadGateway ||
-		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout ||
+		status == statusOverloaded
 }
 
 // NewJSONRequest builds a POST request carrying a JSON body, with Content-Type set.
