@@ -15,7 +15,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bds421/rho-llm"
+	llm "github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/internal/toolinput"
 )
 
 func init() {
@@ -454,7 +455,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		if msg.Role == llm.RoleAssistant {
 			for _, part := range msg.Content {
 				if part.Type == llm.ContentToolUse {
-					inputJSON, err := json.Marshal(llm.ToolInputObject(part.ToolInput))
+					inputJSON, err := json.Marshal(toolinput.Object(part.ToolInput))
 					if err != nil {
 						slog.Debug("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
 						inputJSON = []byte("{}")
@@ -621,7 +622,7 @@ func (c *Client) parseResponse(apiResp *openaiResponse) *llm.Response {
 
 		// Extract tool calls
 		for _, tc := range choice.Message.ToolCalls {
-			input, err := llm.DecodeToolInput(tc.Function.Arguments)
+			input, err := toolinput.Decode(tc.Function.Arguments)
 			if err != nil {
 				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", tc.Function.Name, "error", err)
 			}
@@ -683,7 +684,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		sc.emitted = true
 		raw := sc.args.String()
 		pendingBytes -= len(raw)
-		input, err := llm.DecodeToolInput(raw)
+		input, err := toolinput.Decode(raw)
 		if err != nil {
 			slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", sc.call.Name, "error", err)
 		}

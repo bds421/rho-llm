@@ -14,7 +14,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bds421/rho-llm"
+	llm "github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/internal/toolinput"
 )
 
 const defaultAnthropicBase = "https://api.anthropic.com/v1"
@@ -536,7 +537,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					})
 				}
 			case llm.ContentToolUse:
-				input := llm.ToolInputObject(part.ToolInput) // Anthropic requires an object
+				input := toolinput.Object(part.ToolInput) // Anthropic requires an object
 				apiMsg.Content = append(apiMsg.Content, map[string]any{
 					"type":  "tool_use",
 					"id":    part.ToolUseID,
@@ -856,7 +857,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		if currentToolCall == nil {
 			return true
 		}
-		input, err := llm.DecodeToolInput(inputBuffer.String())
+		input, err := toolinput.Decode(inputBuffer.String())
 		if err != nil {
 			slog.Debug("failed to parse tool input JSON", "provider", "anthropic", "tool", currentToolCall.Name, "error", err)
 		}

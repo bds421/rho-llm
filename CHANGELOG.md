@@ -166,8 +166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compatible servers and the Responses API became `ToolCall.Input == ""`, and the
   next request replayed `"input":""` / `"arguments":"\"\""`. Empty and `null`
   arguments now decode to `{}`, and every adapter sends an object when it replays
-  a tool call, including from transcripts persisted before this fix. New
-  `DecodeToolInput` and `ToolInputObject` share this between the adapters.
+  a tool call, including from transcripts persisted before this fix. One
+  internal decoder now does this for every adapter.
 
 ### Changed
 

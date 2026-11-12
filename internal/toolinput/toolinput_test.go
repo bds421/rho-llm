@@ -1,17 +1,17 @@
-package llm_test
+package toolinput_test
 
 import (
 	"reflect"
 	"testing"
 
-	llm "github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/internal/toolinput"
 )
 
 // A tool without parameters arrives as "" (Anthropic sends no partial_json, or
 // an empty one; OpenAI-compatible servers send "arguments":""). It was stored
 // as the string "" and replayed as "input":"" / "arguments":"\"\"", which the
 // next request carries forever (B8).
-func TestDecodeToolInput(t *testing.T) {
+func TestDecode(t *testing.T) {
 	empty := map[string]any{}
 	cases := []struct {
 		raw     string
@@ -30,14 +30,14 @@ func TestDecodeToolInput(t *testing.T) {
 		{`not json`, `not json`, true},
 	}
 	for _, tc := range cases {
-		got, err := llm.DecodeToolInput(tc.raw)
+		got, err := toolinput.Decode(tc.raw)
 		if (err != nil) != tc.wantErr || !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("DecodeToolInput(%q) = %#v, %v; want %#v, err=%v", tc.raw, got, err, tc.want, tc.wantErr)
+			t.Errorf("Decode(%q) = %#v, %v; want %#v, err=%v", tc.raw, got, err, tc.want, tc.wantErr)
 		}
 	}
 }
 
-func TestToolInputObject(t *testing.T) {
+func TestObject(t *testing.T) {
 	empty := map[string]any{}
 	obj := map[string]any{"a": 1.0}
 	cases := []struct {
@@ -55,8 +55,8 @@ func TestToolInputObject(t *testing.T) {
 		{42, 42},
 	}
 	for _, tc := range cases {
-		if got := llm.ToolInputObject(tc.in); !reflect.DeepEqual(got, tc.want) {
-			t.Errorf("ToolInputObject(%#v) = %#v, want %#v", tc.in, got, tc.want)
+		if got := toolinput.Object(tc.in); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("Object(%#v) = %#v, want %#v", tc.in, got, tc.want)
 		}
 	}
 }

@@ -17,7 +17,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bds421/rho-llm"
+	llm "github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/internal/toolinput"
 )
 
 func init() {
@@ -368,7 +369,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			if args == "" {
 				args = buffered
 			}
-			input, err := llm.DecodeToolInput(args)
+			input, err := toolinput.Decode(args)
 			if err != nil {
 				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", ev.Name, "error", err)
 			}
@@ -904,7 +905,7 @@ func (c *Client) buildAssistantMessage(apiReq *responsesRequest, msg llm.Message
 				textParts = nil
 			}
 			// Serialize tool input to JSON string
-			inputJSON, err := json.Marshal(llm.ToolInputObject(part.ToolInput))
+			inputJSON, err := json.Marshal(toolinput.Object(part.ToolInput))
 			if err != nil {
 				slog.Debug("failed to marshal tool input", "provider", c.providerName, "tool", part.ToolName, "error", err)
 				inputJSON = []byte("{}")
@@ -980,7 +981,7 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 				}
 			}
 		case "function_call":
-			input, err := llm.DecodeToolInput(item.Arguments)
+			input, err := toolinput.Decode(item.Arguments)
 			if err != nil {
 				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", item.Name, "error", err)
 			}

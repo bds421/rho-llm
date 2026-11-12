@@ -14,7 +14,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/bds421/rho-llm"
+	llm "github.com/bds421/rho-llm"
+	"github.com/bds421/rho-llm/internal/toolinput"
 )
 
 const (
@@ -443,7 +444,7 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 				gp := geminiPart{
 					FunctionCall: &geminiFunctionCall{
 						Name: part.ToolName,
-						Args: llm.ToolInputObject(part.ToolInput),
+						Args: toolinput.Object(part.ToolInput),
 					},
 				}
 				// Gemini 3: thoughtSignature is at the Part level, sibling to functionCall
