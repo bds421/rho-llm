@@ -677,6 +677,17 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			}
 			rc.Acquire()
 			pc.mu.RUnlock()
+			// release is idempotent and also deferred: if the caller's loop
+			// body panics inside yield, the reference is still dropped, so a
+			// rotated-out client is still closed (B18).
+			released := false
+			release := func() {
+				if !released {
+					released = true
+					rc.Release()
+				}
+			}
+			defer release()
 
 			firstEvent := true
 			retryable := false
@@ -708,7 +719,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 						// not a breaker failure; re-arm a consumed half-open probe.
 						pc.breaker.ReleaseProbe(probeTok)
 					}
-					rc.Release()
+					release()
 					yield(event, err)
 					return
 				}
@@ -716,12 +727,12 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 				if !yield(event, nil) {
 					pc.pool.MarkSuccessByName(usedName)
 					pc.breaker.recordSuccess(probeTok)
-					rc.Release()
+					release()
 					return
 				}
 			}
 
-			rc.Release()
+			release()
 
 			if !retryable {
 				// Stream completed normally

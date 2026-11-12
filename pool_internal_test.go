@@ -820,3 +820,31 @@ func TestCompleteCancelledContextWithRetryableErrorDoesNotPoisonPool(t *testing.
 		t.Fatal("retryable error under a cancelled context put the key in cooldown")
 	}
 }
+
+// A caller whose loop body panics inside the stream: the in-flight reference
+// was never released, so the client was never closed (B18).
+func TestStreamReleasesTheClientWhenTheCallerPanics(t *testing.T) {
+	var spies []*closeSpyClient
+	pc, err := NewPooledClient(Config{Provider: "test"}, []string{"a"}, func(AuthProfile) (Client, error) {
+		var ready sync.WaitGroup
+		ready.Add(1 << 20) // never waited on
+		gate := make(chan struct{})
+		close(gate)
+		spy := &closeSpyClient{ready: &ready, gate: gate}
+		spies = append(spies, spy)
+		return spy, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() { _ = recover() }()
+		for range pc.Stream(context.Background(), Request{}) {
+			panic("caller bug")
+		}
+	}()
+	_ = pc.Close()
+	if n := spies[0].closes.Load(); n != 1 {
+		t.Fatalf("client closed %d times after a panicking caller and Close, want 1", n)
+	}
+}
