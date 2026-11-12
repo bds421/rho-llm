@@ -52,12 +52,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 - 🟡 **B25 — Gemini thought summaries never requested** (*unverified live*). pi sends
   `thinkingConfig.includeThoughts: true` (`google-generative-ai.ts:399`); rho sends only
   `thinkingLevel` (`gemini.go:209-212`), so `EventThinking` probably never fires.
-- 🟡 **B26 — 256 KB SSE line cap kills long Responses streams and Anthropic batch
-  downloads — S.** `response.completed` repeats the whole output on one line (fails at ~300
-  KB); `anthropicbatch.parseResults` reuses the cap for JSONL and ignores
-  `MaxBatchDownloadBytes` (`responses.go:190`, `anthropicbatch.go:220-229, 376-411`).
-- 🟡 **B27 — Anthropic batch per-item errors lose their message — S.** Nested
-  `{"type":"error","error":{type,message}}` read as flat (`anthropicbatch.go:363-371, 396`).
 - 🟡 **B28 — Gemini batch results don't decode the documented shape** (*doc-verified, not
   live*). `inlinedResponses` is an object wrapping an array (`geminibatch.go:302-318`).
 - 🟢 **B29 — Batch IDs go into URL paths unescaped — S.** Anthropic ID and Gemini name allow

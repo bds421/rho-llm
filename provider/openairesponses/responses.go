@@ -12,6 +12,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -188,10 +189,22 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 
 // parseStream reads SSE events from the Responses API stream and yields
 // llm.StreamEvent values to the caller's iterator.
+// sseLineCap bounds one stream line. response.completed repeats the whole
+// response on a single line, so the default 256 KB SSE cap failed every answer
+// past ~256 KB at its very end (B26). Without an explicit
+// Config.MaxSSELineBytes, a line may be as large as a Complete response body
+// (Config.MaxResponseBodyBytes); the scanner grows its buffer only as needed.
+func (c *Client) sseLineCap() int {
+	if c.config.MaxSSELineBytes > 0 {
+		return c.config.MaxSSELineBytes
+	}
+	return int(min(c.config.EffectiveMaxResponseBodyBytes(), int64(math.MaxInt32)))
+}
+
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
 	maxToolInput := c.config.EffectiveMaxToolInputBytes()
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
+	scanner.Buffer(nil, c.sseLineCap())
 
 	// Per-tool-call accumulation: the Responses API sends argument deltas
 	// followed by a single "done" event with the full arguments. Parallel

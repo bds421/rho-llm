@@ -100,6 +100,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other adapter refuses them, so after `SwitchProvider` every turn failed and
   the history could not be edited. `NormalizeForProvider` now turns a text
   document into a text part (title, blank line, text) for any other provider.
+- **Long OpenAI Responses answers failed at the end of the stream, and long
+  Anthropic batch answers failed the download** (B26). `response.completed`
+  repeats the whole response on one line, and an Anthropic batch result line
+  holds a whole message; both were held to the 256 KB SSE line cap
+  (`bufio.Scanner: token too long`). Without an explicit `MaxSSELineBytes`, a
+  Responses stream line may now be as large as a `Complete` body
+  (`MaxResponseBodyBytes`), and an Anthropic batch result line as large as the
+  download. The Anthropic batch download is now held to `MaxBatchDownloadBytes`,
+  which it ignored.
+- **Anthropic batch: errored items lost the provider's message** (B27). The
+  API nests the error (`{"type":"error","error":{"type":…,"message":…}}`); only
+  a flat shape was read, so every errored item said "batch item failed". The
+  message now reads `errored: invalid_request_error: <message>`.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

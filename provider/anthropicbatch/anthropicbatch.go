@@ -10,8 +10,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -366,16 +368,62 @@ type resultLine struct {
 	Result   struct {
 		Type    string          `json:"type"`
 		Message json.RawMessage `json:"message"`
-		Error   *struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
+		Error   *resultError    `json:"error"`
 	} `json:"result"`
 }
 
+// resultError is an errored item's error. The API nests the error object in
+// an envelope ({"type":"error","error":{"type":…,"message":…}}); the flat
+// shape is accepted too. Before B27 only the flat shape was read, so every
+// errored item reported "batch item failed" without the provider's message.
+type resultError struct {
+	Type    string       `json:"type"`
+	Message string       `json:"message"`
+	Error   *resultError `json:"error"`
+}
+
+// detail returns the innermost error's type and message.
+func (e *resultError) detail() (errType, message string) {
+	for e.Error != nil && (e.Message == "" || e.Type == "error") {
+		e = e.Error
+	}
+	return e.Type, e.Message
+}
+
+// limitedBody counts what a result download reads, so the whole file can be
+// held to Config.MaxBatchDownloadBytes.
+type limitedBody struct {
+	r     io.Reader
+	n     int64
+	limit int64
+}
+
+func (l *limitedBody) Read(p []byte) (int, error) {
+	if l.n > l.limit {
+		return 0, errResultsTooLarge
+	}
+	if rest := l.limit + 1 - l.n; int64(len(p)) > rest {
+		p = p[:rest]
+	}
+	n, err := l.r.Read(p)
+	l.n += int64(n)
+	if l.n > l.limit {
+		return n, errResultsTooLarge
+	}
+	return n, err
+}
+
+var errResultsTooLarge = errors.New("anthropicbatch: batch result file exceeds Config.MaxBatchDownloadBytes (raise it)")
+
+// parseResults reads the JSONL result file. One line holds a whole response,
+// so a line may be as large as the file: it is bounded by
+// Config.MaxBatchDownloadBytes like the download itself, not by the 256 KB SSE
+// line cap, which failed any batch with a long answer (B26).
 func (c *Client) parseResults(r io.Reader) ([]llm.BatchResult, error) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(nil, c.cfg.EffectiveMaxSSELineBytes())
+	limit := c.cfg.EffectiveMaxBatchDownloadBytes()
+	body := &limitedBody{r: r, limit: limit}
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(nil, int(min(limit+1, int64(math.MaxInt32))))
 	var out []llm.BatchResult
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
@@ -384,6 +432,9 @@ func (c *Client) parseResults(r io.Reader) ([]llm.BatchResult, error) {
 		}
 		var row resultLine
 		if err := json.Unmarshal(line, &row); err != nil {
+			if body.n > limit {
+				return nil, errResultsTooLarge // the cap cut this line short
+			}
 			return nil, fmt.Errorf("anthropicbatch: decode result line: %w", err)
 		}
 		res := llm.BatchResult{ItemID: row.CustomID}
@@ -396,12 +447,16 @@ func (c *Client) parseResults(r io.Reader) ([]llm.BatchResult, error) {
 			res.Response = msg
 		case "errored", "canceled", "expired":
 			msg := "batch item failed"
-			if row.Result.Error != nil && row.Result.Error.Message != "" {
-				msg = row.Result.Error.Message
+			if row.Result.Error != nil {
+				errType, message := row.Result.Error.detail()
+				if message != "" {
+					msg = message
+				}
+				if errType != "" && errType != "error" {
+					msg = errType + ": " + msg
+				}
 			}
-			if row.Result.Type != "" {
-				msg = row.Result.Type + ": " + msg
-			}
+			msg = row.Result.Type + ": " + msg
 			res.Error = &llm.APIError{Provider: "anthropic", StatusCode: 0, Message: msg}
 		default:
 			return nil, fmt.Errorf("anthropicbatch: unknown result type %q", row.Result.Type)
@@ -410,6 +465,9 @@ func (c *Client) parseResults(r io.Reader) ([]llm.BatchResult, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	if body.n > limit {
+		return nil, errResultsTooLarge
 	}
 	return out, nil
 }
