@@ -470,7 +470,8 @@ type Config struct {
 	// included). Chat clients make max(healthy keys, 3) attempts capped at
 	// MaxRetries, so it can lower a single key's 3 attempts but not raise
 	// them; zero caps at DefaultMaxRetries. Modality and batch calls (DoHTTP)
-	// make exactly MaxRetries attempts; zero means DefaultHTTPMaxAttempts (3).
+	// follow the single-key rule: DefaultHTTPMaxAttempts (3), lowered by a
+	// smaller MaxRetries.
 	MaxRetries int `json:"max_retries,omitempty"`
 
 	// RetryBudget bounds the total wall-clock time one call may spend across

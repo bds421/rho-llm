@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Batch and modality calls retry 3 times, like chat** (B15b). `DoHTTP` used
+  `MaxRetries` as its attempt count, so under `DefaultConfig()` (`MaxRetries`
+  10) a failing batch or modality call made 10 attempts while a single-key chat
+  call made 3. Both now make 3; `MaxRetries` 1 or 2 still lowers them. To get
+  more attempts, use more keys (chat) or a `RetryHook`-driven loop.
+
 ## [0.17.1] - 2026-11-12
 
 ### Security

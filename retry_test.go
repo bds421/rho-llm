@@ -654,12 +654,17 @@ func TestDoHTTPDefaultAttemptsIsThree(t *testing.T) {
 	}
 }
 
-// An explicit MaxRetries is still honoured (DefaultConfig sets 10).
-func TestDoHTTPExplicitMaxRetriesHonoured(t *testing.T) {
-	srv, hits := hitServer(t, func(_ int32, w http.ResponseWriter) { w.WriteHeader(http.StatusBadGateway) })
-	_, _ = doGet(t, llm.Config{DisableProxy: true, RetryPolicy: fastPolicy, MaxRetries: 5}, srv.URL, llm.HTTPCallOptions{})
-	if got := hits.Load(); got != 5 {
-		t.Fatalf("hits = %d, want 5", got)
+// DoHTTP follows the single-key chat rule: 3 attempts, lowered by MaxRetries
+// 1 or 2 but not raised. With MaxRetries as the count, DefaultConfig()
+// (MaxRetries 10) retried batch and modality calls 10 times while chat
+// stopped at 3 (B15b).
+func TestDoHTTPMaxRetriesLowersButNeverRaises(t *testing.T) {
+	for maxRetries, want := range map[int]int32{llm.DefaultMaxRetries: 3, 5: 3, 2: 2, 1: 1} {
+		srv, hits := hitServer(t, func(_ int32, w http.ResponseWriter) { w.WriteHeader(http.StatusBadGateway) })
+		_, _ = doGet(t, llm.Config{DisableProxy: true, RetryPolicy: fastPolicy, MaxRetries: maxRetries}, srv.URL, llm.HTTPCallOptions{})
+		if got := hits.Load(); got != want {
+			t.Errorf("MaxRetries %d: hits = %d, want %d", maxRetries, got, want)
+		}
 	}
 }
 

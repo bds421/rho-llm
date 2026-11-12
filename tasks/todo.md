@@ -21,10 +21,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 ### Tool calls
 
 ### Key pool, retry, fallback
-- 🟡 **B15b — `MaxRetries` still differs per path — decision.** Under `DefaultConfig()`
-  (`MaxRetries: 10`) a single-key chat client makes 3 attempts, a modality/batch call 10.
-  Options: cap DoHTTP at max(1, 3) like chat (fewer retries, lower cost), or let chat use
-  `MaxRetries` as the count (more retries). Behaviour change either way.
 
 ### Session & conversation
 

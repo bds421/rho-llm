@@ -365,8 +365,8 @@ behavior. Credential rotation/circuit breaking remain chat-pool concerns; a
 modality client represents one exact deployment credential owned by its worker.
 
 **Retry model (v0.9.5, `transport.go` + `retrybudget.go`):** `DoHTTP` makes
-`Config.MaxRetries` attempts or `DefaultHTTPMaxAttempts` (3) when unset — when
-unset, the same count as a single-key chat client. Backoff is `RetryPolicy.Delay`,
+`DefaultHTTPMaxAttempts` (3) attempts, lowered by a smaller `Config.MaxRetries` — the
+same rule as a single-key chat client. Backoff is `RetryPolicy.Delay`,
 stretched to a parsed `Retry-After`/`retry-after-ms` (clamped to
 `MaxRetryAfter`); `Config.RetryBudget` stops before a sleep that would overrun
 it, and so does a sleep that would reach the `ctx` deadline
@@ -768,7 +768,7 @@ type Config struct {
     CooldownOverload  time.Duration // Profile cooldown for 503 errors (default: 30s)
     CooldownDefault   time.Duration // Profile cooldown for other errors (default: 10s)
     RetryHook         RetryHook     // Observability hook for retry events (not serialized)
-    MaxRetries        int           // Attempt cap (DefaultConfig: 10; 0 = 3 for single key / DoHTTP)
+    MaxRetries        int           // Attempt cap (DefaultConfig: 10); a single key / DoHTTP make 3, lowered by 1 or 2
     RetryBudget       time.Duration // v0.9.5: total wall-clock across one call's retries (0 = none)
     UsageHook         UsageHook        // Per-attempt modality usage (not serialized)
     UsageHookCtx      ContextUsageHook // v0.9.5: same + caller ctx (not serialized)

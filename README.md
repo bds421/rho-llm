@@ -627,7 +627,7 @@ All clients get automatic retry with exponential backoff — including keyless l
 
 | | Default | Notes |
 |---|---|---|
-| Attempts (single key, and modality/batch calls) | 3 | Chat clients make one attempt per healthy key, at least 3, capped at `Config.MaxRetries` (default cap 10) — so `MaxRetries` can lower a single key's attempts but not raise them. Modality and batch calls make exactly `MaxRetries` attempts (3 when unset). |
+| Attempts (single key, and modality/batch calls) | 3 | Chat clients make one attempt per healthy key, at least 3, capped at `Config.MaxRetries` (default cap 10) — so `MaxRetries` can lower a single key's attempts but not raise them. Modality and batch calls follow the single-key rule: 3 attempts, lowered by a smaller `MaxRetries`. |
 | Backoff | `RetryPolicy`: 1s → 2s → 4s … capped at 30s, ±25% jitter | A provider `Retry-After` (seconds, HTTP-date, or `retry-after-ms`) stretches a shorter backoff, capped at `llm.MaxRetryAfter` (60s). A multi-key pool whose keys are all cooling down waits for the soonest key instead. No sleep after the final attempt. |
 | Total time | unbounded (attempts × backoff, and `ctx`) | `Config.RetryBudget` stops the sequence before a backoff that would overrun it, and a backoff that would reach the `ctx` deadline is not started either — the last provider error (e.g. a 429 with its `RetryAfter`) is returned at once instead of `context.DeadlineExceeded`. In-flight attempts are not cut — use `ctx` for a hard deadline. |
 | Circuit breaker | **only with `DefaultConfig()`** (opens after 5 consecutive failures, probes after 30s) | A struct-literal `Config` has `CircuitThreshold: 0` = no breaker. Set it explicitly to get one. |
@@ -1259,7 +1259,7 @@ if err != nil {
 | RetryHook | RetryHook | nil | Observability hook for retry lifecycle events |
 | UsageHook | UsageHook | nil | Per-attempt modality usage + cost events |
 | UsageHookCtx | ContextUsageHook | nil | Same events plus the caller's ctx, for per-request attribution |
-| MaxRetries | int | 10 (`DefaultConfig`), 0 (struct literal) | Most attempts per call, first included. Chat: caps max(healthy keys, 3). Modality/batch: the attempt count. 0 = cap 10 for chat, 3 attempts for modality/batch |
+| MaxRetries | int | 10 (`DefaultConfig`), 0 (struct literal) | Most attempts per call, first included. Caps the attempts: chat makes max(healthy keys, 3), modality/batch make 3; a smaller value lowers both. 0 = cap 10 |
 | RetryBudget | Duration | 0 | Total wall-clock bound across one call's retries (0 = none) |
 | DisableRetries | bool | false | Exactly one transport attempt (caller owns retry) |
 | BetaFeatures | []string | ["interleaved-thinking-..."] | Provider beta flags (Anthropic: anthropic-beta header, sent on every request and on Message Batch creation; the interleaved-thinking flag only with budget thinking) |
