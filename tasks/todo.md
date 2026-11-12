@@ -54,8 +54,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   `thinkingLevel` (`gemini.go:209-212`), so `EventThinking` probably never fires.
 - 🟡 **B28 — Gemini batch results don't decode the documented shape** (*doc-verified, not
   live*). `inlinedResponses` is an object wrapping an array (`geminibatch.go:302-318`).
-- 🟢 **B29 — Batch IDs go into URL paths unescaped — S.** Anthropic ID and Gemini name allow
-  `/`, `..`, `?` (`anthropicbatch.go:190, 220, 236`; `geminibatch.go:221, 286`).
 - 🟢 **B30 — Gemini tool results: `IsError` ignored, images dropped, no id on Gemini 3+.**
   Always `{"result": text}` (`gemini.go:408-417`).
 
@@ -64,9 +62,9 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   budget thinking (Haiku/Sonnet/Opus 4.5–4.6); a rich tool result of empty parts serializes
   `"content": null`; whitespace-only text blocks sent; images inside `is_error` results; tool
   schema root `anyOf`/`oneOf` passed through (`anthropic.go:427, 548-629, 681`).
-- 🟢 **B32 — Secrets in non-JSON output.** `fmt.Sprintf("%+v", cfg)` and slog text handlers
-  print `APIKey` (no `String`/`LogValue`); BaseURL userinfo username and query secrets reach
-  returned transport errors (`config.go:710`, `types.go:1001`).
+- 🟢 **B32 — BaseURL credentials in returned transport errors.** A BaseURL with a
+  userinfo username or a query secret reaches `*url.Error` text unredacted (`%+v` and slog
+  are redacted since B32's fix).
 - 🟢 **B33 — Registry API edges.** `RegisterModel` accepts an ID an alias shadows (entry
   unreachable); whitespace IDs/aliases accepted; `GetDefaultModel` falls back to
   `claude-sonnet-5` for 10 presets and keeps a non-preset `"gpt"` key (`registry.go:418, 593,
@@ -76,12 +74,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   doesn't exist; `EncodeRealtimeEvent` drops all but four fields (no usable
   `session.update`); concurrent `send` writes concurrently; `err == io.EOF`
   (`realtime.go:72, 132, 168-207`). Finish or label experimental.
-- 🟢 **B36 — `BlockPrivateBaseURL` misses Azure's wire server** `168.63.129.16/32`
-  (`privateaddr.go:18-49`).
-- 🟢 **B37 — `examples/cache_gemini` puts the key in `?key=`** with a plain `http.Client`.
-
----
-
 ## 📅 Dated — act on these dates (registry)
 - **2026-11-18** `MiniMax-M2.5` retires (its FAQ table already says retired) → `retiredModels`
   (→ `MiniMax-M3.1-Flash`).

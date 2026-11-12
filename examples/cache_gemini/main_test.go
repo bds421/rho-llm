@@ -86,3 +86,33 @@ func TestDeleteCacheUsesCallerContext(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The key went in ?key=, so every transport error and proxy log carried it
+// (B37). It belongs in the x-goog-api-key header.
+func TestCacheCallsSendTheKeyInAHeader(t *testing.T) {
+	original := cacheHTTPClient
+	t.Cleanup(func() { cacheHTTPClient = original })
+	var seen []*http.Request
+	cacheHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		seen = append(seen, request)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"name":"cachedContents/test"}`)), Header: make(http.Header)}, nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := createCache(ctx, "secret-key", "large prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteCache(ctx, "secret-key", "cachedContents/test"); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range seen {
+		if strings.Contains(r.URL.String(), "secret-key") || r.Header.Get("x-goog-api-key") != "secret-key" {
+			t.Errorf("%s %s: key in URL or missing header", r.Method, r.URL)
+		}
+	}
+	for _, name := range []string{"cachedContents/../models", "files/x", "cachedContents/a?x=1"} {
+		if err := deleteCache(ctx, "secret-key", name); err == nil {
+			t.Errorf("hostile cache name %q accepted", name)
+		}
+	}
+}

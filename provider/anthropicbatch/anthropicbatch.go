@@ -15,6 +15,8 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -189,7 +191,7 @@ func (c *Client) Get(ctx context.Context, handle llm.BatchHandle) (*llm.BatchHan
 	if _, err := decodeAdapterState(handle, c.providerName); err != nil {
 		return nil, err
 	}
-	resp, err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/messages/batches/"+handle.ID, nil)
+	resp, err := c.doJSON(ctx, http.MethodGet, c.batchURL(handle.ID, ""), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +221,7 @@ func (c *Client) Results(ctx context.Context, handle llm.BatchHandle) ([]llm.Bat
 	if _, err := decodeAdapterState(handle, c.providerName); err != nil {
 		return nil, err
 	}
-	resp, err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/messages/batches/"+handle.ID+"/results", nil)
+	resp, err := c.doJSON(ctx, http.MethodGet, c.batchURL(handle.ID, "/results"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +237,7 @@ func (c *Client) Cancel(ctx context.Context, handle llm.BatchHandle) (*llm.Batch
 	if _, err := decodeAdapterState(handle, c.providerName); err != nil {
 		return nil, err
 	}
-	resp, err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/messages/batches/"+handle.ID+"/cancel", []byte("{}"))
+	resp, err := c.doJSON(ctx, http.MethodPost, c.batchURL(handle.ID, "/cancel"), []byte("{}"))
 	if err != nil {
 		return nil, err
 	}
@@ -351,6 +353,9 @@ func decodeAdapterState(handle llm.BatchHandle, provider string) (adapterState, 
 	if handle.Operation != llm.BatchOperationCompletion {
 		return adapterState{}, fmt.Errorf("anthropicbatch: operation mismatch")
 	}
+	if err := checkBatchID(handle.ID); err != nil {
+		return adapterState{}, err
+	}
 	var state adapterState
 	decoder := json.NewDecoder(bytes.NewReader(handle.AdapterState))
 	decoder.DisallowUnknownFields()
@@ -361,6 +366,26 @@ func decodeAdapterState(handle llm.BatchHandle, provider string) (adapterState, 
 		return adapterState{}, fmt.Errorf("anthropicbatch: decode adapter state: trailing data")
 	}
 	return state, nil
+}
+
+// batchIDPattern is the shape of an Anthropic batch ID (msgbatch_…). A handle
+// is often loaded back from storage, so its ID is checked before it becomes
+// part of a URL path: "../" or "?" would otherwise reach another endpoint
+// with the deployment's key (B29).
+var batchIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// batchURL returns the URL of a batch, or of one of its sub-resources. The ID
+// was checked by decodeAdapterState (checkBatchID).
+func (c *Client) batchURL(id, suffix string) string {
+	return c.baseURL + "/messages/batches/" + url.PathEscape(id) + suffix
+}
+
+// checkBatchID rejects a batch ID that is not an Anthropic batch ID.
+func checkBatchID(id string) error {
+	if !batchIDPattern.MatchString(id) {
+		return fmt.Errorf("anthropicbatch: invalid batch id %q", id)
+	}
+	return nil
 }
 
 type resultLine struct {

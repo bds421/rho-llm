@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -711,11 +712,30 @@ func redactURLCredentials(raw string) string {
 // embedded in BaseURL, to prevent accidental secret leakage when Config is
 // serialized for logging or debugging. Use the fields directly for real values.
 func (c Config) MarshalJSON() ([]byte, error) {
-	type configAlias Config // break recursion
-	tmp := configAlias(c)
+	return json.Marshal(c.redacted())
+}
+
+// redactedConfig is Config without its methods, so printing it does not
+// recurse into String/LogValue/MarshalJSON.
+type redactedConfig Config
+
+// redacted returns c with APIKey and BaseURL credentials scrubbed.
+func (c Config) redacted() redactedConfig {
+	tmp := redactedConfig(c)
 	if tmp.APIKey != "" {
 		tmp.APIKey = "REDACTED"
 	}
 	tmp.BaseURL = redactURLCredentials(tmp.BaseURL)
-	return json.Marshal(tmp)
+	return tmp
 }
+
+// String redacts APIKey and BaseURL credentials, as MarshalJSON does. Without
+// it fmt's %v and %+v printed the key (B32).
+func (c Config) String() string { return fmt.Sprintf("%+v", c.redacted()) }
+
+// GoString is the %#v form of String.
+func (c Config) GoString() string { return fmt.Sprintf("%#v", c.redacted()) }
+
+// LogValue redacts APIKey and BaseURL credentials for log/slog: a text
+// handler printed the key, a JSON handler goes through MarshalJSON either way.
+func (c Config) LogValue() slog.Value { return slog.AnyValue(c.redacted()) }

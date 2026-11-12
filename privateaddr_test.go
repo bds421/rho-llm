@@ -53,6 +53,8 @@ func TestCheckBaseURLRefusesIPv6FormsOfPrivateAddresses(t *testing.T) {
 		"http://[3fff::1]/v1",
 		"http://[::ffff:0:a00:1]/v1",
 		"http://[::ffff:100.64.0.1]/v1",
+		"http://168.63.129.16/machine", // Azure wire server (B36)
+		"http://[::ffff:168.63.129.16]/v1",
 	}
 	for _, baseURL := range refused {
 		err := llm.CheckBaseURL(llm.Config{BaseURL: baseURL, BlockPrivateBaseURL: true})

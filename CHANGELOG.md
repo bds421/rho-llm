@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stripped the key on the first hop and sent `x-api-key` / `x-goog-api-key`
   (and `Authorization`, when B shared A's hostname on another port) to B on the
   second. Every hop is now compared with the original request.
+- **Batch handles loaded from storage could steer requests to another
+  endpoint** (B29). The Anthropic batch ID and the Gemini batch name went into
+  the URL path as is, so `../`, `?` or another resource name reached a
+  different endpoint with the deployment's key. Both are now checked against
+  the provider's ID shape (`msgbatch_…`, `batches/<id>`) before any request.
+- **`Config` and `AuthProfile` printed the API key outside JSON** (B32). Only
+  `MarshalJSON` redacted it; `%v`, `%+v`, `%#v` and slog's text handler printed
+  the key and BaseURL credentials. Both types now implement `String`,
+  `GoString` and `slog.LogValuer` with the same redaction.
+- **`BlockPrivateBaseURL` allowed Azure's wire server** `168.63.129.16`
+  (platform metadata on Azure VMs) (B36).
+- **`examples/cache_gemini` sent the key as `?key=`** with a plain
+  `http.Client` (B37), so it appeared in every transport error and proxy log.
+  It now uses the `x-goog-api-key` header and `SafeHTTPClient`, and checks the
+  cache name before building the delete URL.
 
 ### Fixed
 

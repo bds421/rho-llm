@@ -1,7 +1,10 @@
 package anthropicbatch
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -75,5 +78,48 @@ func TestErroredItemKeepsTheProviderMessage(t *testing.T) {
 		if results[i].Error == nil || results[i].Error.Message != want {
 			t.Errorf("item %s: error = %+v, want %q", results[i].ItemID, results[i].Error, want)
 		}
+	}
+}
+
+// A batch handle is often loaded back from storage. Its ID went into the URL
+// path as is, so "../" or "?" reached another endpoint with the key (B29).
+func TestBatchIDIsCheckedBeforeItBecomesAPath(t *testing.T) {
+	for _, id := range []string{"msgbatch_013Zva2CMHLNnXjNJJKqJ2EF", "msgbatch-1"} {
+		if err := checkBatchID(id); err != nil {
+			t.Errorf("valid id %q refused: %v", id, err)
+		}
+	}
+	for _, id := range []string{"", "..", "../../v1/files", "msgbatch_1/../../x", "msgbatch_1?beta=x", "msgbatch_1#x", "a b", "msgbatch_1%2F..", strings.Repeat("a", 129)} {
+		if err := checkBatchID(id); err == nil {
+			t.Errorf("hostile id %q accepted", id)
+		}
+	}
+}
+
+// The same through the client: a tampered handle never reaches the network.
+func TestTamperedHandleSendsNoRequest(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.RawPath+r.URL.Path+"?"+r.URL.RawQuery)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, llm.Config{BaseURL: srv.URL, DisableRetries: true})
+	handle, err := c.toHandle(&batchObject{ID: "msgbatch_1", ProcessingStatus: "in_progress"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"../../v1/files", "msgbatch_1?x=1", ".."} {
+		h := *handle
+		h.ID = id
+		_, getErr := c.Get(context.Background(), h)
+		_, resErr := c.Results(context.Background(), h)
+		_, cancelErr := c.Cancel(context.Background(), h)
+		if getErr == nil || resErr == nil || cancelErr == nil {
+			t.Fatalf("id %q: Get/Results/Cancel errors = %v / %v / %v", id, getErr, resErr, cancelErr)
+		}
+	}
+	if len(paths) != 0 {
+		t.Fatalf("tampered handles reached the server: %v", paths)
 	}
 }

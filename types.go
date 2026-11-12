@@ -999,15 +999,32 @@ func (p *AuthProfile) MarkHealthy() {
 // scrubs the same key out of LastError (a free-text field that may have captured
 // a server response echoing the key) before redacting APIKey itself.
 func (p AuthProfile) MarshalJSON() ([]byte, error) {
-	type profileAlias AuthProfile // break recursion
-	tmp := profileAlias(p)
+	return json.Marshal(p.redacted())
+}
+
+// redactedProfile is AuthProfile without its methods (see redactedConfig).
+type redactedProfile AuthProfile
+
+// redacted returns p with APIKey, BaseURL credentials and any echo of them in
+// LastError scrubbed.
+func (p AuthProfile) redacted() redactedProfile {
+	tmp := redactedProfile(p)
 	tmp.LastError = redactProfileSecrets(tmp.LastError, tmp.APIKey, tmp.BaseURL)
 	if tmp.APIKey != "" {
 		tmp.APIKey = "REDACTED"
 	}
 	tmp.BaseURL = redactURLCredentials(tmp.BaseURL)
-	return json.Marshal(tmp)
+	return tmp
 }
+
+// String redacts the key, as MarshalJSON does (B32).
+func (p AuthProfile) String() string { return fmt.Sprintf("%+v", p.redacted()) }
+
+// GoString is the %#v form of String.
+func (p AuthProfile) GoString() string { return fmt.Sprintf("%#v", p.redacted()) }
+
+// LogValue redacts the key for log/slog.
+func (p AuthProfile) LogValue() slog.Value { return slog.AnyValue(p.redacted()) }
 
 func validateTextDocument(doc *DocumentSource) error {
 	if doc.MediaType != "text/plain" {

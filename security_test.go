@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1172,5 +1173,31 @@ func TestBlockPrivateBaseURL(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("NewClient with private BaseURL + BlockPrivateBaseURL should error")
+	}
+}
+
+// Config and AuthProfile redacted the key only in MarshalJSON: fmt's %v, %+v,
+// %#v and slog's text handler printed it (B32).
+func TestConfigAndProfileRedactInEveryPrintedForm(t *testing.T) {
+	const key = "sk-ant-secret-key-123456"
+	cfg := llm.Config{Provider: "anthropic", APIKey: key, BaseURL: "https://user:pass-secret@gw.example.com/v1"}
+	profile := llm.AuthProfile{Name: "p", APIKey: key, LastError: "401 for " + key}
+
+	var text, js strings.Builder
+	slog.New(slog.NewTextHandler(&text, nil)).Info("x", "cfg", cfg, "profile", profile, "ptr", &cfg)
+	slog.New(slog.NewJSONHandler(&js, nil)).Info("x", "cfg", cfg, "profile", profile)
+	outputs := map[string]string{
+		"%v cfg": fmt.Sprintf("%v", cfg), "%+v cfg": fmt.Sprintf("%+v", cfg), "%#v cfg": fmt.Sprintf("%#v", cfg),
+		"%v &cfg":     fmt.Sprintf("%v", &cfg),
+		"%+v profile": fmt.Sprintf("%+v", profile), "%#v profile": fmt.Sprintf("%#v", profile),
+		"slog text": text.String(), "slog json": js.String(),
+	}
+	for form, out := range outputs {
+		if strings.Contains(out, key) || strings.Contains(out, "pass-secret") {
+			t.Errorf("%s printed a secret: %.200s", form, out)
+		}
+	}
+	if !strings.Contains(outputs["%+v cfg"], "Provider:anthropic") {
+		t.Errorf("%%+v lost the non-secret fields: %.200s", outputs["%+v cfg"])
 	}
 }

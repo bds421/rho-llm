@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/bds421/rho-llm"
@@ -38,7 +39,9 @@ const (
 	cacheTimeout = 30 * time.Second
 )
 
-var cacheHTTPClient = &http.Client{Timeout: cacheTimeout}
+// cacheHTTPClient strips the key header on a redirect to another host, like
+// the library's own clients.
+var cacheHTTPClient = llm.SafeHTTPClient(cacheTimeout)
 
 //go:embed system_prompt.txt
 var systemPrompt string
@@ -166,12 +169,14 @@ func createCache(ctx context.Context, apiKey, systemInstruction string) (string,
 		return "", fmt.Errorf("marshal: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s?key=%s", cacheAPIBase, apiKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body)) // #nosec G107 -- constant base + the caller's own key (Gemini cache API requires ?key=)
+	// The key goes in a header, not ?key=: a URL is printed in every
+	// transport error and in proxy logs.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cacheAPIBase, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build POST: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", apiKey)
 	resp, err := cacheHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("POST: %w", err)
@@ -202,11 +207,15 @@ func createCache(ctx context.Context, apiKey, systemInstruction string) (string,
 
 // deleteCache deletes a CachedContent resource.
 func deleteCache(ctx context.Context, apiKey, cacheName string) error {
-	endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/%s?key=%s", cacheName, apiKey)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if !strings.HasPrefix(cacheName, "cachedContents/") || strings.ContainsAny(strings.TrimPrefix(cacheName, "cachedContents/"), "/?#.") {
+		return fmt.Errorf("unexpected cache name %q", cacheName)
+	}
+	endpoint := "https://generativelanguage.googleapis.com/v1beta/" + cacheName
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil) // #nosec G107 -- fixed host, checked cache name
 	if err != nil {
 		return err
 	}
+	req.Header.Set("x-goog-api-key", apiKey)
 
 	resp, err := cacheHTTPClient.Do(req)
 	if err != nil {

@@ -17,36 +17,37 @@ var ErrPrivateAddress = errors.New("llm: private or reserved address refused (Bl
 // is judged by the IPv4 address it carries (see privateAddr).
 var nonPublicPrefixes = func() []netip.Prefix {
 	cidrs := []string{
-		"0.0.0.0/8",       // "this network" (RFC 791)
-		"10.0.0.0/8",      // private (RFC 1918)
-		"100.64.0.0/10",   // shared address space, CGNAT (RFC 6598)
-		"127.0.0.0/8",     // loopback
-		"169.254.0.0/16",  // link-local, cloud metadata
-		"172.16.0.0/12",   // private (RFC 1918)
-		"192.0.0.0/24",    // IETF protocol assignments (RFC 6890)
-		"192.0.2.0/24",    // documentation TEST-NET-1 (RFC 5737)
-		"192.88.99.0/24",  // 6to4 relay anycast (RFC 7526)
-		"192.168.0.0/16",  // private (RFC 1918)
-		"198.18.0.0/15",   // benchmarking (RFC 2544)
-		"198.51.100.0/24", // documentation TEST-NET-2
-		"203.0.113.0/24",  // documentation TEST-NET-3
-		"224.0.0.0/4",     // multicast
-		"240.0.0.0/4",     // reserved, broadcast
-		"::/96",           // unspecified, loopback, IPv4-compatible (RFC 4291)
-		"::ffff:0:0:0/96", // IPv4-translated (RFC 2765)
-		"64:ff9b:1::/48",  // local-use IPv4/IPv6 translation (RFC 8215)
-		"100::/64",        // discard-only (RFC 6666)
-		"2001::/32",       // Teredo, carries an IPv4 address
-		"2001:2::/48",     // benchmarking (RFC 5180)
-		"2001:10::/28",    // ORCHID (RFC 4843)
-		"2001:db8::/32",   // documentation (RFC 3849)
-		"2002::/16",       // 6to4, carries an IPv4 address
-		"3fff::/20",       // documentation (RFC 9637)
-		"5f00::/16",       // SRv6 SIDs (RFC 9602)
-		"fc00::/7",        // unique local
-		"fe80::/10",       // link-local
-		"fec0::/10",       // site-local, deprecated
-		"ff00::/8",        // multicast
+		"0.0.0.0/8",        // "this network" (RFC 791)
+		"10.0.0.0/8",       // private (RFC 1918)
+		"100.64.0.0/10",    // shared address space, CGNAT (RFC 6598)
+		"127.0.0.0/8",      // loopback
+		"169.254.0.0/16",   // link-local, cloud metadata
+		"168.63.129.16/32", // Azure wire server: platform metadata, DHCP, health probes (B36)
+		"172.16.0.0/12",    // private (RFC 1918)
+		"192.0.0.0/24",     // IETF protocol assignments (RFC 6890)
+		"192.0.2.0/24",     // documentation TEST-NET-1 (RFC 5737)
+		"192.88.99.0/24",   // 6to4 relay anycast (RFC 7526)
+		"192.168.0.0/16",   // private (RFC 1918)
+		"198.18.0.0/15",    // benchmarking (RFC 2544)
+		"198.51.100.0/24",  // documentation TEST-NET-2
+		"203.0.113.0/24",   // documentation TEST-NET-3
+		"224.0.0.0/4",      // multicast
+		"240.0.0.0/4",      // reserved, broadcast
+		"::/96",            // unspecified, loopback, IPv4-compatible (RFC 4291)
+		"::ffff:0:0:0/96",  // IPv4-translated (RFC 2765)
+		"64:ff9b:1::/48",   // local-use IPv4/IPv6 translation (RFC 8215)
+		"100::/64",         // discard-only (RFC 6666)
+		"2001::/32",        // Teredo, carries an IPv4 address
+		"2001:2::/48",      // benchmarking (RFC 5180)
+		"2001:10::/28",     // ORCHID (RFC 4843)
+		"2001:db8::/32",    // documentation (RFC 3849)
+		"2002::/16",        // 6to4, carries an IPv4 address
+		"3fff::/20",        // documentation (RFC 9637)
+		"5f00::/16",        // SRv6 SIDs (RFC 9602)
+		"fc00::/7",         // unique local
+		"fe80::/10",        // link-local
+		"fec0::/10",        // site-local, deprecated
+		"ff00::/8",         // multicast
 	}
 	prefixes := make([]netip.Prefix, len(cidrs))
 	for i, cidr := range cidrs {

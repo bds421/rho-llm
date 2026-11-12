@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -205,18 +206,37 @@ func (c *Client) Recover(ctx context.Context, recoveryKey string) (*llm.BatchHan
 	return nil, llm.ErrBatchNotFound
 }
 
+// batchNamePattern is the shape of a Gemini batch resource name. A handle is
+// often loaded back from storage, so the name is checked before it becomes a
+// URL path: any other name with a "/" — "files/x", "../models" — was sent as
+// is, with the deployment's key (B29).
+var batchNamePattern = regexp.MustCompile(`^batches/[A-Za-z0-9_-]{1,128}$`)
+
+// batchName returns the resource name ("batches/<id>") for a handle: the stored
+// name, else the handle ID with the prefix added.
+func batchName(stored, id string) (string, error) {
+	name := stored
+	if name == "" {
+		name = id
+	}
+	if !strings.Contains(name, "/") {
+		name = "batches/" + name
+	}
+	if !batchNamePattern.MatchString(name) {
+		return "", fmt.Errorf("geminibatch: invalid batch name %q", name)
+	}
+	return name, nil
+}
+
 // Get polls batch status.
 func (c *Client) Get(ctx context.Context, handle llm.BatchHandle) (*llm.BatchHandle, error) {
 	state, err := decodeState(handle, c.providerName)
 	if err != nil {
 		return nil, err
 	}
-	name := state.Name
-	if name == "" {
-		name = handle.ID
-	}
-	if !strings.HasPrefix(name, "batches/") && !strings.Contains(name, "/") {
-		name = "batches/" + name
+	name, err := batchName(state.Name, handle.ID)
+	if err != nil {
+		return nil, err
 	}
 	resp, err := c.doJSON(ctx, http.MethodGet, c.baseURL+"/"+strings.TrimPrefix(name, "/"), nil)
 	if err != nil {
@@ -276,12 +296,9 @@ func (c *Client) Cancel(ctx context.Context, handle llm.BatchHandle) (*llm.Batch
 	if err != nil {
 		return nil, err
 	}
-	name := state.Name
-	if name == "" {
-		name = handle.ID
-	}
-	if !strings.HasPrefix(name, "batches/") && !strings.Contains(name, "/") {
-		name = "batches/" + name
+	name, err := batchName(state.Name, handle.ID)
+	if err != nil {
+		return nil, err
 	}
 	resp, err := c.doJSON(ctx, http.MethodPost, c.baseURL+"/"+strings.TrimPrefix(name, "/")+":cancel", []byte("{}"))
 	if err != nil {
