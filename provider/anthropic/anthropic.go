@@ -425,7 +425,10 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		for _, part := range msg.Content {
 			switch part.Type {
 			case llm.ContentText:
-				if part.Text != "" {
+				// Anthropic rejects a text block that is empty or only
+				// whitespace ("text content blocks must contain non-whitespace
+				// text"); such a part carries nothing, so it is left out (B31).
+				if strings.TrimSpace(part.Text) != "" {
 					block := map[string]any{
 						"type": "text",
 						"text": part.Text,
@@ -557,7 +560,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					for _, sub := range part.ToolResultParts {
 						switch sub.Type {
 						case llm.ContentText:
-							if sub.Text != "" {
+							if strings.TrimSpace(sub.Text) != "" {
 								blocks = append(blocks, map[string]any{"type": "text", "text": sub.Text})
 							}
 						case llm.ContentImage:
@@ -574,7 +577,11 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 							})
 						}
 					}
-					block["content"] = blocks
+					// A rich result whose parts were all empty serialized as
+					// "content": null; content is optional, so leave it out.
+					if len(blocks) > 0 {
+						block["content"] = blocks
+					}
 				} else {
 					block["content"] = part.ToolResultContent
 				}
@@ -735,6 +742,13 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 					"max_tokens", apiReq.MaxTokens, "min_budget", minThinkingBudgetTokens)
 				return apiReq, nil
 			}
+		}
+		// Extended thinking accepts only tool_choice auto or none; "any" or a
+		// named tool is a 400 on every model. The guard covered only the
+		// adaptive models (B31).
+		if apiReq.ToolChoice != nil &&
+			(req.ToolChoice.Mode == llm.ToolChoiceRequired || req.ToolChoice.Mode == llm.ToolChoiceTool) {
+			return anthropicRequest{}, fmt.Errorf("anthropic: extended thinking rejects forced tool_choice (%q); use ToolChoiceAuto, or turn thinking off for this request", req.ToolChoice.Mode)
 		}
 		apiReq.Thinking = &anthropicThinking{
 			Type:         "enabled",

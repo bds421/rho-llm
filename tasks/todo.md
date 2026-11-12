@@ -31,10 +31,9 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 ### Gemini / batch wire details
 
 ### Smaller correctness items
-- 🟢 **B31 — Anthropic wire edge cases** (*rejection unverified*): forced `tool_choice` with
-  budget thinking (Haiku/Sonnet/Opus 4.5–4.6); a rich tool result of empty parts serializes
-  `"content": null`; whitespace-only text blocks sent; images inside `is_error` results; tool
-  schema root `anyOf`/`oneOf` passed through (`anthropic.go:427, 548-629, 681`).
+- ⚪ **B31b — Not changed (rejection undocumented):** images inside `is_error` tool results and
+  a tool schema whose root is `anyOf`/`oneOf` are sent as is. Confirm against the live API
+  before refusing them.
 - 🟢 **B32 — BaseURL credentials in returned transport errors.** A BaseURL with a
   userinfo username or a query secret reaches `*url.Error` text unredacted (`%+v` and slog
   are redacted since B32's fix).

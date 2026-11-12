@@ -191,6 +191,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignored, so the model read the error text as the tool's result. A failed
   result now goes under `error` in the `functionResponse` (the key Gemini's
   reference names for error details); a successful one stays under `result`.
+- **Anthropic requests the API rejects went out** (B31). Extended thinking with
+  a budget accepts only `tool_choice` auto or none; the guard covered only the
+  adaptive models, so a Claude 4.6/4.5 request with thinking and a forced tool
+  came back as a 400. It is now refused before sending. Whitespace-only text
+  blocks (rejected by the API) are left out, and a rich tool result whose parts
+  were all empty no longer sends `"content": null`.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".
