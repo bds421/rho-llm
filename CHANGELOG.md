@@ -203,6 +203,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   came back as a 400. It is now refused before sending. Whitespace-only text
   blocks (rejected by the API) are left out, and a rich tool result whose parts
   were all empty no longer sends `"content": null`.
+- **Registry API edges** (B33). `GetDefaultModel` returned `claude-sonnet-5` (a
+  stale literal) for every preset without a default: Together, OpenRouter,
+  Fireworks, DeepInfra, NVIDIA, Cerebras, Perplexity, vLLM and LM Studio got a
+  Claude ID their host rejects. Those presets now return `""` (name the model),
+  `openai_responses` returns the OpenAI default, and an unknown provider falls
+  back to the current Anthropic default. `RegisterModel` refused nothing it
+  could never find: an ID that is an alias key (`sonnet`) or has surrounding
+  whitespace is now an error, as is an alias with surrounding whitespace.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

@@ -310,10 +310,37 @@ func TestModelInfoThinkingFlags(t *testing.T) {
 
 // TestGetDefaultModelUnknown verifies fallback for unknown provider.
 func TestGetDefaultModelUnknown(t *testing.T) {
-	// Unknown providers fall back to claude-sonnet-5
+	// Unknown providers fall back to the Anthropic default. It was a stale
+	// hard-coded "claude-sonnet-5" (B33).
 	model := llm.GetDefaultModel("nonexistent-provider")
-	if model != "claude-sonnet-5" {
-		t.Errorf("GetDefaultModel(unknown) = %q, want claude-sonnet-5", model)
+	if model != llm.GetDefaultModel("anthropic") {
+		t.Errorf("GetDefaultModel(unknown) = %q, want the Anthropic default", model)
+	}
+}
+
+// A multi-vendor or local preset got a Claude model ID as its default, which
+// that host rejects; openai_responses had none at all (B33).
+func TestGetDefaultModelForPresetsWithoutOne(t *testing.T) {
+	for _, p := range []string{"together", "openrouter", "fireworks", "deepinfra", "nvidia", "cerebras", "perplexity", "vllm", "lmstudio"} {
+		if got := llm.GetDefaultModel(p); got != "" {
+			t.Errorf("GetDefaultModel(%q) = %q, want \"\" (no default on a multi-vendor or local host)", p, got)
+		}
+	}
+	if got, want := llm.GetDefaultModel("openai_responses"), llm.GetDefaultModel("openai"); got != want {
+		t.Errorf("GetDefaultModel(openai_responses) = %q, want %q", got, want)
+	}
+}
+
+// RegisterModel accepted an ID an alias shadows ("sonnet") and IDs with
+// surrounding whitespace; neither could ever be looked up (B33).
+func TestRegisterModelRefusesUnreachableIDs(t *testing.T) {
+	for _, id := range []string{"sonnet", "opus", " my-model", "my-model\t"} {
+		if err := llm.RegisterModel(llm.ModelInfo{ID: id, Provider: "anthropic"}); err == nil {
+			t.Errorf("RegisterModel(%q) accepted", id)
+		}
+	}
+	if err := llm.RegisterModelAlias(" x ", "claude-sonnet-5-5"); err == nil {
+		t.Error("alias with whitespace accepted")
 	}
 }
 

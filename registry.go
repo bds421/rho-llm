@@ -594,6 +594,10 @@ func RegisterModel(info ModelInfo) error {
 	if strings.TrimSpace(info.ID) == "" {
 		return fmt.Errorf("llm: RegisterModel: ID is required (non-blank)")
 	}
+	// Lookups use the exact ID, so " gpt-x" could never be found (B33).
+	if strings.TrimSpace(info.ID) != info.ID {
+		return fmt.Errorf("llm: RegisterModel: ID %q has leading or trailing whitespace", info.ID)
+	}
 	if strings.TrimSpace(info.Provider) == "" {
 		return fmt.Errorf("llm: RegisterModel: Provider is required (non-blank)")
 	}
@@ -609,6 +613,11 @@ func RegisterModel(info ModelInfo) error {
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
+	// Lookups resolve aliases first, so a model registered under an alias key
+	// ("sonnet") could never be reached; it was accepted silently (B33).
+	if target, isAlias := modelAliases[info.ID]; isAlias {
+		return fmt.Errorf("llm: RegisterModel: %q is an alias for %q; register the model under another ID", info.ID, target)
+	}
 	modelRegistry[info.ID] = info
 	return nil
 }
@@ -619,6 +628,9 @@ func RegisterModel(info ModelInfo) error {
 func RegisterModelAlias(alias, modelID string) error {
 	if alias == "" || modelID == "" {
 		return fmt.Errorf("llm: RegisterModelAlias: alias and model ID are required")
+	}
+	if strings.TrimSpace(alias) != alias {
+		return fmt.Errorf("llm: RegisterModelAlias: alias %q has leading or trailing whitespace", alias)
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
@@ -643,14 +655,25 @@ func GetModelInfo(model string) (ModelInfo, bool) {
 	return info, ok
 }
 
-// GetDefaultModel returns the default model for a provider.
+// GetDefaultModel returns the default model for a provider. A preset whose
+// host serves many vendors' models (Together, OpenRouter, Fireworks, …) or a
+// local server (vLLM, LM Studio) has no default: it returns "", and the caller
+// names the model. They got a Claude ID, which those hosts reject (B33). The
+// Responses preset shares OpenAI's default. Any other provider name falls back
+// to the Anthropic default.
 func GetDefaultModel(provider string) string {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
+	if provider == "openai_responses" {
+		provider = "openai"
+	}
 	if model, ok := defaultModels[provider]; ok {
 		return model
 	}
-	return "claude-sonnet-5"
+	if _, isPreset := presets[provider]; isPreset {
+		return ""
+	}
+	return defaultModels["anthropic"]
 }
 
 // ResolveModelAlias resolves a model alias to its full name.

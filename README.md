@@ -1421,7 +1421,8 @@ fmt.Printf("Context: %d tokens\n", info.ContextWindow)
 // Detect provider from model ID
 provider := llm.ProviderForModel("gemini-3.8-flash") // -> "gemini"
 
-// Get the default model for a provider
+// Get the default model for a provider ("" for multi-vendor and local hosts
+// such as together, openrouter, vllm: name the model yourself)
 model := llm.GetDefaultModel("xai") // -> "grok-4.7"
 ```
 
