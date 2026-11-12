@@ -27,8 +27,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   `MaxRetries` as the count (more retries). Behaviour change either way.
 
 ### Session & conversation
-- 🟢 **B24 — Same-provider unsigned thinking is replayed as visible text** (design; pinned by
-  `TestNormalizeUnsignedThinkingDegradesEvenSameProvider`). Decide: drop instead.
 
 ### Gemini / batch wire details
 - 🟡 **B28 — Gemini batch results don't decode the documented shape** (*doc-verified, not

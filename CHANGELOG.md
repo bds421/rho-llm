@@ -172,6 +172,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kept the caller's pointer and wrote to it on every turn, a data race with a
   caller saving it; the session now works on a copy (read it through
   `Session.Conversation`, as before).
+- **The model read its own reasoning as part of its answer** (B24).
+  Normalization turned unsigned thinking from the same provider into a text
+  block, so every Gemini thought summary (returned since B25) and every
+  DeepSeek `reasoning_content` came back on the next turn as text the model had
+  supposedly said. It is now dropped: no adapter replays it. Thinking from
+  another provider is still converted to text on a handoff, and signed
+  Anthropic thinking is replayed as before.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

@@ -111,18 +111,33 @@ func TestNormalizeDoesNotMutateInput(t *testing.T) {
 	}
 }
 
-func TestNormalizeUnsignedThinkingDegradesEvenSameProvider(t *testing.T) {
-	// Same provider but NO signature -> cannot be replayed validly -> degrade to text.
-	msgs := []llm.Message{
-		{Role: llm.RoleAssistant, Provider: "anthropic", Content: []llm.ContentPart{
-			{Type: llm.ContentThinking, Thinking: "unsigned"},
-		}},
-	}
-	out := llm.NormalizeForProvider(msgs, "anthropic")
-	for _, p := range out[0].Content {
-		if p.Type == llm.ContentThinking {
-			t.Errorf("unsigned thinking kept as thinking block: %+v", out[0].Content)
+// Unsigned thinking from the same provider cannot be replayed (Anthropic needs
+// a signature; other adapters skip thinking), and turned into text the model
+// read its own reasoning — every Gemini thought summary — as something it had
+// said (B24). It is dropped; a handoff still turns it into text.
+func TestNormalizeUnsignedThinkingSameProviderIsDropped(t *testing.T) {
+	for _, provider := range []string{"anthropic", "gemini", "deepseek"} {
+		msgs := []llm.Message{
+			llm.NewTextMessage(llm.RoleUser, "q"),
+			{Role: llm.RoleAssistant, Provider: provider, Content: []llm.ContentPart{
+				{Type: llm.ContentThinking, Thinking: "my reasoning"},
+				{Type: llm.ContentText, Text: "answer"},
+			}},
 		}
+		out := llm.NormalizeForProvider(msgs, provider)
+		if len(out) != 2 || len(out[1].Content) != 1 || out[1].Content[0].Text != "answer" {
+			t.Fatalf("%s: assistant turn = %+v, want only the answer", provider, out[1].Content)
+		}
+		// Handoff: the reasoning becomes text for the other provider.
+		other := llm.NormalizeForProvider(msgs, "openai")
+		if len(other[1].Content) != 2 || other[1].Content[0].Text != "my reasoning" {
+			t.Fatalf("%s → openai: %+v, want the reasoning as text", provider, other[1].Content)
+		}
+	}
+	// A turn holding only unsigned thinking disappears entirely.
+	only := []llm.Message{{Role: llm.RoleAssistant, Provider: "anthropic", Content: []llm.ContentPart{{Type: llm.ContentThinking, Thinking: "x"}}}}
+	if out := llm.NormalizeForProvider(only, "anthropic"); len(out) != 0 {
+		t.Fatalf("thinking-only turn kept: %+v", out)
 	}
 }
 

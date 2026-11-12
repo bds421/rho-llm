@@ -831,9 +831,11 @@ for all handoff concerns and never mutates its input:
    (`claude-haiku-4-5` / `claude-haiku-4-5-20251001`) count as the same model; messages without
    a recorded `Model` fall through to step 1.
 1. **Thinking degradation** — a thinking block is kept verbatim only when `msg.Provider ==
-   targetProvider` *and* it carries a provider-valid signature (or is redacted). Otherwise the
-   reasoning is preserved by converting it to a plain text block. (A foreign/unsigned thinking
-   block would be rejected, e.g. Anthropic requires the original `signature` on replay.)
+   targetProvider` *and* it carries a provider-valid signature (or is redacted). Unsigned
+   thinking from the target provider itself is dropped (no adapter replays it, and as text the
+   model would read its reasoning as something it said). Thinking from another provider is
+   converted to a plain text block. (A foreign/unsigned thinking block would be rejected, e.g.
+   Anthropic requires the original `signature` on replay.)
 2. **Orphan tool-call repair** — a `tool_use` with no matching `tool_result` anywhere gets a
    synthetic error result appended after its turn (every provider rejects an unanswered call).
 3. **Errored-turn drop** — assistant turns with `StopReason` `error`/`aborted` are removed,

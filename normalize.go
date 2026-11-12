@@ -132,12 +132,21 @@ func normalize(msgs []Message, provider, model string) []Message {
 				// return by default (display "omitted"); dropping it breaks the
 				// continuation. Elsewhere a signed-but-empty block has nothing to
 				// preserve and is dropped.
-				if sameProvider && (p.Redacted || p.ThinkingSignature != "") {
+				//
+				// Unsigned thinking from the same provider is dropped: its own
+				// adapter does not replay it (only signed Anthropic blocks go
+				// back), and as text the model read its reasoning — every Gemini
+				// thought summary, a DeepSeek reasoning_content — as something
+				// it had said (B24). Only a handoff turns reasoning into text.
+				switch {
+				case sameProvider && (p.Redacted || p.ThinkingSignature != ""):
 					nm.Content = append(nm.Content, p)
-				} else if p.Thinking != "" && !p.Redacted {
+				case sameProvider:
+					// unsigned, same provider → drop
+				case p.Thinking != "" && !p.Redacted:
 					nm.Content = append(nm.Content, ContentPart{Type: ContentText, Text: p.Thinking})
 				}
-				// else: empty (incl. signed-but-no-text) or redacted-without-replay → drop
+				// otherwise: empty (incl. signed-but-no-text) or redacted-without-replay → drop
 			case ContentServerToolUse, ContentServerToolResult, ContentProviderBlock:
 				if foreignProvider(m.Provider, provider) {
 					continue // provider-run calls and opaque blocks mean nothing elsewhere
