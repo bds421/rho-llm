@@ -128,6 +128,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API nests the error (`{"type":"error","error":{"type":…,"message":…}}`); only
   a flat shape was read, so every errored item said "batch item failed". The
   message now reads `errored: invalid_request_error: <message>`.
+- **`MaxRetries` of 1 or 2 was ignored by batch and modality calls** (B15).
+  Chat clients honour it as a cap; `DoHTTP` raised it back to three attempts.
+  It now makes exactly `MaxRetries` attempts (3 when unset). The `MaxRetries`
+  docs (Config comment, README, ARCHITECTURE) said "minimum 3", which was true
+  for neither path; they now describe both.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

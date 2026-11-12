@@ -459,12 +459,11 @@ type Config struct {
 	// first. Not serialized.
 	UsageHookCtx ContextUsageHook `json:"-"`
 
-	// MaxRetries caps the number of retry/rotation iterations. Zero uses the
-	// default: DefaultMaxRetries as the cap for pooled chat clients (which
-	// make max(healthy keys, 3) attempts, so a single key gets 3), and
-	// DefaultHTTPMaxAttempts (3) for the modality/batch transport (DoHTTP).
-	// Minimum effective value is 3 (for single-key resilience against
-	// transient errors).
+	// MaxRetries is the most attempts one call makes (the first attempt
+	// included). Chat clients make max(healthy keys, 3) attempts capped at
+	// MaxRetries, so it can lower a single key's 3 attempts but not raise
+	// them; zero caps at DefaultMaxRetries. Modality and batch calls (DoHTTP)
+	// make exactly MaxRetries attempts; zero means DefaultHTTPMaxAttempts (3).
 	MaxRetries int `json:"max_retries,omitempty"`
 
 	// RetryBudget bounds the total wall-clock time one call may spend across

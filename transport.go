@@ -41,8 +41,7 @@ type HTTPCallOptions struct {
 // provider error body. Auth rotation and circuit breaking remain properties of
 // NewClientWithKeys; a single Config contains only one credential.
 //
-// Attempts: Config.MaxRetries when set (minimum 3), otherwise
-// DefaultHTTPMaxAttempts. Backoff follows Config.RetryPolicy, stretched to a
+// Attempts: Config.MaxRetries when set, otherwise DefaultHTTPMaxAttempts. Backoff follows Config.RetryPolicy, stretched to a
 // provider Retry-After hint (capped at MaxRetryAfter). Config.RetryBudget,
 // when positive, stops the sequence before a backoff that would overrun it.
 // DoHTTP treats the request as idempotent; use DoHTTPWithOptions with
@@ -64,12 +63,11 @@ func DoHTTPWithOptions(
 	}
 	attempts := 1
 	if !cfg.DisableRetries {
+		// MaxRetries 1 or 2 lowers the attempts, as it does for chat clients;
+		// a floor of 3 here ignored it (B15).
 		attempts = cfg.MaxRetries
 		if attempts <= 0 {
 			attempts = DefaultHTTPMaxAttempts
-		}
-		if attempts < 3 {
-			attempts = 3
 		}
 	}
 	policy := DefaultRetryPolicy

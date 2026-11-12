@@ -365,8 +365,8 @@ behavior. Credential rotation/circuit breaking remain chat-pool concerns; a
 modality client represents one exact deployment credential owned by its worker.
 
 **Retry model (v0.9.5, `transport.go` + `retrybudget.go`):** `DoHTTP` makes
-`Config.MaxRetries` attempts (min 3) or `DefaultHTTPMaxAttempts` (3) when unset —
-the same count as a single-key chat client. Backoff is `RetryPolicy.Delay`,
+`Config.MaxRetries` attempts or `DefaultHTTPMaxAttempts` (3) when unset — when
+unset, the same count as a single-key chat client. Backoff is `RetryPolicy.Delay`,
 stretched to a parsed `Retry-After`/`retry-after-ms` (clamped to
 `MaxRetryAfter`); `Config.RetryBudget` stops before a sleep that would overrun
 it, and so does a sleep that would reach the `ctx` deadline

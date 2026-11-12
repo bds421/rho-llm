@@ -936,3 +936,21 @@ func TestDoHTTPRetries529(t *testing.T) {
 		_ = resp.Body.Close()
 	}
 }
+
+// MaxRetries 1 or 2 lowers the attempts of a chat client; DoHTTP raised it back
+// to 3, so the same Config retried differently per path (B15).
+func TestDoHTTPHonoursALowMaxRetries(t *testing.T) {
+	for _, maxRetries := range []int{1, 2} {
+		srv, hits := hitServer(t, func(_ int32, w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) })
+		resp, err := llm.DoHTTP(context.Background(), llm.Config{DisableProxy: true, RetryPolicy: fastPolicy, MaxRetries: maxRetries}, nil,
+			func(ctx context.Context) (*http.Request, error) {
+				return http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+			})
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		if hits.Load() != int32(maxRetries) {
+			t.Fatalf("MaxRetries=%d: %d attempts", maxRetries, hits.Load())
+		}
+	}
+}

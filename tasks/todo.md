@@ -24,10 +24,10 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   and skips orphan repair (`normalize.go:77-99, 159`).
 
 ### Key pool, retry, fallback
-- **B15 — `MaxRetries` means three different things — S.** Chat pool: a cap (1 or 2 lowers
-  attempts below 3); `DoHTTP`: attempts with a floor of 3; doc says "minimum 3"
-  (`config.go:462`, `pool.go:424-440`, `transport.go:64-73`). Pick one meaning, fix README
-  618/1242.
+- 🟡 **B15b — `MaxRetries` still differs per path — decision.** Under `DefaultConfig()`
+  (`MaxRetries: 10`) a single-key chat client makes 3 attempts, a modality/batch call 10.
+  Options: cap DoHTTP at max(1, 3) like chat (fewer retries, lower cost), or let chat use
+  `MaxRetries` as the count (more retries). Behaviour change either way.
 - 🟡 **B17 — Stream idle watchdog counts consumer time — S.** Measures since the last `Read`,
   not time blocked in `Read`; a slow loop body trips a retryable timeout (`config.go:218-227`).
 - 🟢 **B18 — `rc.Release()` in pool `Stream` not deferred** (*suspected*) (`pool.go:613-656`).
@@ -74,6 +74,9 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   doesn't exist; `EncodeRealtimeEvent` drops all but four fields (no usable
   `session.update`); concurrent `send` writes concurrently; `err == io.EOF`
   (`realtime.go:72, 132, 168-207`). Finish or label experimental.
+
+---
+
 ## 📅 Dated — act on these dates (registry)
 - **2026-11-18** `MiniMax-M2.5` retires (its FAQ table already says retired) → `retiredModels`
   (→ `MiniMax-M3.1-Flash`).
