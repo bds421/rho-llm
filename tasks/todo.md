@@ -184,9 +184,8 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 ---
 
 ## 📝 Docs
-- **D1 — `docs/ARCHITECTURE.md` drift — M.** Default model is `claude-sonnet-5-5` (L776,
-  plus `MaxRetries: 10`, `BetaFeatures`); batch is OpenAI, Anthropic and Gemini (L878-880,
-  926-929, `ProviderPreset.SupportsBatch` missing at L276, `provider.go:8` comment); add
+- **D1 — `docs/ARCHITECTURE.md` drift — M.** `BetaFeatures` in the defaults block;
+  `ProviderPreset.SupportsBatch` missing at L276, `provider.go:8` comment; add
   `Recover` to `BatchClient`; unexported `modelRegistry`/`modelAliases`/`defaultModels` +
   `retiredModels` (L39, 594-596); real type names (`anthropic.Client` …, L162, 255-258);
   `newSingleClient`, `MarkSuccessByName`, `MarkFailedByNameWithCooldown` (L111, 447, 451);
@@ -194,14 +193,10 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   needs `openai_responses` (L289-301, 114-127, 262-270); package tree incomplete; "kit"
   (L529). Add sections: egress/SSRF, capabilities, OpenAI Responses, batch drivers. Rewrite
   version-tagged paragraphs in the present tense.
-- **D2 — README — S.** `MaxRetries` (L618, 1242; after B15); Fable 5.2 in the thinking notes
-  (L440, 446-447); an "Upgrading to v0.17.0" note (`GetAvailableModels` → `ModelsByProvider`
-  filtered on `CapabilityChat`; `llm.Max*` → `Config`); Quick Start shows
-  `import llm "github.com/bds421/rho-llm"`; Gemini padding logs at debug (L1417); retryable
-  list incl. 504/529 (L716, 738); ThoughtSignature on all Gemini 3+ (L1384); retired-alias
-  note placement and completeness (L1345); Anthropic/Gemini base URLs with paths (L43-44);
-  pi link → `earendil-works/pi`, and describe the relationship accurately (shared chat
-  core, diverged since); package tree (L1471-1502).
+- **D2 — README leftovers — S.** Quick Start shows `import llm "github.com/bds421/rho-llm"`;
+  Gemini padding logs at debug (L1417); retryable list incl. 504/529 (L716, 738);
+  ThoughtSignature on all Gemini 3+ (L1384); retired-alias note placement (L1345);
+  Anthropic/Gemini base URLs with paths (L43-44); package tree (L1471-1502).
 - **D3 — README structure — M.** Table of contents; promote Modalities, Batch and Security to
   top-level sections; fold "Exponential Backoff" into Retry; drop "Before v0.9.5…" asides;
   document `WithTools`, `Session.StreamMessages`, `Conversation.ToRequest`/`Append`,
@@ -210,8 +205,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   `Config.MaxBatchDownloadBytes`; generate the alias and default-model tables from the
   registry (missing today: Kimi, Meta, MiniMax, `gpt5.6-*`, `grok-build`). Keep the package
   tree only in ARCHITECTURE and the Config table only in README.
-- **D4 — `CLAUDE.md` — S.** Tutorial repo has 25 modules + root (not 22); Fable 5/5.1/5.2 in
-  the thinking-replay line; pi link.
 - **D5 — Release bookkeeping — S.** The `v0.7.6` tag exists only locally (never pushed).
 - **D6 — Consumer repo.** `../rho-llm-tutorial/13_registry_deep` calls the removed
   `GetAvailableModels` (4 sites) — breaks when the tutorials move to v0.17.x.

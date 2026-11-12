@@ -169,6 +169,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a tool call, including from transcripts persisted before this fix. New
   `DecodeToolInput` and `ToolInputObject` share this between the adapters.
 
+### Changed
+
+- **Docs** (D2, D4, part of D1). README: an "Upgrading to v0.17.0" note
+  (`GetAvailableModels` → `ModelsByProvider`, the removed `llm.Max*` vars), Fable 5.2
+  in the adaptive-thinking notes, the retry and key-pool rules above, and the pi link
+  (`earendil-works/pi`) with how the two libraries relate now. ARCHITECTURE: the
+  `DefaultConfig` model (`claude-sonnet-5-5`) and `MaxRetries`, batch drivers for
+  OpenAI, Anthropic and Gemini, the pool flow. CLAUDE.md: tutorial module count, pi
+  link, Fable 5.2.
+- **`tasks/todo.md`** rebuilt around the 2026-11-12 review: numbered bugs, the pi-ai
+  1.5.2 comparison, registry dates in order; stale status lines and internal host,
+  user and project names removed.
+
 ## [0.17.0] - 2026-11-11
 
 ### Removed

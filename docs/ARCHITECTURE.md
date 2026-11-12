@@ -707,8 +707,8 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
   adapter's `adaptiveThinkingModels` table sends them `{type: adaptive}` +
   `output_config.effort` and rejects an explicit `ThinkingBudget`. The effective
   `ThinkingNone` is encoded per model: `disabled` (Opus 4.7/4.8/5, Sonnet 5,
-  Haiku 5.5), `between_tools` (Sonnet 5.5), or omitted (Fable 5/5.1, Opus 5.5 —
-  thinking always on). Fable 5.1, Opus 5.5 and Sonnet 5.5 reject forced
+  Haiku 5.5), `between_tools` (Sonnet 5.5), or omitted (Fable 5/5.1/5.2, Opus 5.5 —
+  thinking always on). Fable 5.1/5.2, Opus 5.5 and Sonnet 5.5 reject forced
   `tool_choice`, which the adapter refuses before dispatch. All of these models
   lack `CapabilityTemperature` (`anthropicWithoutSamplingControls`).
 - Tool use: native anthropic format with `type: tool_use` content blocks
@@ -778,12 +778,13 @@ type Config struct {
 **Defaults (`DefaultConfig()`):**
 ```
 Provider:         "anthropic"
-Model:            "claude-sonnet-4-6"
+Model:            GetDefaultModel("anthropic")  // claude-sonnet-5-5
 MaxTokens:        8192
 Temperature:      nil (omitted from wire)
 ThinkingLevel:    "" (ThinkingNone)
 Timeout:          120s
 AuthHeader:       "Bearer"
+MaxRetries:       10 (DefaultMaxRetries)
 CircuitThreshold: 5
 CircuitCooldown:  30s
 ```
@@ -881,8 +882,9 @@ many requests, poll, then fetch results — possibly across process restarts.
 `Close` — that deliberately does **not** satisfy `Client`, since batch is submit→poll→fetch, not
 one-in/one-out. Drivers register per protocol via `RegisterBatchProvider` (`batchregister.go`), a
 parallel of the `Client` driver registry; `NewBatchClient(cfg)` (`factory.go`) gates on
-`ProviderPreset.SupportsBatch` (OpenAI only — most `openai_compat` resellers don't expose
-`/v1/batches`), then resolves the driver by protocol. `WaitForBatch` polls `Get` to a terminal
+`ProviderPreset.SupportsBatch` (OpenAI, Anthropic and Gemini presets — most `openai_compat`
+resellers don't expose `/v1/batches`), then resolves the driver by protocol (`openaibatch`,
+`anthropicbatch`, `geminibatch`). `WaitForBatch` polls `Get` to a terminal
 status under caller-controlled `context`.
 
 ### Neutral types
@@ -928,10 +930,10 @@ sync-response cap, so a large completed batch is not silently truncated.
 
 ### Cross-provider shape
 
-The interface is provider-agnostic by design: the Files-API transport is OpenAI-specific, while
-Anthropic Message Batches (inline submit + `results_url`) would register a sibling driver reusing
-the Anthropic adapter's translation the same way. Only the transport differs; results normalize to
-the same `[]BatchResult`.
+The interface is provider-agnostic by design: the Files-API transport is OpenAI-specific,
+Anthropic Message Batches (inline submit + `results_url`) and Gemini batch jobs have sibling
+drivers that reuse their adapter's translation the same way. Only the transport differs; results
+normalize to the same `[]BatchResult`.
 
 ---
 

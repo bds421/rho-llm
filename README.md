@@ -10,6 +10,18 @@ Multi-provider LLM client for Go. Streaming, tool use, image/vision + PDF/docume
 go get github.com/bds421/rho-llm
 ```
 
+### Upgrading to v0.17.0
+
+v0.17.0 removed two package-level APIs:
+
+- **`GetAvailableModels(provider)`** → `ModelsByProvider(provider)`, which returns
+  `[]ModelInfo` sorted by ID; map it to `m.ID`. It lists the registry's whole catalog for the
+  provider, including non-chat models (embeddings, speech, images) — keep
+  `m.Capabilities.Supports(llm.CapabilityChat)` where only chat models are wanted.
+- **`llm.MaxErrorBodyBytes`, `MaxSSELineBytes`, `MaxResponseBodyBytes`,
+  `MaxBatchDownloadBytes`, `MaxToolInputBytes`** → set the field of the same name on `Config`;
+  the `Default*` constants are the fallbacks.
+
 ### Upgrading to v0.13.0
 
 v0.13.0 sends Anthropic API version `2026-10-21` by default
@@ -437,14 +449,14 @@ req := llm.Request{
 }
 ```
 
-For Claude 4.7 and later (Opus 4.7/4.8/5/5.5, Fable 5/5.1, Sonnet 5/5.5,
+For Claude 4.7 and later (Opus 4.7/4.8/5/5.5, Fable 5/5.1/5.2, Sonnet 5/5.5,
 Haiku 5.5), `ThinkingLevel` selects adaptive thinking effort instead of a token
 budget (`minimal` maps to `low`; `ThinkingMax` sends effort `max`) — Anthropic rejects manual `budget_tokens` on
 these models, so a positive `ThinkingBudget` with reasoning enabled is rejected
 before dispatch. `ThinkingNone` is sent the way each model accepts it: thinking
 `disabled` (Opus 4.7/4.8/5, Sonnet 5, Haiku 5.5), `between_tools` (Sonnet 5.5),
-or omitted on Fable 5/5.1 and Opus 5.5, whose thinking is always on. These
-models do not advertise custom-temperature support, and Fable 5.1, Opus 5.5 and
+or omitted on Fable 5/5.1/5.2 and Opus 5.5, whose thinking is always on. These
+models do not advertise custom-temperature support, and Fable 5.1/5.2, Opus 5.5 and
 Sonnet 5.5 reject a forced `ToolChoice` (`Required`/`Tool`) before dispatch.
 Opus 4.6, Sonnet 4.6 and the 4.5 models keep manual budgets.
 
@@ -1516,4 +1528,4 @@ Consumers that only use types (`llm.Client`, `llm.Config`, `llm.Message`, etc.) 
 
 ## Acknowledgements
 
-The name **rho** is a tribute to [pi](https://github.com/badlogic/pi-mono/tree/main/packages/ai) — rho is the next letter in the Greek alphabet. pi's `ai` package is a great multi-provider LLM library; rho brings the same idea to Go.
+The name **rho** is a tribute to [pi](https://github.com/earendil-works/pi/tree/main/packages/ai) (published as `@earendil-works/pi-ai`) — rho is the next letter in the Greek alphabet. pi's `ai` package is a great multi-provider LLM library and rho started from the same idea in Go: one neutral message type across providers, streaming, tools and provider handoff. The two have since grown apart — pi toward agent harnesses (OAuth logins, a generated model catalog, per-host compatibility flags), rho toward backend services (documents, batch, embeddings, key pools, circuit breaking, egress hardening).

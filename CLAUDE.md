@@ -10,7 +10,7 @@ Guidance for working in the `rho-llm` repository.
 image + PDF/document input, **serializable conversations with cross-provider handoff**,
 multi-key auth-pool rotation, circuit breaking, configurable retry, and cost estimation.
 A Go tribute to the TypeScript **pi** `ai` package
-(`github.com/badlogic/pi-mono/tree/main/packages/ai`). See `docs/ARCHITECTURE.md` for the
+(`github.com/earendil-works/pi/tree/main/packages/ai`, published as `@earendil-works/pi-ai`). See `docs/ARCHITECTURE.md` for the
 full design and `tasks/todo.md` for the roadmap.
 
 ## Build & verify
@@ -37,7 +37,7 @@ full design and `tasks/todo.md` for the roadmap.
   *without* the fix (revert it, run, watch it go red, restore). A test that passes regardless is
   vacuous.
 - **Verify backward compatibility against the consumer repo.** The sibling `../rho-llm-tutorial`
-  (22 separate Go modules, each pinning a released rho-llm) is a real consumer. To test *unreleased*
+  (25 tutorial modules plus a root module, each pinning a released rho-llm) is a real consumer. To test *unreleased*
   changes against it, point all its modules at this working tree with a temporary workspace
   (`cd ../rho-llm-tutorial && go work init && go work use -r . && go work use ../rho-llm` — `go.work`
   is gitignored there), then `make build-all` + `make vet-all` + `make test-stress` (offline, `-race`).
@@ -136,7 +136,7 @@ Layered decorator stack over a stateless `Client` interface (`Complete`/`Stream`
 - **Thinking replay requires thinking enabled.** Anthropic rejects replayed thinking blocks unless
   extended thinking is on for the request — keep `ThinkingLevel` set across turns (`WithBaseRequest`
   or `Config`), or historical thinking blocks are silently dropped (no error). Models whose
-  thinking is always on (Fable 5.1, Opus 5.5) and Sonnet 5.5 (`between_tools`) count as enabled. Signed blocks go back unchanged,
+  thinking is always on (Fable 5/5.1/5.2, Opus 5.5) and Sonnet 5.5 (`between_tools`) count as enabled. Signed blocks go back unchanged,
   also with empty text (the default `display: "omitted"`); only a provider handoff drops them.
 - **Mind the `TokensNotReported` (-1) sentinel.** A streamed turn may carry it when the provider
   omits usage; clamp token counts to `>= 0` before accumulating or estimating cost (negatives
