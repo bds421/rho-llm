@@ -36,11 +36,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 - **B20 — A PDF in the history breaks an openai_responses session after a handoff — S/M.**
   The Responses adapter refuses `ContentDocument`; build `input_file` items (`file_data` as a
   PDF data URL) instead (`responses.go:833-837`). Text documents are degraded since B20's fix.
-- 🟡 **B22 — Cost is $0 for snapshot-suffixed model IDs — S.** `pricingFor` is exact-match +
-  alias; `gpt-5.4-2026-03-05`, `claude-opus-5-5-20260901` price 0; one unknown iteration
-  model zeroes the response (`registry.go:747-783`). Strip the suffix via `versionSuffix`;
-  fall back to the top-level model. `LoggingClient` prices by request model, `Session` by
-  response model.
 - 🟢 **B23 — Conversation round trip not exact; `LoadConversation` permissive — S.**
   `ToolInput` integers > 2^53 change (decode with `UseNumber`); `null`/`{}` load as empty;
   negative usage loads as-is; `ToRequest` shares the backing array (`conversation.go:158`);

@@ -133,6 +133,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now makes exactly `MaxRetries` attempts (3 when unset). The `MaxRetries`
   docs (Config comment, README, ARCHITECTURE) said "minimum 3", which was true
   for neither path; they now describe both.
+- **Cost was $0 for dated model IDs** (B22). Providers answer with snapshot
+  IDs (`gpt-5.4-2026-03-05`, `claude-opus-5-5-20260901`), and `EstimateCost`
+  looked up the exact ID, so `Session.Usage`, `LoggingClient` and usage hooks
+  reported those turns as free. An unregistered ID that is a registered model
+  plus a numeric snapshot suffix is now priced as that model.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

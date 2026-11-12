@@ -807,3 +807,33 @@ func TestRegistryAudioPricesPinned(t *testing.T) {
 		}
 	}
 }
+
+// Providers answer with dated snapshot IDs; the exact-match lookup priced them
+// at $0, so Session.Usage and LoggingClient reported free turns (B22).
+func TestEstimateCostPricesSnapshotIDs(t *testing.T) {
+	for _, tc := range []struct{ snapshot, base string }{
+		{"claude-opus-5-5-20260901", "claude-opus-5-5"},
+		{"gpt-5.4-2026-03-05", "gpt-5.4"},
+		{"claude-sonnet-5-5-20261001", "claude-sonnet-5-5"},
+	} {
+		in := llm.CostInput{Model: tc.base, InputTokens: 1000, OutputTokens: 100}
+		want := llm.EstimateCost(in)
+		if want == 0 {
+			t.Fatalf("%s is not priced in the registry", tc.base)
+		}
+		in.Model = tc.snapshot
+		if got := llm.EstimateCost(in); got != want {
+			t.Errorf("%s = %v, want %v (the price of %s)", tc.snapshot, got, want, tc.base)
+		}
+	}
+	for _, model := range []string{"claude-opus-5-5-x", "claude-opus-5-5-12", "gpt-5.4-mini-preview", "no-such-model-20260101", "-20260101", "claude-opus-5-5-"} {
+		if got := llm.EstimateCost(llm.CostInput{Model: model, InputTokens: 1000}); got != 0 && !registered(model) {
+			t.Errorf("%q priced at %v; only a numeric snapshot suffix may borrow a price", model, got)
+		}
+	}
+}
+
+func registered(model string) bool {
+	_, ok := llm.GetModelInfo(model)
+	return ok
+}

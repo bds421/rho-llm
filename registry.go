@@ -771,10 +771,30 @@ func EstimateCost(input CostInput) float64 {
 
 // pricingFor looks up a model's registry entry, resolving an alias under the
 // same read lock (ResolveModelAlias takes the lock too, and RWMutex is not
-// re-entrant — so inline it).
+// re-entrant — so inline it). A model ID the registry does not know is priced
+// as the registered model it is a snapshot of: providers answer with dated IDs
+// ("gpt-5.4-2026-03-05", "claude-opus-5-5-20260901"), and an exact-match lookup
+// priced those at $0 (B22).
 func pricingFor(model string) (ModelInfo, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
+	if info, ok := lookupLocked(model); ok {
+		return info, true
+	}
+	for i := len(model) - 1; i > 0; i-- {
+		if model[i] != '-' || !versionSuffix.MatchString(model[i:]) {
+			continue
+		}
+		if info, ok := lookupLocked(model[:i]); ok {
+			return info, true
+		}
+	}
+	return ModelInfo{}, false
+}
+
+// lookupLocked resolves an alias and looks up the entry. The caller holds
+// registryMu.
+func lookupLocked(model string) (ModelInfo, bool) {
 	if full, isAlias := modelAliases[model]; isAlias {
 		model = full
 	}
