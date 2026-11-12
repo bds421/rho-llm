@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -277,5 +278,79 @@ func TestRealtimeConcurrentRecvSendClose(t *testing.T) {
 
 	if session.Open() {
 		t.Fatal("session still open after Close")
+	}
+}
+
+// serialConn fails when two writes overlap.
+type serialConn struct {
+	pipeConn
+	inWrite  sync.Mutex
+	overlaps int
+	omu      sync.Mutex
+}
+
+func (c *serialConn) Write(ctx context.Context, data []byte) error {
+	if !c.inWrite.TryLock() {
+		c.omu.Lock()
+		c.overlaps++
+		c.omu.Unlock()
+		return nil
+	}
+	defer c.inWrite.Unlock()
+	time.Sleep(time.Millisecond)
+	return c.pipeConn.Write(ctx, data)
+}
+
+// Concurrent Send* calls wrote to the conn at the same time (B35).
+func TestRealtimeSendsNeverOverlap(t *testing.T) {
+	conn := &serialConn{pipeConn: *newPipeConn()}
+	s, err := llm.OpenRealtimeSession(context.Background(), llm.Config{Provider: "openai", Model: "gpt-realtime", APIKey: "k"},
+		func(context.Context, llm.Config) (llm.RealtimeConn, error) { return conn, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = s.SendAudio(context.Background(), "AAAA") }()
+	}
+	wg.Wait()
+	if conn.overlaps != 0 {
+		t.Fatalf("%d writes overlapped", conn.overlaps)
+	}
+}
+
+// wrappedEOFConn ends with a wrapped io.EOF, as WebSocket libraries return.
+type wrappedEOFConn struct{ pipeConn }
+
+func (c *wrappedEOFConn) Read(context.Context) ([]byte, error) {
+	return nil, fmt.Errorf("websocket: read: %w", io.EOF)
+}
+
+// A wrapped io.EOF was returned as an error instead of a clean close (B35).
+func TestRealtimeWrappedEOFClosesCleanly(t *testing.T) {
+	s, err := llm.OpenRealtimeSession(context.Background(), llm.Config{Provider: "openai", Model: "gpt-realtime", APIKey: "k"},
+		func(context.Context, llm.Config) (llm.RealtimeConn, error) { return &wrappedEOFConn{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := s.Recv(context.Background())
+	if err != nil || ev.Type != llm.RealtimeEventClosed || s.Open() {
+		t.Fatalf("ev=%+v err=%v open=%v", ev, err, s.Open())
+	}
+}
+
+// The neutral fields cannot express a full session.update; Raw is sent
+// verbatim, and malformed Raw is refused (B35).
+func TestRealtimeRawEventIsSentVerbatim(t *testing.T) {
+	update := `{"type":"session.update","session":{"instructions":"be brief","voice":"marin"}}`
+	b, err := llm.EncodeRealtimeEvent(llm.RealtimeEvent{Type: llm.RealtimeEventSessionUpdated, Raw: json.RawMessage(update)})
+	if err != nil || string(b) != update {
+		t.Fatalf("encoded %s err=%v", b, err)
+	}
+	for _, bad := range []string{`{"session":{}}`, `[1]`, `{`} {
+		if _, err := llm.EncodeRealtimeEvent(llm.RealtimeEvent{Raw: json.RawMessage(bad)}); err == nil {
+			t.Errorf("raw %s accepted", bad)
+		}
 	}
 }

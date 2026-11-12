@@ -216,6 +216,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tokens_in=-1`, and a turn without reported usage logged `-1` as a token
   count. An unfinished stream now logs `stream abandoned`, and missing usage
   logs `0` with `usage_reported=false`.
+- **Realtime sessions: concurrent sends, wrapped EOF, no full `session.update`**
+  (B35). Concurrent `Send*` calls wrote to the connection at the same time
+  (WebSocket connections allow one writer); writes are now serialized. A
+  wrapped `io.EOF` from the transport was returned as an error instead of a
+  clean `session.closed`. `EncodeRealtimeEvent` kept only four fields, so a
+  `session.update` with instructions, voice or tools could not be sent; a
+  non-empty `RealtimeEvent.Raw` is now sent verbatim (it must be a JSON object
+  with a `type`). The doc comment named a "registered dialer" that does not
+  exist; the surface is now documented as experimental, with a caller-supplied
+  dialer.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

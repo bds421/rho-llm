@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -10,9 +11,13 @@ import (
 )
 
 // Realtime is a distinct surface from Complete/Stream: a long-lived bidirectional
-// session that exchanges framed events (audio/text/control). The reference driver
-// is OpenAI Realtime over a dialer-injected connection so unit tests can drive the
-// state machine without live network access.
+// session that exchanges framed events (audio/text/control) in the OpenAI
+// Realtime wire shape, over a connection the caller's RealtimeDialer opens
+// (typically a WebSocket). The library ships no dialer.
+//
+// Experimental: the neutral event covers audio, text and control; anything
+// richer (a full session.update with instructions, voice or tools) is sent
+// verbatim through RealtimeEvent.Raw. The API may still change.
 
 // RealtimeEventType is a provider-neutral realtime event kind.
 type RealtimeEventType string
@@ -32,13 +37,16 @@ const (
 
 // RealtimeEvent is one framed realtime message.
 type RealtimeEvent struct {
-	Type       RealtimeEventType `json:"type"`
-	EventID    string            `json:"event_id,omitempty"`
-	Text       string            `json:"text,omitempty"`
-	AudioB64   string            `json:"audio,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	Raw        json.RawMessage   `json:"-"`
-	ProviderID string            `json:"-"` // vendor event name when distinct
+	Type     RealtimeEventType `json:"type"`
+	EventID  string            `json:"event_id,omitempty"`
+	Text     string            `json:"text,omitempty"`
+	AudioB64 string            `json:"audio,omitempty"`
+	Error    string            `json:"error,omitempty"`
+	// Raw is the server event as received. On a sent event, a non-empty Raw
+	// is written verbatim instead of the fields above; it must be a JSON
+	// object with a "type".
+	Raw        json.RawMessage `json:"-"`
+	ProviderID string          `json:"-"` // vendor event name when distinct
 }
 
 // RealtimeDialer opens a bidirectional byte stream for a realtime session.
@@ -54,11 +62,12 @@ type RealtimeConn interface {
 
 // RealtimeSession is an open realtime conversation.
 type RealtimeSession struct {
-	mu     sync.Mutex
-	cfg    Config
-	conn   RealtimeConn
-	closed bool
-	state  realtimeState
+	mu      sync.Mutex
+	writeMu sync.Mutex // one frame at a time: a conn is not safe for concurrent writes
+	cfg     Config
+	conn    RealtimeConn
+	closed  bool
+	state   realtimeState
 }
 
 type realtimeState int
@@ -69,8 +78,8 @@ const (
 	realtimeStateClosed
 )
 
-// OpenRealtimeSession dials a realtime connection using the registered dialer
-// for the resolved protocol (OpenAI Realtime is the reference implementation).
+// OpenRealtimeSession opens a realtime session over the connection dialer
+// returns. The dialer is required: the library ships none.
 func OpenRealtimeSession(ctx context.Context, cfg Config, dialer RealtimeDialer) (*RealtimeSession, error) {
 	if dialer == nil {
 		return nil, fmt.Errorf("llm: realtime dialer is required")
@@ -129,7 +138,7 @@ func (s *RealtimeSession) Recv(ctx context.Context) (RealtimeEvent, error) {
 
 	raw, err := conn.Read(ctx)
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			s.mu.Lock()
 			s.closed = true
 			s.state = realtimeStateClosed
@@ -177,11 +186,31 @@ func (s *RealtimeSession) send(ctx context.Context, ev RealtimeEvent) error {
 	}
 	conn := s.conn
 	s.mu.Unlock()
+	// Concurrent Send* calls wrote to the conn at the same time; WebSocket
+	// connections allow one writer, so frames interleaved or the write failed
+	// (B35).
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return conn.Write(ctx, payload)
 }
 
-// EncodeRealtimeEvent maps a neutral event to the OpenAI Realtime JSON wire shape.
+// EncodeRealtimeEvent maps a neutral event to the OpenAI Realtime JSON wire
+// shape. A non-empty ev.Raw is returned verbatim after checking it is a JSON
+// object with a "type": the neutral fields cannot express a full
+// session.update, which was therefore unsendable (B35).
 func EncodeRealtimeEvent(ev RealtimeEvent) ([]byte, error) {
+	if len(ev.Raw) > 0 {
+		var head struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(ev.Raw, &head); err != nil {
+			return nil, fmt.Errorf("llm: realtime raw event: %w", err)
+		}
+		if head.Type == "" {
+			return nil, fmt.Errorf("llm: realtime raw event missing type")
+		}
+		return append([]byte(nil), ev.Raw...), nil
+	}
 	wireType := string(ev.Type)
 	switch ev.Type {
 	case RealtimeEventInputAudioAppend:

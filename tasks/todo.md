@@ -34,10 +34,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 - ⚪ **B31b — Not changed (rejection undocumented):** images inside `is_error` tool results and
   a tool schema whose root is `anyOf`/`oneOf` are sent as is. Confirm against the live API
   before refusing them.
-- 🟢 **B35 — Realtime surface is half-finished.** Doc mentions a "registered dialer" that
-  doesn't exist; `EncodeRealtimeEvent` drops all but four fields (no usable
-  `session.update`); concurrent `send` writes concurrently; `err == io.EOF`
-  (`realtime.go:72, 132, 168-207`). Finish or label experimental.
 
 ---
 
@@ -153,7 +149,7 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 
 ## Realtime
 - 🟢 WebSocket dialer helper for OpenAI Realtime (live smoke uses a test-only dialer); Gemini
-  Live / other vendors. See B35 first.
+  Live / other vendors.
 
 ---
 

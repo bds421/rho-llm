@@ -1192,9 +1192,11 @@ public vector endpoint). Use chat + external embedders, or `RegisterModel` + cus
 
 ### Realtime (OpenAI reference)
 
-Long-lived bidirectional sessions are a **separate** surface from `Complete`/`Stream`.
-Inject a `RealtimeDialer` (typically a WebSocket) to open a session; offline unit
-tests drive framing through an in-memory conn:
+Long-lived bidirectional sessions are a **separate**, **experimental** surface from
+`Complete`/`Stream`. The library ships no dialer: inject a `RealtimeDialer` (typically a
+WebSocket) to open a session. Sends are serialized, so one goroutine may `Recv` while
+others send. Events the neutral fields cannot express (a full `session.update` with
+instructions, voice or tools) go out verbatim through `RealtimeEvent.Raw`:
 
 ```go
 session, err := llm.OpenRealtimeSession(ctx, cfg, myWebSocketDialer)
@@ -1203,6 +1205,8 @@ defer session.Close()
 _ = session.SendAudio(ctx, base64PCM)
 _ = session.CommitAudio(ctx)
 _ = session.RequestResponse(ctx)
+_ = session.SendEvent(ctx, llm.RealtimeEvent{Raw: json.RawMessage(
+	`{"type":"session.update","session":{"instructions":"be brief"}}`)})
 ev, _ := session.Recv(ctx) // session.created, response.audio.delta, ...
 ```
 
