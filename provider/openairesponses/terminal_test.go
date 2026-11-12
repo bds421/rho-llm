@@ -14,7 +14,7 @@ func TestTerminalEventsAndRawReasons(t *testing.T) {
 		{"incomplete", "max_output_tokens", llm.StopMaxTokens, "max_output_tokens"},
 		{"incomplete", "content_filter", llm.StopRefusal, "content_filter"},
 		{"incomplete", "", llm.StopMaxTokens, "incomplete"},
-		{"failed", "", "error", "failed"},
+		{"failed", "", "error", "failed"}, // parseResponse only; Complete and Stream return an error (TestFailedResponseIsAnAPIError)
 	} {
 		t.Run(tc.status+"/"+tc.detail, func(t *testing.T) {
 			c := &Client{providerName: "openai"}
@@ -25,6 +25,9 @@ func TestTerminalEventsAndRawReasons(t *testing.T) {
 			parsed := c.parseResponse(response)
 			if parsed.StopReason != tc.want || parsed.RawStopReason != tc.raw {
 				t.Errorf("Complete reasons = %q/%q, want %q/%q", parsed.StopReason, parsed.RawStopReason, tc.want, tc.raw)
+			}
+			if tc.status == "failed" {
+				return
 			}
 			wire := fmt.Sprintf("data: {\"type\":\"response.%s\",\"response\":{\"status\":%q,\"incomplete_details\":{\"reason\":%q},\"usage\":{\"input_tokens\":7,\"output_tokens\":9}}}\n\ndata: invalid trailing bytes\n\n", tc.status, tc.status, tc.detail)
 			count := 0

@@ -133,6 +133,9 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	if err := llm.DecodeJSONResponse(resp, c.config, &apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+	if apiResp.Error != nil && len(apiResp.Candidates) == 0 {
+		return nil, c.apiError(apiResp.Error)
+	}
 
 	return c.parseResponse(&apiResp, req.Model), nil
 }
@@ -283,6 +286,44 @@ type geminiResponse struct {
 	// the TokensNotReported sentinel depends on it.
 	UsageMetadata *geminiUsageMetadata `json:"usageMetadata"`
 	ModelVersion  string               `json:"modelVersion"`
+	// A blocked prompt has no candidates, only promptFeedback.blockReason.
+	PromptFeedback *struct {
+		BlockReason string `json:"blockReason"`
+	} `json:"promptFeedback"`
+	// An error after the 200, sent as a stream chunk.
+	Error *geminiError `json:"error"`
+}
+
+// geminiError is the Google API error object ({"code","message","status"}).
+type geminiError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Status  string `json:"status"`
+}
+
+// blockReason returns the prompt's block reason when Gemini refused it
+// before generating any candidate.
+func (r *geminiResponse) blockReason() string {
+	if len(r.Candidates) == 0 && r.PromptFeedback != nil {
+		return r.PromptFeedback.BlockReason
+	}
+	return ""
+}
+
+// apiError turns an in-band error object into the *llm.APIError the same
+// error would produce as an HTTP status, with the deployment's secrets
+// scrubbed from the message.
+func (c *Client) apiError(e *geminiError) error {
+	status := e.Code
+	if status < 400 || status > 599 {
+		status = 500
+	}
+	message := e.Message
+	if e.Status != "" {
+		message = e.Status + ": " + message
+	}
+	message = llm.RedactSecrets(message, c.config)
+	return llm.NewAPIErrorFromStatusWithLimit("gemini", status, message, c.config.EffectiveMaxErrorMessageLen())
 }
 
 type geminiUsageMetadata struct {
@@ -568,6 +609,14 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 		resp.ThinkingTokens = u.ThoughtsTokenCount
 	}
 
+	// A blocked prompt: no candidates, a block reason. It is a refusal, not
+	// an empty successful answer.
+	if reason := apiResp.blockReason(); reason != "" {
+		resp.StopReason = llm.StopRefusal
+		resp.RawStopReason = reason
+		return resp
+	}
+
 	if len(apiResp.Candidates) > 0 {
 		candidate := apiResp.Candidates[0]
 		resp.StopReason = normalizeStopReason(candidate.FinishReason)
@@ -643,10 +692,30 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			continue
 		}
 
+		if event.Error != nil {
+			yield(llm.StreamEvent{}, c.apiError(event.Error))
+			return
+		}
+
 		if u := event.UsageMetadata; u != nil {
 			inputTokens, cacheReadTokens = u.splitPrompt()
 			outputTokens = u.CandidatesTokenCount
 			thinkingTokens = u.ThoughtsTokenCount
+		}
+
+		// A blocked prompt ends the stream as a refusal; without this it ran
+		// to EOF and surfaced as a retryable truncation, re-sending the prompt.
+		if reason := event.blockReason(); reason != "" {
+			yield(llm.StreamEvent{
+				Type:            llm.EventDone,
+				StopReason:      llm.StopRefusal,
+				RawStopReason:   reason,
+				InputTokens:     inputTokens,
+				OutputTokens:    outputTokens,
+				ThinkingTokens:  thinkingTokens,
+				CacheReadTokens: cacheReadTokens,
+			}, nil)
+			return
 		}
 
 		if len(event.Candidates) > 0 {
@@ -732,19 +801,28 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 }
 
 // normalizeStopReason maps Gemini finish reasons to the unified set
-// (end_turn, tool_use, max_tokens, refusal) used by the library interface.
+// (end_turn, tool_use, max_tokens, refusal, error) used by the library
+// interface. Content filters (safety, recitation, blocklist, personal data,
+// image filters) are refusals. A failed turn (MALFORMED_FUNCTION_CALL and the
+// other tool-call failures, OTHER, LANGUAGE, an unspecified reason) is
+// StopError: before, the raw string passed through as if it were a normal
+// stop, and a caller's tool loop ended on a turn that had failed.
+// RawStopReason keeps the original value.
 func normalizeStopReason(reason string) string {
 	switch reason {
 	case "STOP":
-		return "end_turn"
+		return llm.StopEndTurn
 	case "FUNCTION_CALLING":
-		return "tool_use"
+		return llm.StopToolUse
 	case "MAX_TOKENS":
-		return "max_tokens"
-	case "SAFETY", "PROHIBITED_CONTENT":
+		return llm.StopMaxTokens
+	case "SAFETY", "PROHIBITED_CONTENT", "RECITATION", "BLOCKLIST", "SPII",
+		"IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION":
 		return llm.StopRefusal
+	case "":
+		return ""
 	default:
-		return reason
+		return llm.StopError
 	}
 }
 

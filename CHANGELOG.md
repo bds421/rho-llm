@@ -28,6 +28,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   → 429, unknown → 500), so `IsRetryable` and failover classify it like the
   same error sent as an HTTP status. A 200 `Complete` response that carries
   only an error object returns that error instead of an empty response.
+- **Gemini: a blocked prompt, an error chunk and a failed finish were
+  misreported** (B3). A prompt Gemini blocks has no candidates, only
+  `promptFeedback.blockReason`: `Complete` returned an empty response with no
+  stop reason, and `Stream` ran to EOF and surfaced a retryable truncation, so
+  the pool sent the blocked prompt again. It is now a refusal (`StopRefusal`,
+  the block reason in `RawStopReason`). An error chunk after the 200
+  (`{"error":{"code":429,…}}`) became "stream ended without completion" with
+  the status lost; it is now an `*APIError` with that status, and a 200
+  `Complete` body with only an error returns it. Finish reasons: `RECITATION`,
+  `BLOCKLIST`, `SPII` and the image filters are refusals like `SAFETY`;
+  `MALFORMED_FUNCTION_CALL`, the other tool-call failures, `OTHER` and unknown
+  reasons are `StopError` (they passed through as the raw string, so a tool
+  loop ended on a failed turn as if it had completed). `RawStopReason` keeps
+  the original. **Behaviour change:** `RECITATION` was returned as is.
+- **OpenAI Responses: refusals were dropped, failures had no detail, and
+  `Complete` joined text differently from `Stream`** (B4). A `refusal` content
+  block (and `response.refusal.delta`) was ignored, giving an empty `end_turn`;
+  it is now the content, with `StopRefusal`. A `failed` response was a Done
+  event or response with stop reason `"error"` and no error; `Complete` and
+  batch results now return an `*APIError` from `response.error` (`server_error`
+  → 500, `rate_limit_exceeded` → 429, `invalid_*` → 400), and `Stream` ends
+  with an `EventError` carrying the reported usage. A stream `error` event is
+  classified the same way (it was a plain error). `Complete` joined text blocks
+  with `"\n"`; it now concatenates them as `Stream` does.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

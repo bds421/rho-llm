@@ -136,6 +136,9 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	if err := llm.DecodeJSONResponse(resp, c.config, &apiResp); err != nil {
 		return nil, fmt.Errorf("failed to decode responses API response: %w", err)
 	}
+	if apiResp.Status == "failed" {
+		return nil, c.apiError(apiResp.Error)
+	}
 
 	return c.parseResponse(&apiResp), nil
 }
@@ -227,6 +230,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	}
 	var completed bool
 	var emittedToolCall bool // the stream emitted at least one function call
+	var sawRefusal bool      // the model declined (response.refusal.delta)
 
 	for scanner.Scan() {
 		data, ok := llm.SSEData(scanner.Text())
@@ -259,6 +263,25 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				continue
 			}
+			if ev.Delta != "" {
+				if !yield(llm.StreamEvent{Type: llm.EventContent, Text: ev.Delta}, nil) {
+					return
+				}
+			}
+
+		case "response.refusal.delta":
+			// The model declined: the refusal text streams like content, and
+			// the turn ends as a refusal.
+			var ev struct {
+				Delta string `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed refusal delta from %s: %w", c.providerName, err)) {
+					return
+				}
+				continue
+			}
+			sawRefusal = true
 			if ev.Delta != "" {
 				if !yield(llm.StreamEvent{Type: llm.EventContent, Text: ev.Delta}, nil) {
 					return
@@ -374,7 +397,25 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				}
 				continue
 			}
+			inputTokens, cacheReadTokens := ev.Response.Usage.splitInput()
+			outputTokens, thinkingTokens := ev.Response.Usage.splitOutput()
+			if ev.Response.Status == "failed" {
+				// A failed response is an error, not a completion. The
+				// EventError carries the usage the provider reported.
+				completed = true
+				yield(llm.StreamEvent{
+					Type:            llm.EventError,
+					InputTokens:     inputTokens,
+					OutputTokens:    outputTokens,
+					ThinkingTokens:  thinkingTokens,
+					CacheReadTokens: cacheReadTokens,
+				}, c.apiError(ev.Response.Error))
+				return
+			}
 			stopReason, rawStopReason := responseStopReasons(&ev.Response)
+			if sawRefusal && stopReason == llm.StopEndTurn {
+				stopReason = llm.StopRefusal
+			}
 			// A streamed function call wins over the status-based reason, exactly
 			// like the non-streaming parseResponse path (which unconditionally sets
 			// "tool_use" for any function_call output item, even on an
@@ -387,8 +428,6 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// trailing bytes after the turn is complete (including malformed
 			// lines) can't surface as a spurious error masking the completed turn.
 			completed = true
-			inputTokens, cacheReadTokens := ev.Response.Usage.splitInput()
-			outputTokens, thinkingTokens := ev.Response.Usage.splitOutput()
 			yield(llm.StreamEvent{
 				Type:            llm.EventDone,
 				StopReason:      stopReason,
@@ -402,30 +441,15 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 
 		case "error":
 			var ev struct {
-				Error struct {
-					Message string `json:"message"`
-					Code    string `json:"code"`
-				} `json:"error"`
+				Error responsesError `json:"error"`
 			}
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				yield(llm.StreamEvent{}, fmt.Errorf("malformed error event from %s: %w", c.providerName, err))
 				return
 			}
-			msg := ev.Error.Message
-			if msg == "" {
-				msg = "unknown error"
-			}
-			if ev.Error.Code != "" {
-				msg = ev.Error.Code + ": " + msg
-			}
-			// Same hygiene as an HTTP error body: the provider may echo the
-			// request key, and an unbounded message would bloat every log
-			// line that prints the error.
-			msg = llm.RedactSecrets(msg, c.config)
-			if limit := c.config.EffectiveMaxErrorMessageLen(); len(msg) > limit {
-				msg = msg[:limit] + "... [truncated]"
-			}
-			yield(llm.StreamEvent{}, fmt.Errorf("stream error from %s: %s", c.providerName, msg))
+			// Same classification and hygiene as an HTTP error: the provider
+			// may echo the request key, and the message is bounded.
+			yield(llm.StreamEvent{}, c.apiError(&ev.Error))
 			return
 
 		default:
@@ -508,6 +532,47 @@ type responsesResponse struct {
 	Output            []responsesOutputItem `json:"output"`
 	Usage             responsesUsage        `json:"usage"`
 	IncompleteDetails *responsesIncomplete  `json:"incomplete_details"`
+	Error             *responsesError       `json:"error"` // set when status is "failed"
+}
+
+// responsesError is the error of a failed response or a stream "error" event.
+type responsesError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// responsesErrorStatus maps a Responses error code onto the HTTP status the
+// same error carries as a response status, so retry and failover classify it
+// alike. invalid_* codes (invalid_prompt, invalid_image, …) are 400.
+var responsesErrorStatus = map[string]int{
+	"rate_limit_exceeded": 429,
+	"insufficient_quota":  429,
+	"server_error":        500,
+	"timeout":             504,
+}
+
+// apiError builds the *llm.APIError for a failed response or an error event,
+// with the deployment's secrets scrubbed from the message.
+func (c *Client) apiError(e *responsesError) error {
+	if e == nil {
+		e = &responsesError{}
+	}
+	status, ok := responsesErrorStatus[e.Code]
+	if !ok {
+		status = 500
+		if strings.HasPrefix(e.Code, "invalid_") {
+			status = 400
+		}
+	}
+	msg := e.Message
+	if msg == "" {
+		msg = "unknown error"
+	}
+	if e.Code != "" {
+		msg = e.Code + ": " + msg
+	}
+	msg = llm.RedactSecrets(msg, c.config)
+	return llm.NewAPIErrorFromStatusWithLimit(c.providerName, status, msg, c.config.EffectiveMaxErrorMessageLen())
 }
 
 type responsesOutputItem struct {
@@ -529,8 +594,9 @@ type responsesSummaryText struct {
 }
 
 type responsesContentBlock struct {
-	Type string `json:"type"` // output_text
-	Text string `json:"text"`
+	Type    string `json:"type"` // output_text, refusal
+	Text    string `json:"text"`
+	Refusal string `json:"refusal,omitempty"`
 }
 
 type responsesUsage struct {
@@ -890,6 +956,7 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 
 	// Extract output items
 	var contentParts []string
+	refused := false
 	var thinkingParts []string
 	for _, item := range apiResp.Output {
 		switch item.Type {
@@ -913,19 +980,26 @@ func (c *Client) parseResponse(apiResp *responsesResponse) *llm.Response {
 			resp.StopReason = "tool_use"
 		case "message":
 			for _, block := range item.Content {
-				if block.Type == "output_text" && block.Text != "" {
+				switch {
+				case block.Type == "output_text" && block.Text != "":
 					contentParts = append(contentParts, block.Text)
+				case block.Type == "refusal" && block.Refusal != "":
+					contentParts = append(contentParts, block.Refusal)
+					refused = true
 				}
 			}
 		}
+	}
+	if refused && resp.StopReason == llm.StopEndTurn {
+		resp.StopReason = llm.StopRefusal
 	}
 
 	if len(thinkingParts) > 0 {
 		resp.Thinking = strings.Join(thinkingParts, "\n")
 	}
-	if len(contentParts) > 0 {
-		resp.Content = strings.Join(contentParts, "\n")
-	}
+	// Concatenated, as Stream yields them: text blocks are pieces of one
+	// answer, and a "\n" between them changed "Hello " + "world".
+	resp.Content = strings.Join(contentParts, "")
 
 	return resp
 }

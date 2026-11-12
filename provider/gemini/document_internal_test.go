@@ -103,7 +103,7 @@ func TestUnsupportedAnthropicFieldsRefused(t *testing.T) {
 			t.Errorf("%s accepted", name)
 		}
 	}
-	for raw, want := range map[string]string{"SAFETY": llm.StopRefusal, "PROHIBITED_CONTENT": llm.StopRefusal, "RECITATION": "RECITATION"} {
+	for raw, want := range map[string]string{"SAFETY": llm.StopRefusal, "PROHIBITED_CONTENT": llm.StopRefusal, "RECITATION": llm.StopRefusal, "MALFORMED_FUNCTION_CALL": llm.StopError} {
 		if got := normalizeStopReason(raw); got != want {
 			t.Errorf("%s -> %s, want %s", raw, got, want)
 		}

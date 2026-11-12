@@ -38,5 +38,8 @@ func (c *Client) ParseResponsesBatchResultBody(raw json.RawMessage) (*llm.Respon
 	if err := json.Unmarshal(raw, &apiResp); err != nil {
 		return nil, fmt.Errorf("openairesponses: decode batch result body: %w", err)
 	}
+	if apiResp.Status == "failed" {
+		return nil, c.apiError(apiResp.Error)
+	}
 	return c.parseResponse(&apiResp), nil
 }

@@ -1401,25 +1401,28 @@ func TestParseResponseEmptyOutput(t *testing.T) {
 	}
 }
 
-// TestParseStreamFailedStatus verifies that failed status maps to error stop reason.
+// TestParseStreamFailedStatus verifies that a failed response ends the stream
+// with an error event carrying the reported usage, not a completion (B4).
 func TestParseStreamFailedStatus(t *testing.T) {
-	sseData := "data: " + `{"type":"response.failed","response":{"id":"r","status":"failed","usage":{"input_tokens":1,"output_tokens":0}}}` + "\n\n"
+	sseData := "data: " + `{"type":"response.failed","response":{"id":"r","status":"failed","error":{"code":"server_error","message":"The model failed"},"usage":{"input_tokens":1,"output_tokens":0}}}` + "\n\n"
 
 	c := &Client{providerName: "openai_responses"}
 	var events []llm.StreamEvent
+	var errs []error
 	c.parseStream(strings.NewReader(sseData), func(ev llm.StreamEvent, err error) bool {
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
 		events = append(events, ev)
+		errs = append(errs, err)
 		return true
 	})
 
-	if len(events) != 1 {
-		t.Fatalf("got %d events, want 1", len(events))
+	if len(events) != 1 || errs[0] == nil {
+		t.Fatalf("got %d events, errs %v; want one error event", len(events), errs)
 	}
-	if events[0].StopReason != "error" {
-		t.Errorf("StopReason = %q, want %q", events[0].StopReason, "error")
+	if events[0].Type != llm.EventError || events[0].InputTokens != 1 {
+		t.Errorf("event = %+v, want EventError with the reported usage", events[0])
+	}
+	if !strings.Contains(errs[0].Error(), "The model failed") || !llm.IsRetryable(errs[0]) {
+		t.Errorf("err = %v, want the provider message and a retryable server error", errs[0])
 	}
 }
 

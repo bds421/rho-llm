@@ -18,16 +18,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 
 ## 🔴 Bugs — next patch release
 
-### Responses reported as success / errors lost
-- **B3 — Gemini: blocked prompt / stream error chunk / non-STOP finish misreported — S.**
-  `promptFeedback.blockReason` with no candidates → empty response (`Complete`) or retryable
-  EOF (`Stream`); a stream `{"error":{code:429}}` chunk → EOF, `IsRateLimited` false;
-  `MALFORMED_FUNCTION_CALL` → `err=nil` (`gemini.go:280-292, 551, 563-601, 728`).
-- **B4 — OpenAI Responses: refusal dropped, `failed` without detail, text joined
-  differently — S.** `refusal` content and `response.refusal.delta` ignored (empty
-  `end_turn`); `status:"failed"` gives stop `"error"` with no `APIError`; `Complete` joins
-  text blocks with `"\n"`, `Stream` concatenates (`responses.go:384-413, 902-917`).
-
 ### Tool calls
 - 🟢 **B7b — Normalize edge cases — S.** Duplicate IDs inside one assistant message remap both
   results to the second call; a tool call with an empty ID keeps the call, drops its result
