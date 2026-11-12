@@ -52,7 +52,8 @@ func NewFallbackModalityClient(primary Config, fallbacks ...Config) (ModalityCli
 // FailoverPolicy decides whether a failed deployment's error should hand the
 // request to the next deployment in a NewFallbackModalityClientWithPolicy
 // chain. It is consulted only for errors that are not caller cancellation or
-// a context deadline — those always stop the chain.
+// the caller's context deadline — those always stop the chain. A deployment's
+// own Config.Timeout is a provider failure.
 type FailoverPolicy func(ctx context.Context, err error) bool
 
 // FailoverAnyProviderError is the default FailoverPolicy (what
@@ -125,10 +126,17 @@ type fallbackModalityClient struct {
 }
 
 // isProviderFailure reports an error the provider or the network caused, for
-// which another deployment may succeed.
+// which another deployment may succeed. The caller's context decides what is
+// cancellation: a deployment that runs into its own Config.Timeout (net/http's
+// Client.Timeout error matches context.DeadlineExceeded) is a slow provider,
+// and the next deployment gets the request (B11). A deadline or cancellation
+// of the caller's ctx stops the chain.
 func isProviderFailure(ctx context.Context, err error) bool {
-	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {

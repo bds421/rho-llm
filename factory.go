@@ -11,7 +11,7 @@ import (
 // All clients get automatic retry with exponential backoff on transient errors
 // (429, 503, 502). Use NewClientWithKeys for multi-key rotation.
 func NewClient(cfg Config) (Client, error) {
-	if cfg.DisableRetries {
+	if cfg.DisableRetries && cfg.CircuitThreshold <= 0 {
 		return newSingleClient(cfg)
 	}
 	return NewClientWithKeys(cfg, []string{cfg.APIKey})
@@ -30,7 +30,11 @@ func NewClientWithKeys(cfg Config, keys []string) (Client, error) {
 			return nil, fmt.Errorf("llm: retries-disabled client requires exactly one credential profile")
 		}
 		cfg.APIKey = keys[0]
-		return newSingleClient(cfg)
+		if cfg.CircuitThreshold <= 0 {
+			return newSingleClient(cfg)
+		}
+		// A circuit breaker needs the pool, which records every failure;
+		// with DisableRetries it makes one attempt (B14).
 	}
 	return newPooledClient(cfg, keys)
 }

@@ -66,6 +66,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new client was asked for the previous provider's model on every turn. The
   switch now clears the base `Model`, so the new client's own model applies;
   other base settings carry over.
+- **A burst of 429s on one key opened the circuit breaker for the whole pool**
+  (B10). Five concurrent rate limits on key a (threshold 5) opened the circuit
+  although key b was healthy, and every request was refused for the cooldown.
+  A rate limit no longer counts against the endpoint while the pool has another
+  healthy key; with a single key it still does. Auth errors now also re-arm a
+  half-open probe they consumed instead of holding it.
+- **A fallback chain never failed over when the primary hit its own
+  `Config.Timeout`** (B11). net/http's timeout error matches
+  `context.DeadlineExceeded`, which was read as caller cancellation, so the
+  healthy fallback was never tried. The caller's context now decides: a
+  deployment's own timeout is a provider failure, the caller's deadline or
+  cancellation still stops the chain.
+- **One request-scoped 403 permanently disabled every key** (B12). A 403 for a
+  model or region the organization may not use disabled each key the pool
+  rotated through, and they never recovered. A 401 still disables the key for
+  good; a 403 now rests it for five minutes, and a second 403 for the same
+  request is returned without trying more keys.
+- **After waiting for a cooldown, the pool retried on the key still cooling**
+  (B13). With every key cooling, the pool waited for the soonest one and then
+  retried on the key that had failed last. It now rotates to the key it waited
+  for.
+- **`DisableRetries` silently turned off the circuit breaker** (B14). The
+  pool returned before recording the failure, and `NewClient` bypassed the pool
+  entirely. With `CircuitThreshold` set, a retries-disabled client now goes
+  through the pool and every failure is recorded; it still makes one attempt.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

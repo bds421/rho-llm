@@ -447,15 +447,20 @@ Complete():
         2. Success → MarkSuccess(), breaker.RecordSuccess(), return
         3. Non-retryable, non-auth error (400) → return immediately
         4. Auth error (401/403) OR retryable error (429/503/502):
-             breaker.RecordFailure() (auth errors exempt — bad key ≠ broken endpoint)
+             a second 403 for the same request → return it (request-scoped)
+             breaker.RecordFailure() (exempt: auth errors, and 429 while
+               another healthy key exists — both are about the key)
              MarkFailed(err):
-               - Auth errors: IsHealthy = false (permanent)
+               - 401: IsHealthy = false (permanent)
+               - 403: five-minute cooldown
                - Others: cooldown (temporary, configurable)
+             DisableRetries → return here (failure already recorded)
              rotateClient() → GetAvailable() → create new single client
              if rotation fails:
                - Auth error → return immediately (dead key is dead)
                - Final attempt → stop (no sleep after the last attempt)
-               - Transient error → backoff → sleep & retry same client, where
+               - Transient error → backoff → sleep, rotate to the key that
+                 recovered (else the same client) and retry, where
                  backoff = soonest-key cooldown when >1 healthy key (all cooling),
                            else retryPolicy.Delay(attempt) (single key, v0.9.5),
                  stretched to APIError.RetryAfter (≤ MaxRetryAfter = 60s);
@@ -480,7 +485,7 @@ Stream():
 
 **Caller cancellation (v0.4.0):** before marking a key failed or recording a breaker failure, both `Complete` and `Stream` check `ctx.Err()`. A request aborted by the caller's context surfaces through net/http as a `*url.Error` that satisfies `net.Error` — without this check it looked like a transient provider failure, so a cancelled request would cool down a healthy key and trip the breaker. Caller cancellation now returns immediately, touching neither key nor breaker health. The HTTP client's own timeout (`context.DeadlineExceeded`) is *not* exempted — it remains a retryable transient failure. TLS certificate-verification failures are classified non-retryable (no retry can fix endpoint identity).
 
-**Auth error handling:** When a 401/403 occurs, the key is marked permanently unhealthy (`IsHealthy = false`), not just put in cooldown. If rotation fails because no healthy keys remain, the error returns immediately — no point backing off with a dead key.
+**Auth error handling:** When a 401 occurs, the key is marked permanently unhealthy (`IsHealthy = false`), not just put in cooldown. A 403 rests the key for five minutes instead: it is often request-scoped, and a second 403 for the same request is returned without rotating further. If rotation fails because no healthy keys remain, the error returns immediately — no point backing off with a dead key.
 
 **Pre-data vs mid-stream retry:** A stream that fails on the initial HTTP connection (429/503 before any SSE events) is functionally identical to a failed `Complete` — no data has reached the caller, so retry with rotation is safe. Once any event has been yielded via `for-range`, retrying would replay content from scratch with no way for the caller to detect duplication, so mid-stream errors pass through immediately.
 

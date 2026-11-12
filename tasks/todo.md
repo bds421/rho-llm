@@ -24,22 +24,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   and skips orphan repair (`normalize.go:77-99, 159`).
 
 ### Key pool, retry, fallback
-- **B10 — A 429 burst on one key opens the breaker for the whole pool — S/M.** Five
-  concurrent 429s on key a (threshold 5) open the circuit although key b is healthy; a later
-  success in Open doesn't close it (`pool.go:510-512, 636, 681-683`). Key-scoped errors
-  (429, auth) must not count as endpoint failures while another key is healthy.
-- **B11 — Fallback never fails over when the primary hits its own `Config.Timeout` — S.**
-  `isProviderFailure` treats `Client.Timeout`'s error as caller cancellation because it
-  matches `context.DeadlineExceeded` (`fallback_modality.go:130`). Decide on `ctx.Err()`.
-- **B12 — One request-scoped 403 permanently disables every key — S.** No recovery for
-  non-active keys (`pool.go:153-159`, `errors.go:195-201`). Long cooldown instead of a
-  permanent flag; stop rotating once a second key returns the same 403 for the same request.
-- **B13 — After waiting for the soonest cooldown, the retry uses the still-cooling key — S.**
-  `backoffAfterFailedRotation` sleeps then continues "with same client" (`pool.go:406-420,
-  554-556, 726-728`). Re-rotate after the sleep.
-- **B14 — `DisableRetries` silently disables the breaker and key-health marking — S.**
-  Early return before `recordFailure`/`markFailed`; `NewClient` bypasses the pool entirely
-  (`pool.go:495-498, 674-678`; `factory.go:14-34`).
 - **B15 — `MaxRetries` means three different things — S.** Chat pool: a cap (1 or 2 lowers
   attempts below 3); `DoHTTP`: attempts with a floor of 3; doc says "minimum 3"
   (`config.go:462`, `pool.go:424-440`, `transport.go:64-73`). Pick one meaning, fix README

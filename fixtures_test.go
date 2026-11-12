@@ -128,3 +128,45 @@ func (nilClient) Provider() string { return "nilprov" }
 func (nilClient) Model() string { return "nilmodel" }
 
 func (nilClient) Close() error { return nil }
+
+// keyClient answers per API key: fn decides each call from the key, so a pool
+// test can make one key fail and another succeed. Stream yields fn's result as
+// one content event plus Done, or its error.
+type keyClient struct {
+	key string
+	fn  func(key string, req llm.Request) (*llm.Response, error)
+}
+
+func (c *keyClient) Complete(_ context.Context, req llm.Request) (*llm.Response, error) {
+	return c.fn(c.key, req)
+}
+
+func (c *keyClient) Stream(_ context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
+	return func(yield func(llm.StreamEvent, error) bool) {
+		resp, err := c.fn(c.key, req)
+		if err != nil {
+			yield(llm.StreamEvent{}, err)
+			return
+		}
+		if yield(llm.StreamEvent{Type: llm.EventContent, Text: resp.Content}, nil) {
+			yield(llm.StreamEvent{Type: llm.EventDone, StopReason: llm.StopEndTurn}, nil)
+		}
+	}
+}
+
+func (c *keyClient) Provider() string { return "test" }
+func (c *keyClient) Model() string    { return "m" }
+func (c *keyClient) Close() error     { return nil }
+
+// keyPool builds a PooledClient whose keys are served by keyClient.
+func keyPool(t *testing.T, cfg llm.Config, keys []string, fn func(string, llm.Request) (*llm.Response, error)) *llm.PooledClient {
+	t.Helper()
+	pc, err := llm.NewPooledClient(cfg, keys, func(p llm.AuthProfile) (llm.Client, error) {
+		return &keyClient{key: p.APIKey, fn: fn}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	return pc
+}

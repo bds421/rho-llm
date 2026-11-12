@@ -667,6 +667,9 @@ cfg.CircuitCooldown  = 15 * time.Second         // probe after 15s
 ```
 
 Auth errors (401/403) do not trip the circuit — a bad key is not a broken endpoint.
+Neither do rate limits (429) while the pool has another healthy key: they are that key's
+quota. With `DisableRetries` the breaker still counts failures; the client just makes one
+attempt.
 
 ### Configurable Retry & Cooldowns
 
@@ -714,7 +717,8 @@ When a key fails, the pool rotates to the next profile — which may use an enti
 
 **Error handling:**
 - **Transient errors (429, 503, 502, 500, 408, network):** Backoff and retry, rotating to other keys if available
-- **Auth errors (401, 403):** Key is permanently disabled; rotates to other keys or fails immediately if none remain
+- **401:** Key is permanently disabled (invalid or revoked); rotates to other keys or fails immediately if none remain
+- **403:** Key rests for five minutes and the pool rotates. A 403 is often about the request (a model or region the organization may not use), so when a second key answers 403 to the same request, that error is returned without trying more keys
 - **Bad request (400):** Returns immediately — the request is broken, not the key
 
 ## Structured Errors

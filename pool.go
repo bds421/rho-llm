@@ -124,15 +124,23 @@ func (p *AuthPool) GetAvailable() (AuthProfile, error) {
 	return AuthProfile{}, &CooldownError{Wait: waitTime}
 }
 
+// cooldownForbidden is how long a key rests after a 403. A 403 is often about
+// the request (a model or region the organization may not use), not the key,
+// so it is a long cooldown rather than the permanent disable a 401 gets.
+const cooldownForbidden = 5 * time.Minute
+
 // MarkFailedByName marks a specific profile as failed.
-// Auth errors (401/403) permanently disable the key. Other errors apply a temporary cooldown
-// using the default durations (60s rate limit, 30s overload, 10s other).
+// A 401 permanently disables the key; a 403 rests it for five minutes. Other
+// errors apply a temporary cooldown using the default durations (60s rate
+// limit, 30s overload, 10s other).
 func (p *AuthPool) MarkFailedByName(name string, err error) {
 	p.MarkFailedByNameWithCooldown(name, err, DefaultCooldownRateLimit, DefaultCooldownOverload, DefaultCooldownDefault)
 }
 
 // MarkFailedByNameWithCooldown marks a specific profile as failed with configurable cooldowns.
-// Auth errors (401/403) permanently disable the key. Other errors apply the appropriate cooldown.
+// A 401 permanently disables the key; a 403 rests it for five minutes (a 403
+// can be request-scoped, and a permanent disable never recovered). Other
+// errors apply the appropriate cooldown.
 func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimitCD, overloadCD, defaultCD time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -148,9 +156,9 @@ func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimi
 		return
 	}
 
-	// Auth errors permanently disable the key — it's revoked, not temporarily overloaded.
+	// A 401 permanently disables the key — it's revoked, not temporarily overloaded.
 	// Scrub the key from the (logged + stored) error: a 401 body may echo it.
-	if IsAuthError(err) {
+	if isUnauthorized(err) {
 		redacted := redactProfileSecrets(err.Error(), profile.APIKey, profile.BaseURL)
 		profile.IsHealthy = false
 		profile.LastError = redacted
@@ -160,7 +168,11 @@ func (p *AuthPool) MarkFailedByNameWithCooldown(name string, err error, rateLimi
 
 	var cooldown time.Duration
 	// Cooldown based on error type
-	if IsRateLimited(err) {
+	if IsAuthError(err) { // 403
+		cooldown = cooldownForbidden
+		slog.Warn("profile forbidden, resting", "profile", profile.Name, "cooldown", cooldown,
+			"error", redactProfileSecrets(err.Error(), profile.APIKey, profile.BaseURL))
+	} else if IsRateLimited(err) {
 		cooldown = rateLimitCD
 		slog.Debug("profile rate limited", "profile", profile.Name, "cooldown", cooldown)
 	} else if IsOverloaded(err) {
@@ -393,6 +405,57 @@ func NewPooledClient(cfg Config, keys []string, clientFunc func(profile AuthProf
 	return pc, nil
 }
 
+// isUnauthorized reports a 401: the key itself is invalid or revoked.
+func isUnauthorized(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == 401
+}
+
+// isForbidden reports a 403.
+func isForbidden(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == 403
+}
+
+// countsAgainstEndpoint reports whether a failed attempt says the endpoint is
+// unhealthy, which is what the circuit breaker tracks. Auth errors are about
+// the key. A rate limit is about the key's quota while the pool has another
+// key to use: before B10, a burst of 429s on one key opened the breaker for
+// the whole pool although another key was healthy. With a single usable key
+// the endpoint is unavailable to this caller, so it counts.
+func (pc *PooledClient) countsAgainstEndpoint(err error) bool {
+	if IsAuthError(err) {
+		return false
+	}
+	if IsRateLimited(err) && pc.pool.HealthyCount() > 1 {
+		return false
+	}
+	return true
+}
+
+// recordFailedAttempt updates the breaker and key health for an attempt that
+// failed with a retryable or auth error. An error that does not count against
+// the endpoint re-arms a consumed half-open probe instead of holding it.
+func (pc *PooledClient) recordFailedAttempt(name string, err error, probeTok uint64) {
+	if pc.countsAgainstEndpoint(err) {
+		pc.breaker.recordFailure(probeTok)
+	} else {
+		pc.breaker.ReleaseProbe(probeTok)
+	}
+	pc.markFailed(name, err)
+}
+
+// rotateAfterWait moves to the key the pool waited for. The wait was for the
+// soonest cooldown, which is usually another key than the one that failed
+// last; retrying "with the same client" hit a key still cooling (B13).
+func (pc *PooledClient) rotateAfterWait(failedName string) error {
+	err := pc.rotateClient(failedName)
+	if errors.Is(err, ErrClientClosed) {
+		return err
+	}
+	return nil // no key available yet: retry on the current one
+}
+
 // backoffAfterFailedRotation picks the sleep before retrying on the same
 // client after a retryable failure that could not rotate to another key.
 //
@@ -447,6 +510,7 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 	budget := newRetryBudget(pc.cfg.RetryBudget)
 
 	var lastErr error
+	sawForbidden := false
 	for i := 0; i < maxRetries; i++ {
 		// Circuit breaker gate: if open, fail fast. The circuit's own cooldown
 		// timer controls when the next probe is allowed — burning retry
@@ -492,10 +556,6 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 		}
 
 		pc.emitRetryEvent(RetryEvent{Type: RetryAttemptFailed, Attempt: i, Err: err})
-		if pc.cfg.DisableRetries {
-			pc.breaker.ReleaseProbe(probeTok)
-			return nil, err
-		}
 
 		// Auth errors and retryable errors trigger rotation to try another key.
 		// Other errors (400 bad request, etc.) are not key-related — return immediately.
@@ -506,13 +566,21 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 			return nil, err
 		}
 
-		// Auth errors do NOT trip the circuit — bad key ≠ broken endpoint
-		if !IsAuthError(err) {
-			pc.breaker.recordFailure(probeTok)
+		// A second key answering 403 to the same request: the request is what
+		// is forbidden. Return it rather than resting every key in turn (B12).
+		if isForbidden(err) && sawForbidden {
+			pc.breaker.ReleaseProbe(probeTok)
+			return nil, err
 		}
+		sawForbidden = sawForbidden || isForbidden(err)
 
-		// Mark failed (auth errors get permanently disabled, others get cooldown)
-		pc.markFailed(usedName, err)
+		// Breaker and key health (401: disabled, 403: long rest, others:
+		// cooldown). DisableRetries still records them (B14): it turns off
+		// the retry, not the breaker.
+		pc.recordFailedAttempt(usedName, err, probeTok)
+		if pc.cfg.DisableRetries {
+			return nil, err
+		}
 
 		if rotErr := pc.rotateClient(usedName); rotErr != nil {
 			// Pool closed concurrently — fail fast rather than backing off.
@@ -552,7 +620,9 @@ func (pc *PooledClient) Complete(ctx context.Context, req Request) (*Response, e
 				timer.Stop()
 				return nil, ctx.Err()
 			case <-timer.C:
-				// Continue to next iteration with same client
+			}
+			if err := pc.rotateAfterWait(usedName); err != nil {
+				return nil, err
 			}
 		} else {
 			if !budget.allows(0) {
@@ -582,6 +652,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 		budget := newRetryBudget(pc.cfg.RetryBudget)
 
 		var lastErr error
+		sawForbidden := false
 		for attempt := 0; attempt < maxRetries; attempt++ {
 			// Circuit breaker gate: if open, fail fast (see Complete for rationale).
 			// probeTok identifies this attempt's half-open probe (if admitted as one).
@@ -631,10 +702,7 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 						// consumed half-open probe so it doesn't strand traffic.
 						pc.breaker.ReleaseProbe(probeTok)
 					case IsRetryable(err) || IsAuthError(err):
-						pc.markFailed(usedName, err)
-						if !IsAuthError(err) {
-							pc.breaker.recordFailure(probeTok)
-						}
+						pc.recordFailedAttempt(usedName, err, probeTok)
 					default:
 						// Non-retryable, non-auth (e.g. 400): endpoint reachable,
 						// not a breaker failure; re-arm a consumed half-open probe.
@@ -671,19 +739,22 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 			}
 
 			pc.emitRetryEvent(RetryEvent{Type: RetryAttemptFailed, Attempt: attempt, Err: lastErr})
-			if pc.cfg.DisableRetries {
+
+			// A second key answering 403 to the same request (see Complete).
+			if isForbidden(lastErr) && sawForbidden {
 				pc.breaker.ReleaseProbe(probeTok)
 				yield(StreamEvent{}, lastErr)
 				return
 			}
+			sawForbidden = sawForbidden || isForbidden(lastErr)
 
-			// Auth errors do NOT trip the circuit — bad key ≠ broken endpoint
-			if !IsAuthError(lastErr) {
-				pc.breaker.recordFailure(probeTok)
+			// Pre-data retryable error — record it, then rotate and retry.
+			// DisableRetries still records it (see Complete).
+			pc.recordFailedAttempt(usedName, lastErr, probeTok)
+			if pc.cfg.DisableRetries {
+				yield(StreamEvent{}, lastErr)
+				return
 			}
-
-			// Pre-data retryable error — rotate and retry
-			pc.markFailed(usedName, lastErr)
 			if rotErr := pc.rotateClient(usedName); rotErr != nil {
 				// Pool closed concurrently — fail fast rather than backing off.
 				if errors.Is(rotErr, ErrClientClosed) {
@@ -724,7 +795,10 @@ func (pc *PooledClient) Stream(ctx context.Context, req Request) iter.Seq2[Strea
 					yield(StreamEvent{}, ctx.Err())
 					return
 				case <-timer.C:
-					// Continue to next iteration with same client
+				}
+				if err := pc.rotateAfterWait(usedName); err != nil {
+					yield(StreamEvent{}, err)
+					return
 				}
 			} else {
 				if !budget.allows(0) {

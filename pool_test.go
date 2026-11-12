@@ -1816,3 +1816,203 @@ func TestPoolMultiKeyAllCoolingWaitsForCooldown(t *testing.T) {
 		t.Fatalf("backoff = %v, want the ≤150ms soonest-key cooldown", backoff)
 	}
 }
+
+// A burst of 429s on one key is that key's quota, not a broken endpoint.
+// Five concurrent 429s on key a (breaker threshold 5) opened the circuit for
+// the whole pool although key b was healthy (B10).
+func TestRateLimitBurstOnOneKeyDoesNotOpenTheBreaker(t *testing.T) {
+	const n = 5
+	for _, stream := range []bool{false, true} {
+		var gate sync.WaitGroup
+		gate.Add(n)
+		fn := func(key string, _ llm.Request) (*llm.Response, error) {
+			if key == "a" {
+				gate.Done()
+				gate.Wait() // all n requests are in flight on key a
+				return nil, llm.NewRateLimitError("test", "slow down")
+			}
+			return &llm.Response{Content: "ok"}, nil
+		}
+		pc := keyPool(t, llm.Config{Provider: "test", CircuitThreshold: n, CircuitCooldown: time.Hour}, []string{"a", "b"}, fn)
+		var wg sync.WaitGroup
+		var failed atomic.Int32
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := callPool(pc, stream); err != nil {
+					failed.Add(1)
+				}
+			}()
+		}
+		wg.Wait()
+		if err := callPool(pc, stream); failed.Load() > 0 || err != nil {
+			t.Fatalf("stream=%v: healthy key b exists, yet %d burst requests failed and the next one: %v (%s)", stream, failed.Load(), err, pc.PoolStatus())
+		}
+	}
+}
+
+// With a single key there is nothing to rotate to: its 429s still count, so
+// the breaker can stop a caller that keeps hammering a quota-exhausted key.
+func TestRateLimitsOnTheOnlyKeyStillCount(t *testing.T) {
+	var calls atomic.Int32
+	fn := func(string, llm.Request) (*llm.Response, error) {
+		calls.Add(1)
+		return nil, llm.NewRateLimitError("test", "slow down")
+	}
+	cfg := llm.Config{Provider: "test", CircuitThreshold: 2, CircuitCooldown: time.Hour, MaxRetries: 1}
+	pc := keyPool(t, cfg, []string{"a"}, fn)
+	for i := 0; i < 5; i++ {
+		_, _ = pc.Complete(context.Background(), llm.Request{})
+	}
+	if calls.Load() > 2 {
+		t.Fatalf("%d calls reached the provider; the breaker (threshold 2) never opened", calls.Load())
+	}
+}
+
+// After waiting for the soonest cooldown, the retry must go to the key the
+// pool waited for. It went to the key that failed last and was still cooling:
+// a (100 ms overload) → b (30 s rate limit) → wait 100 ms → b again (B13).
+func TestRetryAfterCooldownUsesTheKeyThatRecovered(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		var mu sync.Mutex
+		var order []string
+		fn := func(key string, _ llm.Request) (*llm.Response, error) {
+			mu.Lock()
+			order = append(order, key)
+			n := len(order)
+			mu.Unlock()
+			switch {
+			case n == 1:
+				return nil, llm.NewOverloadedError("test", "busy")
+			case key == "b":
+				return nil, llm.NewRateLimitError("test", "slow down")
+			}
+			return &llm.Response{Content: "ok from " + key}, nil
+		}
+		cfg := llm.Config{Provider: "test", CooldownOverload: 100 * time.Millisecond, CooldownRateLimit: 30 * time.Second}
+		pc := keyPool(t, cfg, []string{"a", "b"}, fn)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := callPoolCtx(ctx, pc, stream)
+		cancel()
+		if err != nil || strings.Join(order, ",") != "a,b,a" {
+			t.Fatalf("stream=%v: order=%v err=%v, want a,b,a and success", stream, order, err)
+		}
+	}
+}
+
+// A 403 for one request (a model the organization may not use) permanently
+// disabled every key the pool rotated through; they never recovered (B12).
+func TestRequestScoped403DoesNotBurnThePool(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		var mu sync.Mutex
+		var forbiddenCalls []string
+		fn := func(key string, req llm.Request) (*llm.Response, error) {
+			if req.Model == "model-without-access" {
+				mu.Lock()
+				forbiddenCalls = append(forbiddenCalls, key)
+				mu.Unlock()
+				return nil, llm.NewAPIErrorFromStatus("test", 403, `{"error":"model not available for your organization"}`)
+			}
+			return &llm.Response{Content: "ok"}, nil
+		}
+		pc := keyPool(t, llm.Config{Provider: "test"}, []string{"a", "b", "c"}, fn)
+		if err := callPoolReq(context.Background(), pc, stream, llm.Request{Model: "model-without-access"}); !llm.IsAuthError(err) {
+			t.Fatalf("stream=%v: err = %v, want the 403", stream, err)
+		}
+		if len(forbiddenCalls) != 2 {
+			t.Fatalf("stream=%v: the forbidden request went to %v; want it stopped at the second key", stream, forbiddenCalls)
+		}
+		st := pc.PoolStatus()
+		if strings.Contains(st, "unhealthy") {
+			t.Fatalf("stream=%v: a 403 disabled keys permanently: %s", stream, st)
+		}
+		for i := 0; i < 3; i++ {
+			if err := callPool(pc, stream); err != nil {
+				t.Fatalf("stream=%v: a normal request failed after the 403: %v", stream, err)
+			}
+		}
+	}
+}
+
+// A 401 still disables the key for good: the key is invalid.
+func TestUnauthorizedStillDisablesTheKey(t *testing.T) {
+	fn := func(key string, _ llm.Request) (*llm.Response, error) {
+		if key == "a" {
+			return nil, llm.NewAuthError("test", "invalid key", 401)
+		}
+		return &llm.Response{Content: "ok"}, nil
+	}
+	pc := keyPool(t, llm.Config{Provider: "test"}, []string{"a", "b"}, fn)
+	if _, err := pc.Complete(context.Background(), llm.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if st := pc.PoolStatus(); !strings.Contains(st, "test-1:unhealthy") {
+		t.Fatalf("status = %s, want key a disabled", st)
+	}
+}
+
+// DisableRetries turns off the retry, not the breaker: failures were never
+// recorded, so a breaker with threshold 2 let all ten calls through (B14).
+func TestDisableRetriesStillFeedsTheBreaker(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		var calls atomic.Int32
+		fn := func(string, llm.Request) (*llm.Response, error) {
+			calls.Add(1)
+			return nil, llm.NewOverloadedError("test", "down")
+		}
+		cfg := llm.Config{Provider: "test", DisableRetries: true, CircuitThreshold: 2, CircuitCooldown: time.Hour}
+		pc := keyPool(t, cfg, []string{"a"}, fn)
+		for i := 0; i < 10; i++ {
+			_ = callPool(pc, stream)
+		}
+		if calls.Load() != 2 {
+			t.Fatalf("stream=%v: %d calls reached the provider, want 2 (breaker threshold 2, one attempt each)", stream, calls.Load())
+		}
+	}
+}
+
+// NewClient with DisableRetries bypassed the pool, so CircuitThreshold was
+// silently ignored (B14).
+func TestNewClientDisableRetriesKeepsTheBreaker(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	client, err := llm.NewClient(llm.Config{Provider: "openai", Model: "gpt-6.1-sol", APIKey: "k", BaseURL: srv.URL,
+		DisableRetries: true, CircuitThreshold: 2, CircuitCooldown: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for i := 0; i < 5; i++ {
+		_, _ = client.Complete(context.Background(), llm.Request{Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "x")}})
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("%d requests reached the server, want 2", calls.Load())
+	}
+}
+
+func callPool(pc *llm.PooledClient, stream bool) error {
+	return callPoolReq(context.Background(), pc, stream, llm.Request{})
+}
+
+func callPoolCtx(ctx context.Context, pc *llm.PooledClient, stream bool) error {
+	return callPoolReq(ctx, pc, stream, llm.Request{})
+}
+
+func callPoolReq(ctx context.Context, pc *llm.PooledClient, stream bool, req llm.Request) error {
+	if !stream {
+		_, err := pc.Complete(ctx, req)
+		return err
+	}
+	var last error
+	for _, err := range pc.Stream(ctx, req) {
+		if err != nil {
+			last = err
+		}
+	}
+	return last
+}

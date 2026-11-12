@@ -3,6 +3,7 @@ package llm_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -173,6 +174,42 @@ func TestFallbackNeverRetriesCallerMistakesOrCancellation(t *testing.T) {
 	}
 	if got := s.seen(); len(got) != 1 {
 		t.Fatalf("calls = %v; a cancelled request was sent to the fallback too", got)
+	}
+}
+
+// A primary that runs into its own Config.Timeout is a slow provider, not a
+// cancelled request: net/http's Client.Timeout error matches
+// context.DeadlineExceeded, which was read as caller cancellation, so the
+// healthy fallback was never tried (B11).
+func TestFallbackFailsOverWhenThePrimaryHitsItsOwnTimeout(t *testing.T) {
+	s := newGeminiStub(t, map[string]string{"gemini-3.5-transcribe": "hang"})
+	primary := s.cfg("gemini-3.5-transcribe")
+	primary.Timeout = 150 * time.Millisecond
+	client, err := llm.NewFallbackModalityClient(primary, s.cfg("gemini-3.5-flash-lite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	text, err := client.TranscribeAudio(context.Background(), llm.TranscriptionRequest{Audio: fbWAV, MediaType: "audio/wav"})
+	if err != nil || text != "from gemini-3.5-flash-lite" {
+		t.Fatalf("primary timed out and the fallback was not used: %q %v", text, err)
+	}
+	if got := s.seen(); len(got) == 0 || got[len(got)-1] != "gemini-3.5-flash-lite" {
+		t.Fatalf("calls = %v, want the fallback last", got)
+	}
+	for _, policy := range []llm.FailoverPolicy{llm.FailoverAnyProviderError, llm.FailoverTransientOnly} {
+		if !policy(context.Background(), fmt.Errorf("wrapped: %w", context.DeadlineExceeded)) {
+			t.Error("a deployment's own timeout must count as a provider failure")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if policy(ctx, context.DeadlineExceeded) {
+			t.Error("with the caller's ctx done, nothing may fail over")
+		}
+		if policy(context.Background(), context.Canceled) {
+			t.Error("cancellation must not fail over")
+		}
 	}
 }
 
