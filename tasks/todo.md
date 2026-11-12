@@ -22,9 +22,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 - 🟢 **B7b — Normalize edge cases — S.** Duplicate IDs inside one assistant message remap both
   results to the second call; a tool call with an empty ID keeps the call, drops its result
   and skips orphan repair (`normalize.go:77-99, 159`).
-- **B9 — `ValidateToolCall` skips `required`/`enum` for Go-authored schemas — S.**
-  Asserts `.([]any)`; `[]string` (the repo's own examples) is silently accepted
-  (`validate.go:32, 56`).
 
 ### Key pool, retry, fallback
 - **B10 — A 429 burst on one key opens the breaker for the whole pool — S/M.** Five
@@ -54,13 +51,9 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 - 🟢 **B18 — `rc.Release()` in pool `Stream` not deferred** (*suspected*) (`pool.go:613-656`).
 
 ### Session & conversation
-- **B19 — Breaking out of `Session.Stream` on `EventDone` drops the completed turn — S.**
-  `session.go:224-226` returns before `commitTurn`; message, reply and usage vanish.
 - **B20 — A text document (or a PDF for openai_responses) bricks the session after a
   handoff — S.** Not degraded in `NormalizeForProvider` (`normalize.go:129-131`); every later
   turn fails and history can't be edited. Degrade to a text part for non-Anthropic targets.
-- **B21 — `SwitchProvider` keeps a `Model` set via `WithBaseRequest` — S.** The new client
-  is asked for the old provider's model (`session.go:258-264`).
 - 🟡 **B22 — Cost is $0 for snapshot-suffixed model IDs — S.** `pricingFor` is exact-match +
   alias; `gpt-5.4-2026-03-05`, `claude-opus-5-5-20260901` price 0; one unknown iteration
   model zeroes the response (`registry.go:747-783`). Strip the suffix via `versionSuffix`;

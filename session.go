@@ -53,6 +53,7 @@ func WithServerTools(tools ...ServerTool) SessionOption {
 // WithBaseRequest sets a template Request whose generation settings (Model,
 // MaxTokens, ThinkingLevel, Temperature, StopSequences, …) apply to every turn.
 // Its Messages/System/Tools are overwritten by the conversation each turn.
+// SwitchProvider clears its Model, so the new client's model applies.
 func WithBaseRequest(base Request) SessionOption {
 	return func(s *Session) { s.base = base }
 }
@@ -111,10 +112,16 @@ func (s *Session) Provider() string {
 // native to the new provider degrade to text; tool calls, text, images, and
 // documents carry over. Switching while a turn is in flight does not affect
 // that turn — it completes (and is recorded) against the client it started with.
+//
+// The new client's model is used from then on: a Model set through
+// WithBaseRequest named the previous provider's model, and was sent to the new
+// one, which refused it on every turn (B21). Other base settings stay; ones the
+// new provider does not support (Effort, ContainerID, …) are refused by it.
 func (s *Session) SwitchProvider(client Client) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	s.client = client
+	s.base.Model = ""
 }
 
 // Append adds messages to the conversation without generating — e.g. to inject a
@@ -184,8 +191,9 @@ func (s *Session) send(ctx context.Context, msgs []Message, continuation bool) (
 // Stream is the streaming counterpart of Send. It yields events as they arrive;
 // once the turn completes, it appends the assembled assistant message (text +
 // thinking + tool calls, with provenance) and folds in usage. If the stream
-// errors, ends without EventDone, or the caller breaks the range early, no
-// partial turn is recorded.
+// errors, ends without EventDone, or the caller breaks the range before
+// EventDone, no partial turn is recorded. Breaking on EventDone itself (the
+// usual `if ev.Type == EventDone { break }`) keeps the completed turn.
 func (s *Session) Stream(ctx context.Context, prompt string) iter.Seq2[StreamEvent, error] {
 	return s.StreamMessages(ctx, NewTextMessage(RoleUser, prompt))
 }
@@ -222,18 +230,29 @@ func (s *Session) stream(ctx context.Context, msgs []Message, continuation bool)
 			}
 			acc.Add(ev)
 			if !yield(ev, nil) {
-				return // caller broke; leave the conversation unchanged
+				// The caller broke. On the terminal event the turn is
+				// complete and is recorded; before it, the conversation is
+				// left unchanged (B19).
+				if acc.Done() {
+					s.commitStreamed(msgs, provider, req.Model, &acc)
+				}
+				return
 			}
 		}
 		if !acc.Done() {
 			return // stream ended without a clean completion; don't record it
 		}
-		resp := acc.Response()
-		if resp.Model == "" {
-			resp.Model = req.Model
-		}
-		s.commitTurn(msgs, provider, resp)
+		s.commitStreamed(msgs, provider, req.Model, &acc)
 	}
+}
+
+// commitStreamed records a completed streamed turn. The caller must hold turnMu.
+func (s *Session) commitStreamed(msgs []Message, provider, model string, acc *StreamAccumulator) {
+	resp := acc.Response()
+	if resp.Model == "" {
+		resp.Model = model
+	}
+	s.commitTurn(msgs, provider, resp)
 }
 
 // prepareTurn builds the next Request from a snapshot of the conversation plus

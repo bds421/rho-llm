@@ -85,6 +85,72 @@ func TestSessionStreamBreakEarlyRollsBack(t *testing.T) {
 	}
 }
 
+// Breaking out of the range on EventDone is the natural way to consume a
+// stream. The turn is complete at that point, but it was discarded: the user
+// message, the reply and the usage vanished without an error (B19).
+func TestSessionStreamBreakOnDoneKeepsTheTurn(t *testing.T) {
+	fc := &fakeClient{
+		provider: "anthropic", model: "m",
+		events: []llm.StreamEvent{
+			{Type: llm.EventContent, Text: "an"},
+			{Type: llm.EventContent, Text: "swer"},
+			{Type: llm.EventDone, StopReason: "end_turn", InputTokens: 11, OutputTokens: 7},
+		},
+	}
+	s := llm.NewSession(fc)
+
+	for ev, err := range s.Stream(context.Background(), "q") {
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		if ev.Type == llm.EventDone {
+			break
+		}
+	}
+	msgs := s.Conversation().Messages
+	if len(msgs) != 2 || msgs[0].Role != llm.RoleUser || msgs[1].Role != llm.RoleAssistant {
+		t.Fatalf("after breaking on EventDone: %+v, want [user, assistant]", msgs)
+	}
+	if got := msgs[1].Content[0].Text; got != "answer" {
+		t.Fatalf("assistant text = %q, want %q", got, "answer")
+	}
+	if u := s.Usage(); u.InputTokens != 11 || u.OutputTokens != 7 {
+		t.Fatalf("usage = %+v, want 11 in / 7 out", u)
+	}
+
+	// The next turn carries the recorded history.
+	for range s.Stream(context.Background(), "again") {
+	}
+	if n := len(fc.gotReq.Messages); n != 3 {
+		t.Fatalf("second turn sent %d messages, want 3 (history + new prompt)", n)
+	}
+}
+
+// A Model set through WithBaseRequest named the first provider's model and was
+// sent to the client SwitchProvider installed, which refuses it (B21).
+func TestSwitchProviderDropsTheBaseModel(t *testing.T) {
+	first := &fakeClient{provider: "anthropic", model: "claude-sonnet-5-5", resp: &llm.Response{Content: "a", StopReason: "end_turn"}}
+	second := &fakeClient{provider: "gemini", model: "gemini-3.8-flash", resp: &llm.Response{Content: "b", StopReason: "end_turn"}}
+	s := llm.NewSession(first, llm.WithBaseRequest(llm.Request{Model: "claude-sonnet-5-5", MaxTokens: 321}))
+
+	if _, err := s.Send(context.Background(), "one"); err != nil {
+		t.Fatal(err)
+	}
+	if first.gotReq.Model != "claude-sonnet-5-5" {
+		t.Fatalf("first turn model = %q", first.gotReq.Model)
+	}
+	s.SwitchProvider(second)
+	if _, err := s.Send(context.Background(), "two"); err != nil {
+		t.Fatal(err)
+	}
+	if second.gotReq.Model != "gemini-3.8-flash" {
+		t.Fatalf("after SwitchProvider the new client got model %q, want its own gemini-3.8-flash", second.gotReq.Model)
+	}
+	if second.gotReq.MaxTokens != 321 {
+		t.Fatalf("other base settings must carry over: MaxTokens = %d", second.gotReq.MaxTokens)
+	}
+}
+
 func TestSessionStreamNoDoneRollsBack(t *testing.T) {
 	// Stream ends cleanly but never sends EventDone (spec-violating provider).
 	fc := &fakeClient{

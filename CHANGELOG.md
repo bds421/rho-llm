@@ -52,6 +52,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with an `EventError` carrying the reported usage. A stream `error` event is
   classified the same way (it was a plain error). `Complete` joined text blocks
   with `"\n"`; it now concatenates them as `Stream` does.
+- **`ValidateToolCall` skipped `required` and `enum` for schemas written in
+  Go** (B9). It read only the JSON-decoded shapes (`[]any`, `float64`), so a
+  schema with `"required": []string{"city"}` — as the README and examples
+  write it — accepted a call without `city`. The schema is now normalized to its
+  JSON form first; a schema that cannot be encoded is reported.
+- **Breaking out of `Session.Stream` on `EventDone` dropped the completed
+  turn** (B19). The usual `if ev.Type == EventDone { break }` returned before the
+  turn was recorded, so the prompt, the reply and the usage vanished without an
+  error. A break on the terminal event now records the turn; a break before it
+  still leaves the conversation unchanged.
+- **`SwitchProvider` kept a `Model` set through `WithBaseRequest`** (B21). The
+  new client was asked for the previous provider's model on every turn. The
+  switch now clears the base `Model`, so the new client's own model applies;
+  other base settings carry over.
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".

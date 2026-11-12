@@ -18,9 +18,12 @@ import (
 //	    if err := llm.ValidateToolCall(tool, call); err != nil { ... }
 //	}
 func ValidateToolCall(tool Tool, call ToolCall) error {
-	schema := tool.InputSchema
-	if len(schema) == 0 {
+	if len(tool.InputSchema) == 0 {
 		return nil
+	}
+	schema, err := jsonSchemaValue(tool.InputSchema)
+	if err != nil {
+		return fmt.Errorf("tool %q: schema: %w", tool.Name, err)
 	}
 
 	args, err := toArgsMap(call.Input)
@@ -58,6 +61,23 @@ func ValidateToolCall(tool Tool, call ToolCall) error {
 		}
 	}
 	return nil
+}
+
+// jsonSchemaValue returns the schema in the shape encoding/json decodes it to.
+// A schema written in Go holds []string for "required" and "enum", []int for
+// numeric enums, or typed maps for "properties"; the checks below read the
+// JSON shapes ([]any, float64, map[string]any), so without this they were
+// skipped and a missing required argument passed (B9).
+func jsonSchemaValue(schema map[string]any) (map[string]any, error) {
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // toArgsMap normalizes a tool call's Input (which adapters may deliver as a
