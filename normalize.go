@@ -61,7 +61,13 @@ func normalize(msgs []Message, provider, model string) []Message {
 	}
 
 	usedIDs := make(map[string]bool) // tool_use IDs already emitted (for dedup)
-	remap := make(map[string]string) // original tool_use ID -> current emitted ID
+	// Results pair with calls in order: pending[orig] holds the emitted IDs of
+	// the latest assistant message's calls with that original ID that no
+	// result has claimed yet, last[orig] the most recent one (for a repeated
+	// result). One map entry per original ID paired both results of a message
+	// that repeated an ID with its second call (B7).
+	pending := make(map[string][]string)
+	last := make(map[string]string)
 	out := make([]Message, 0, len(msgs))
 
 	for _, m := range msgs {
@@ -71,19 +77,31 @@ func normalize(msgs []Message, provider, model string) []Message {
 
 		nm := m
 		nm.Content = make([]ContentPart, 0, len(m.Content))
+		seenInMessage := make(map[string]bool)
+		noID := 0
 		for _, p := range m.Content {
 			switch p.Type {
 			case ContentToolUse:
-				if p.ToolUseID == "" {
-					nm.Content = append(nm.Content, p)
-					break
+				// A call without an ID gets one: providers require it, and
+				// without one its result was dropped and orphan repair
+				// skipped it (B7). Its results (also without an ID) pair in
+				// order like any other.
+				base := p.ToolUseID
+				if base == "" {
+					noID++
+					base = fmt.Sprintf("call_noid_%d", noID)
 				}
-				newID := p.ToolUseID
+				if !seenInMessage[p.ToolUseID] {
+					seenInMessage[p.ToolUseID] = true
+					pending[p.ToolUseID] = nil // a new turn supersedes unanswered calls
+				}
+				newID := base
 				if usedIDs[newID] {
-					newID = uniqueToolID(p.ToolUseID, usedIDs)
+					newID = uniqueToolID(base, usedIDs)
 				}
 				usedIDs[newID] = true
-				remap[p.ToolUseID] = newID // results with this original ID now pair to newID
+				pending[p.ToolUseID] = append(pending[p.ToolUseID], newID)
+				last[p.ToolUseID] = newID
 				np := p
 				np.ToolUseID = newID
 				if m.Provider != provider {
@@ -93,8 +111,12 @@ func normalize(msgs []Message, provider, model string) []Message {
 				}
 				nm.Content = append(nm.Content, np)
 			case ContentToolResult:
-				target, ok := remap[p.ToolResultID]
-				if !ok {
+				var target string
+				if q := pending[p.ToolResultID]; len(q) > 0 {
+					target, pending[p.ToolResultID] = q[0], q[1:]
+				} else if t, ok := last[p.ToolResultID]; ok {
+					target = t // a repeated result for the same call
+				} else {
 					continue // result before its call, or no matching call → drop
 				}
 				np := p

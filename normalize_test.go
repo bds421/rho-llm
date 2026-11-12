@@ -536,3 +536,68 @@ func TestNormalizeTextDocumentForNonAnthropicTargets(t *testing.T) {
 		t.Fatalf("untitled document text = %q, want %q", got, "body")
 	}
 }
+
+// One assistant message that repeats a tool-call ID (some OpenAI-compatible
+// servers number every call "call_0"): the second call was renamed, and both
+// results paired with it, so the first call had no result and the second two
+// (B7).
+func TestNormalizeRepeatedIDInOneMessagePairsInOrder(t *testing.T) {
+	msgs := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "x"),
+		{Role: llm.RoleAssistant, Provider: "together", Content: []llm.ContentPart{
+			{Type: llm.ContentToolUse, ToolUseID: "call_0", ToolName: "a", ToolInput: map[string]any{}},
+			{Type: llm.ContentToolUse, ToolUseID: "call_0", ToolName: "b", ToolInput: map[string]any{}},
+		}},
+		{Role: llm.RoleUser, Content: []llm.ContentPart{
+			{Type: llm.ContentToolResult, ToolResultID: "call_0", ToolResultContent: "ra"},
+			{Type: llm.ContentToolResult, ToolResultID: "call_0", ToolResultContent: "rb"},
+		}},
+	}
+	out := llm.NormalizeForProvider(msgs, "anthropic")
+	if len(out) < 3 || len(out[1].Content) != 2 || len(out[2].Content) != 2 {
+		t.Fatalf("calls or results lost: %+v", out)
+	}
+	calls, results := out[1].Content, out[2].Content
+	if calls[0].ToolUseID == calls[1].ToolUseID {
+		t.Fatalf("calls share id %q", calls[0].ToolUseID)
+	}
+	if results[0].ToolResultID != calls[0].ToolUseID || results[1].ToolResultID != calls[1].ToolUseID {
+		t.Fatalf("results %q,%q do not pair in order with calls %q,%q",
+			results[0].ToolResultID, results[1].ToolResultID, calls[0].ToolUseID, calls[1].ToolUseID)
+	}
+	if len(out) != 3 {
+		t.Fatalf("orphan repair added messages: %d", len(out))
+	}
+}
+
+// A tool call without an ID kept the call, dropped its result and skipped
+// orphan repair, so the provider got an ID-less call with no answer (B7).
+func TestNormalizeToolCallWithoutID(t *testing.T) {
+	valid := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	answered := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "x"),
+		{Role: llm.RoleAssistant, Content: []llm.ContentPart{{Type: llm.ContentToolUse, ToolName: "now", ToolInput: map[string]any{}}}},
+		llm.NewToolResultMessage("", "12:00", false),
+	}
+	out := llm.NormalizeForProvider(answered, "anthropic")
+	if len(out) < 2 {
+		t.Fatalf("messages lost: %+v", out)
+	}
+	id := out[1].Content[0].ToolUseID
+	if !valid.MatchString(id) {
+		t.Fatalf("ID-less call got id %q", id)
+	}
+	if len(out) != 3 || out[2].Content[0].ToolResultID != id || out[2].Content[0].ToolResultText() != "12:00" {
+		t.Fatalf("result not paired with the ID-less call: %+v", out)
+	}
+	// Unanswered: orphan repair adds an error result.
+	out = llm.NormalizeForProvider(answered[:2], "anthropic")
+	if len(out) != 3 || out[2].Content[0].ToolResultID != out[1].Content[0].ToolUseID || !out[2].Content[0].IsError {
+		t.Fatalf("unanswered ID-less call not repaired: %+v", out)
+	}
+	// Normalizing twice changes nothing.
+	again := llm.NormalizeForProvider(llm.NormalizeForProvider(answered, "anthropic"), "anthropic")
+	if again[1].Content[0].ToolUseID != id {
+		t.Fatalf("second pass renamed %q to %q", id, again[1].Content[0].ToolUseID)
+	}
+}
