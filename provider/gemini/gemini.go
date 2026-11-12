@@ -210,8 +210,9 @@ type geminiFunctionCallingConfig struct {
 }
 
 type geminiThinkingConfig struct {
-	ThinkingBudget int    `json:"thinkingBudget,omitempty"` // token count (mutually exclusive with ThinkingLevel)
-	ThinkingLevel  string `json:"thinkingLevel,omitempty"`  // Gemini 3: "low", "medium", "high"
+	ThinkingBudget  int    `json:"thinkingBudget,omitempty"`  // token count (mutually exclusive with ThinkingLevel)
+	ThinkingLevel   string `json:"thinkingLevel,omitempty"`   // Gemini 3: "low", "medium", "high"
+	IncludeThoughts bool   `json:"includeThoughts,omitempty"` // return thought summaries (parts with thought: true)
 }
 
 type geminiContent struct {
@@ -504,7 +505,11 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		// Gemini 3+ models accept thinkingConfig inside generationConfig.
 		// Gemini 2.5 models (info.Thinking == true) think natively and
 		// reject thinkingConfig — skip for those.
-		tc := &geminiThinkingConfig{}
+		//
+		// includeThoughts asks for thought summaries. Without it Gemini
+		// returns no thought parts, so a caller that set ThinkingLevel never
+		// saw EventThinking or Response.Thinking (B25).
+		tc := &geminiThinkingConfig{IncludeThoughts: true}
 
 		// Prefer string-based thinkingLevel for standard levels (Gemini 3);
 		// fall back to thinkingBudget for custom budgets or non-standard levels.

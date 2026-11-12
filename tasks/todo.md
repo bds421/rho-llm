@@ -44,9 +44,6 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
   `TestNormalizeUnsignedThinkingDegradesEvenSameProvider`). Decide: drop instead.
 
 ### Gemini / batch wire details
-- 🟡 **B25 — Gemini thought summaries never requested** (*unverified live*). pi sends
-  `thinkingConfig.includeThoughts: true` (`google-generative-ai.ts:399`); rho sends only
-  `thinkingLevel` (`gemini.go:209-212`), so `EventThinking` probably never fires.
 - 🟡 **B28 — Gemini batch results don't decode the documented shape** (*doc-verified, not
   live*). `inlinedResponses` is an object wrapping an array (`geminibatch.go:302-318`).
 - 🟢 **B30 — Gemini tool results: `IsError` ignored, images dropped, no id on Gemini 3+.**

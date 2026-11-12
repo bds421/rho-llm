@@ -138,6 +138,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   looked up the exact ID, so `Session.Usage`, `LoggingClient` and usage hooks
   reported those turns as free. An unregistered ID that is a registered model
   plus a numeric snapshot suffix is now priced as that model.
+- **Gemini thinking never came back** (B25). Without
+  `thinkingConfig.includeThoughts`, Gemini returns no thought parts, so a
+  request with `ThinkingLevel` never produced `EventThinking` or
+  `Response.Thinking`. It is now sent with every thinking config (per Google's
+  thinking docs; not yet confirmed against the live API with this library).
 - **SSE lines without a space after `data:` were ignored by every adapter**
   (B5). The space is optional in the SSE spec; a stream from a gateway that
   omits it ended as a retryable "unexpected EOF".
