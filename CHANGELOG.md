@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-11-12
+
 ### Changed
 
 - **Batch and modality calls retry 3 times, like chat** (B15b). `DoHTTP` used
