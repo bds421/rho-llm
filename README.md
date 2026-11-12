@@ -307,7 +307,12 @@ req.ToolChoice = llm.ForceTool("get_weather")
 
 The adapters translate this neutral choice to their protocol's wire format. A nil
 choice uses the provider default. Malformed choices fail before dispatch; choices
-are omitted when no tools are supplied.
+are omitted when no tools are supplied. Anthropic accepts a forced choice only
+without extended thinking; with thinking on it is refused before sending.
+
+**Tool schemas on Anthropic.** The schema root must be an object: a root without
+`"type"` gets `"type": "object"`, and a root `anyOf`/`oneOf`/`allOf` is refused before
+sending (Anthropic rejects both). Use one object with optional properties instead.
 
 `Request.SamplingParams` carries provider-specific top-level body fields such as
 OpenRouter routing (`"provider"`), vLLM `"priority"`, or supported sampling knobs.
@@ -319,6 +324,8 @@ If a tool execution fails, you can pass `isError: true` so the model knows the c
 ```go
 req.Messages = append(req.Messages, llm.NewToolResultMessage(tc.ID, "location not found", true))
 ```
+Gemini receives a failed result under `error`, the others as an error-flagged result.
+An error result on Anthropic may hold only text, so images in it are left out.
 
 ## Server Tools (Anthropic Web Search)
 
@@ -532,7 +539,7 @@ if err != nil {
 }
 ```
 
-On a handoff, `NormalizeForModel` (applied automatically by `Session`; it and `NormalizeForProvider` are exported for direct `Client` users) prepares the transcript for the target model: thinking from a **different model** is dropped, because a model shown another model's reasoning tends to imitate it; thinking from the same model is replayed verbatim only to the **same** provider with a valid signature (Anthropic requires the original signature) and otherwise **degrades to plain text**; orphaned tool calls get a synthetic error result (every provider rejects an unanswered tool call); dangling tool results are dropped; and errored/aborted turns are dropped. Text, images, documents, and tool calls carry over unchanged.
+On a handoff, `NormalizeForModel` (applied automatically by `Session`; it and `NormalizeForProvider` are exported for direct `Client` users) prepares the transcript for the target model: thinking from a **different model** is dropped, because a model shown another model's reasoning tends to imitate it; thinking from the same model is replayed verbatim only to the **same** provider with a valid signature (Anthropic requires the original signature); unsigned thinking from that provider is dropped (no adapter replays it), and thinking handed to **another** provider degrades to plain text; orphaned tool calls get a synthetic error result (every provider rejects an unanswered tool call); dangling tool results are dropped; and errored/aborted turns are dropped. Text, images, documents, and tool calls carry over unchanged.
 
 > **Thinking replay requires thinking enabled.** Anthropic only accepts replayed thinking blocks when extended thinking is on for the request, so keep it enabled across turns (e.g. `llm.NewSession(client, llm.WithBaseRequest(llm.Request{ThinkingLevel: llm.ThinkingLow}))`, or set `ThinkingLevel` on the client `Config`). With thinking off, historical thinking blocks are simply dropped (no error). A failed `Send`/`Stream` rolls back its appended input, so the transcript stays consistent and retryable.
 

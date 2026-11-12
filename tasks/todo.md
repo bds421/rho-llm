@@ -16,20 +16,9 @@ of 2026-10-31 and 2026-11-10, and earlier reviews.
 
 ---
 
-## 🔴 Bugs — next patch release
+## 🔴 Bugs
 
-### Tool calls
-
-### Key pool, retry, fallback
-
-### Session & conversation
-
-### Gemini / batch wire details
-
-### Smaller correctness items
-- ⚪ **B31b — Not changed (rejection undocumented):** images inside `is_error` tool results and
-  a tool schema whose root is `anyOf`/`oneOf` are sent as is. Confirm against the live API
-  before refusing them.
+None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
 
 ---
 

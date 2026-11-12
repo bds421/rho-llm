@@ -565,6 +565,13 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 								blocks = append(blocks, map[string]any{"type": "text", "text": sub.Text})
 							}
 						case llm.ContentImage:
+							// An error result accepts only text blocks ("all
+							// content must be type `text` if `is_error` is true",
+							// checked live 2026-11-12): the image is left out and
+							// its text kept (B31b).
+							if part.IsError {
+								continue
+							}
 							if err := llm.ValidateImageSource(sub); err != nil {
 								return anthropicRequest{}, err
 							}
@@ -624,9 +631,9 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 	// Convert tools (omit empty array — matches Gemini and OpenAI adapters)
 	if len(req.Tools) > 0 {
 		for _, tool := range req.Tools {
-			schema := tool.InputSchema
-			if schema == nil {
-				schema = map[string]any{"type": "object"} // required object, not null
+			schema, err := toolInputSchema(tool.Name, tool.InputSchema)
+			if err != nil {
+				return anthropicRequest{}, err
 			}
 			at := anthropicTool{
 				Name:        tool.Name,
@@ -1144,4 +1151,30 @@ func (c *Client) capabilityConfig() llm.Config {
 		cfg.Provider = "anthropic"
 	}
 	return cfg
+}
+
+// toolInputSchema returns the schema Anthropic accepts for a tool. The root
+// needs "type" ("input_schema.type: Field required") and may not be a
+// combinator ("input_schema does not support oneOf, allOf, or anyOf at the
+// top level"), both checked live 2026-11-12. A nil schema becomes an empty
+// object, a root without a type gets "object", and a root combinator is
+// refused here rather than by a 400 (B31b).
+func toolInputSchema(name string, schema map[string]any) (map[string]any, error) {
+	if schema == nil {
+		return map[string]any{"type": "object"}, nil // required object, not null
+	}
+	for _, k := range []string{"anyOf", "oneOf", "allOf"} {
+		if _, ok := schema[k]; ok {
+			return nil, fmt.Errorf("anthropic: tool %q: input_schema may not use %s at the top level; use one object with optional properties", name, k)
+		}
+	}
+	if _, ok := schema["type"]; ok {
+		return schema, nil
+	}
+	withType := make(map[string]any, len(schema)+1)
+	for k, v := range schema {
+		withType[k] = v
+	}
+	withType["type"] = "object"
+	return withType, nil
 }

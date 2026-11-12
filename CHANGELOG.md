@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call made 3. Both now make 3; `MaxRetries` 1 or 2 still lowers them. A chat
   client with more healthy keys still makes one attempt per key.
 
+### Fixed
+
+- **Anthropic tool shapes the API rejects** (B31b, checked live 2026-11-12).
+  Images in an `is_error` tool result ("all content must be type `text` if
+  `is_error` is true") are left out and the text kept. A tool schema root
+  without `type` ("Field required") gets `"type": "object"`, and a root
+  `anyOf`/`oneOf`/`allOf` is refused before sending instead of by a 400.
+
 ## [0.17.1] - 2026-11-12
 
 ### Security

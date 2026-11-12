@@ -63,3 +63,37 @@ func TestEmptyBlocksStayOffTheWire(t *testing.T) {
 		t.Errorf("tool result lost: %s", b)
 	}
 }
+
+// Checked live 2026-11-12: an is_error tool result may hold only text, a tool
+// schema root needs "type", and a root anyOf/oneOf/allOf is rejected (B31b).
+func TestToolShapesTheAPIRejects(t *testing.T) {
+	c := &Client{config: llm.Config{Model: "claude-haiku-5-5"}}
+	img := llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: "iVBORw0KGgo="}}
+	msgs := []llm.Message{
+		llm.NewTextMessage(llm.RoleUser, "q"),
+		{Role: llm.RoleAssistant, Content: []llm.ContentPart{{Type: llm.ContentToolUse, ToolUseID: "toolu_1", ToolName: "f", ToolInput: map[string]any{}}}},
+		{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentToolResult, ToolResultID: "toolu_1", IsError: true,
+			ToolResultParts: []llm.ContentPart{{Type: llm.ContentText, Text: "partial"}, img}}}},
+	}
+	tools := []llm.Tool{{Name: "f", InputSchema: map[string]any{"properties": map[string]any{"a": map[string]any{"type": "string"}}}}}
+	apiReq, err := c.buildRequest(llm.Request{MaxTokens: 100, Messages: msgs, Tools: tools}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(apiReq)
+	if strings.Contains(string(b), `"type":"image"`) || !strings.Contains(string(b), `"text":"partial"`) {
+		t.Errorf("error result = %s", b)
+	}
+	if !strings.Contains(string(b), `"input_schema":{"properties":{"a":{"type":"string"}},"type":"object"}`) {
+		t.Errorf("schema root type missing: %s", b)
+	}
+	if _, has := tools[0].InputSchema["type"]; has {
+		t.Error("the caller's schema map was modified")
+	}
+	for _, k := range []string{"anyOf", "oneOf", "allOf"} {
+		bad := []llm.Tool{{Name: "f", InputSchema: map[string]any{"type": "object", k: []any{map[string]any{}}}}}
+		if _, err := c.buildRequest(llm.Request{MaxTokens: 100, Messages: msgs[:1], Tools: bad}, false); err == nil {
+			t.Errorf("root %s accepted", k)
+		}
+	}
+}
