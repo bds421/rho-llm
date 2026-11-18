@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Gemini Interactions API, opt-in** (F4). The `gemini-interactions` preset
+  selects the new `gemini_interactions` protocol (`provider/geminiinteractions`,
+  `POST /v1beta/interactions`); `gemini` / `google` stay on generateContent.
+  Text, system prompt, images and PDFs, tools and tool choice, thinking levels
+  with thought summaries and replayed thought signatures, streaming, usage and
+  stop reasons. Stateless: `store:false` and the full transcript on every call;
+  opt in to storage with `SamplingParams["store"] = true`. A tool call from
+  another provider gets Google's documented placeholder thought signature
+  (`skip_thought_signature_validator`). Structured output, `Effort`,
+  `ThinkingBudget`, explicit caching and batch are not supported there yet.
+  Wire format confirmed live on `gemini-3.8-flash` (2026-11-18).
+- **Anthropic message threads, opt-in per Session** (P4).
+  `llm.WithMessageThreads()` makes a `Session` use the message-threads beta
+  (`message-threads-2026-08-12`): after the first turn it sends only the new
+  messages and continues the server-held thread. A turn continues only when the
+  transcript prefix, system prompt, tools, model and generation settings match
+  what the server holds and less than 4m30s have passed; otherwise it sends the
+  full conversation as a new thread. A continuation the API cannot serve
+  (`thread_not_found`, `thread_already_continued`, `thread_continue_in_flight`,
+  any other 400/404) is replayed once in full; when the API refuses threads
+  (`thread_unsupported_request`) the session turns them off. Refusals,
+  fallback-model replies and responses without an ID end the thread. Off by
+  default; `Conversation` serialization is unchanged. Also: `Request.Thread` /
+  `llm.Thread` for direct clients, `Response.ID` on streams (`StreamEvent.ID`),
+  `llm.ThreadErrorCode` with `Thread*` constants, `anthropic.MessageThreadsBeta`.
+  Threaded requests carry `thinking.block_binding` so the thread's fixed fields
+  match. Other adapters and Message Batches refuse `Thread`. Checked against
+  platform.claude.com/docs/en/build-with-claude/message-threads and live on
+  `claude-haiku-5-5` (2026-11-18).
+
+### Changed
+
+- **Gemini finish reasons** (F6). `ESCALATION` ("an escalation rule filtered
+  the request") and `PUP_LIMITED_DISABLED` (account restricted for a Prohibited
+  Use Policy violation) are now `StopRefusal`; `MISSING_THOUGHT_SIGNATURE` and
+  `MALFORMED_RESPONSE` stay `StopError`, by decision. `RawStopReason` keeps the
+  original. From the Gemini API reference (2026-11-18).
+- **Gemini long decode, decided** (F5). Resuming a dropped stream from a
+  mid-stream checkpoint is not done: it would hold every event back until the
+  next checkpoint (up to 5,000 tokens) and a stream cannot take back an event;
+  a later-hop drop still fails with `io.ErrUnexpectedEOF`.
+  `initialPromptTokenCount` is computed by Google's SDKs and absent from REST
+  responses, so it is not reported.
+
+### Fixed
+
+- **Gemini sampling keys in `SamplingParams`** (F6). `temperature`, `top_p`,
+  `top_k` (and `topP` / `topK`) are merged at the top level of the body, where
+  Gemini has no such field: every Gemini model answered with a 400 "Unknown
+  name" (live, `gemini-2.5-flash-lite`). They are now refused before the
+  request, pointing at `Request.Temperature`.
+
 ## [0.19.0] - 2026-11-18
 
 ### Added

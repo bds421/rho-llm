@@ -54,16 +54,13 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   `cached_tokens`, `reasoning_tokens`), and a per-model override (pi `compat-schema.ts`).
   Also: OpenRouter `reasoning_details` (structured, signed reasoning) is not read or replayed;
   per-model effort value maps (Kimi K3 has no `medium`, GLM-5.3 only low/high/max).
-- **P4 — Anthropic message threads — M.** Beta `message-threads-2026-08-12`: send only new
-  messages; full request when the prefix changed or the server can't continue.
-- **F4 — Gemini Interactions API — L.** `POST /v1beta/interactions` (live, 2026-11-18; Google now
-  calls `generateContent` "legacy"). Request `model`/`agent`, `input`, `previous_interaction_id`,
-  `tools`, `system_instruction`, `generation_config`, `store` (default true), `background`;
-  response `Interaction{id, steps[]}`. SSE format, usage fields and status values unread; no batch
-  or explicit caching yet. Thinking summaries via `thinking_summaries`.
-- **F5 — Gemini long decode, rest — S/M.** Resume a dropped stream from the last mid-stream
-  checkpoint token (needs buffering of events since the checkpoint); report
-  `initial_prompt_token_count`; resume after `MAX_TOKENS` with a higher `MaxTokens`.
+- **F7 — Gemini Interactions follow-ups — S/M.** Long decode (`continuation_token`) on the
+  `gemini_interactions` protocol; confirm whether `total_input_tokens` includes
+  `total_cached_tokens` (treated like `promptTokenCount` today); the `failed` / `cancelled`
+  payloads and in-band stream error shape (handled defensively, not provoked live); several
+  thought steps in one turn keep only the last signature; refuse top-level sampling keys in
+  `SamplingParams` as the `gemini` protocol does; structured output, `ThinkingBudget`,
+  `previous_interaction_id`.
 - **F1 — Chat fallback + per-attempt usage — M.** `OperationChat` usage events and a
   `NewFallbackClient` for chat reusing `tryEach`/`FailoverPolicy`.
 
@@ -81,11 +78,12 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   MiniMax >512K, Qwen >256K, Muse Ember >200K; Azure keeps OpenAI's tier.
 - 🟡 **R2 — OpenAI cache writes — S.** GPT-5.6+ bill writes at 1.25× input (30 min) and 2.5×
   (12h); rows have no write price.
-- 🟡 **F6 — Gemini request rules, rest — S.** New finish reasons (`MISSING_THOUGHT_SIGNATURE`,
-  `MALFORMED_RESPONSE`, `ESCALATION`, `PUP_LIMITED_DISABLED`) map to `StopError` by default —
-  decide per value. Hydrogen answers an out-of-range `temperature` with a 400.
 - 🟡 **F2 — Gemini `store` default — S.** `store=true` default for new paid projects since
-  2026-10-26; decide whether to send `store:false`.
+  2026-10-26; decide whether to send `store:false` on generateContent (the
+  `gemini_interactions` adapter already sends `store:false` unless the caller opts in).
+- 🟢 **P4b — Message threads, rest — S.** A key pool that rotates keys costs one replay per
+  rotation (a thread belongs to its key); the fallback-model (`fallback_message`) stream path is
+  untested live; the 4m30s reuse window is a margin over the documented 5 minutes.
 - 🟢 Provider-reported cost; service-tier pricing [pi]. Deferred tool loading [pi].
 
 ## Tools & structured output
@@ -180,6 +178,14 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   registry (missing today: Kimi, Meta, MiniMax, `gpt5.6-*`, `grok-build`). Keep the package
   tree only in ARCHITECTURE and the Config table only in README.
 - **D5 — Release bookkeeping — S.** The `v0.7.6` tag exists only locally (never pushed).
+- 🟠 **D7 — Tutorials for v0.19/v0.20 features, with thorough tests — M.** Update
+  `../rho-llm-tutorial` (pinning the new release): new modules or sections, each with offline
+  tests (httptest fakes, `-race`, hostile inputs) and gated live tests, for Gemini 4 long decode
+  and thinking levels (`xhigh`, `minimal`→`low`, `CachedContent` refusal), the
+  `gemini-interactions` preset, `Session` with `WithMessageThreads()` (delta turns, every
+  fallback), the Perplexity Agent API preset, and the GPT-6.2 / Gemini 4 registry rows. Wire the
+  new tests into the tutorial `Makefile` (`test-stress` or a new offline target) and fix D6 in
+  the same pass.
 - **D6 — Consumer repo.** `../rho-llm-tutorial/13_registry_deep` calls the removed
   `GetAvailableModels` (4 sites) — breaks when the tutorials move to v0.17.x.
 
@@ -195,6 +201,9 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   openaibatch 33.9%.
 - 🟡 **C3 — Live test matrix — M.** Same suites per provider gated on env keys, plus a
   handoff matrix (pi `cross-provider-handoff.test.ts`). Confirms B6, B7, B25, B28, P2.
+- 🟢 **C7 — Shared Gemini model rules.** `minimal`/`xhigh`/Gemini 4 traits are duplicated in
+  `provider/gemini/traits.go` and `provider/geminiinteractions`; move them to one internal
+  package.
 - 🟢 **C4 — Tests by concept in `provider/`.** `v095_*`, `*_break_*`, `batch_harden_*` files
   still exist there; the CLAUDE.md rule covers the root only.
 - 🟢 **C5 — Library `go.mod` dependency-free.** Move `examples/` to a nested module (drops
