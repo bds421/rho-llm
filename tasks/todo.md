@@ -202,6 +202,13 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   openaibatch 33.9%.
 - 🟡 **C3 — Live test matrix — M.** Same suites per provider gated on env keys, plus a
   handoff matrix (pi `cross-provider-handoff.test.ts`). Confirms B6, B7, B25, B28, P2.
+- 🟢 **C8 — Documents outside user turns.** A PDF in an assistant message is refused by
+  Anthropic, forwarded by Gemini, and silently dropped (not even validated) by openai_compat
+  and Responses; pick one rule. `ContentPart.Title` goes out verbatim as the filename (no
+  sanitising); untitled PDFs are numbered per message. Found by tutorial 26.
+- 🟢 **C9 — Perplexity Agent built-in tools.** `SamplingParams["tools"]` is a reserved key, so
+  Agent API tools such as `web_search` cannot be passed; needs a typed option. Found by
+  tutorial 29.
 - 🟢 **C7 — Shared Gemini model rules.** `minimal`/`xhigh`/Gemini 4 traits are duplicated in
   `provider/gemini/traits.go` and `provider/geminiinteractions`; move them to one internal
   package.

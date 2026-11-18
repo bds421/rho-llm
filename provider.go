@@ -1,5 +1,7 @@
 package llm
 
+import "strings"
+
 // ProviderPreset holds the default endpoint and auth configuration for a provider.
 type ProviderPreset struct {
 	BaseURL    string // Default API base URL
@@ -134,7 +136,9 @@ func ResolveProtocol(cfg Config) string {
 // Config.BaseURL takes precedence over the provider preset.
 func ResolveBaseURL(cfg Config) string {
 	if cfg.BaseURL != "" {
-		return cfg.BaseURL
+		// Adapters append "/chat/completions", "/responses", "/messages" and
+		// so on: a trailing slash would make a "//" path, which hosts 404.
+		return strings.TrimRight(cfg.BaseURL, "/")
 	}
 	if preset, ok := presets[cfg.Provider]; ok {
 		return preset.BaseURL

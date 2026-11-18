@@ -830,3 +830,43 @@ func TestPerplexityAgentRegistry(t *testing.T) {
 		t.Error("sonar-pro resolved on the Agent preset")
 	}
 }
+
+// A BaseURL with a trailing slash must not produce a "//" request path, which
+// hosts answer with 404: every adapter appends its own "/…" endpoint.
+func TestTrailingSlashBaseURLHasNoDoubleSlash(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		http.Error(w, `{"error":{"message":"stop"}}`, http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	for _, tc := range []struct{ provider, model, base string }{
+		{"openai", "gpt-4.1", srv.URL + "/v1/"},
+		{"openai", "gpt-6-luna", srv.URL + "/v1//"},
+		{"perplexity-agent", "perplexity/sonar", srv.URL + "/v1/"},
+		{"mistral", "mistral-large-4-0", srv.URL + "/v1/"},
+		{"anthropic", "claude-haiku-5-5", srv.URL + "/v1/"},
+		{"gemini", "gemini-3.8-flash", srv.URL + "/v1beta/"},
+		{"gemini-interactions", "gemini-3.8-flash", srv.URL + "/v1beta/"},
+	} {
+		c, err := llm.NewClient(llm.Config{Provider: tc.provider, Model: tc.model, APIKey: "k", BaseURL: tc.base, DisableRetries: true})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.provider, err)
+		}
+		_, _ = c.Complete(context.Background(), llm.Request{Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")}, MaxTokens: 10})
+		c.Close()
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(paths) != 7 {
+		t.Fatalf("got %d requests %v, want 7", len(paths), paths)
+	}
+	for _, p := range paths {
+		if strings.Contains(p, "//") {
+			t.Errorf("request path %q has a double slash", p)
+		}
+	}
+}

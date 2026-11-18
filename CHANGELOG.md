@@ -74,6 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Trailing slash in `Config.BaseURL`.** `https://host/v1/` made request paths
+  such as `/v1//chat/completions`, `/v1//responses`, `/v1//messages` and
+  `/v1beta//<model>:generateContent`, which hosts answer with 404 (only the
+  batch and Interactions adapters trimmed it). `llm.ResolveBaseURL` now drops
+  trailing slashes from an explicit `BaseURL`. Found by the tutorial's
+  Perplexity Agent tests.
 - **PDFs on OpenAI-compatible hosts.** The adapter sent every PDF as an
   `image_url` data URI (`data:application/pdf;base64,…`), which every host
   rejects (live 2026-11-18: xAI 400 `invalid_image`, Mistral 422, OpenAI 400
