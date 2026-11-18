@@ -58,8 +58,7 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   `gemini_interactions` protocol; confirm whether `total_input_tokens` includes
   `total_cached_tokens` (treated like `promptTokenCount` today); the `failed` / `cancelled`
   payloads and in-band stream error shape (handled defensively, not provoked live); several
-  thought steps in one turn keep only the last signature; refuse top-level sampling keys in
-  `SamplingParams` as the `gemini` protocol does; structured output, `ThinkingBudget`,
+  thought steps in one turn keep only the last signature; structured output, `ThinkingBudget`,
   `previous_interaction_id`.
 - **F1 — Chat fallback + per-attempt usage — M.** `OperationChat` usage events and a
   `NewFallbackClient` for chat reusing `tryEach`/`FailoverPolicy`.

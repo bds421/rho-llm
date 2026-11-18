@@ -192,6 +192,29 @@ func TestLongDecodeCompleteLaterHopBlocked(t *testing.T) {
 	}
 }
 
+// A later hop with nothing in it (no candidate, no block reason) keeps the
+// earlier hops' text; the turn is incomplete, so it ends as max_tokens. It
+// used to drop the text and return an empty stop reason, without an error.
+func TestLongDecodeCompleteEmptyLaterHopKeepsText(t *testing.T) {
+	for _, body := range []string{`{}`, `{"candidates":[]}`, `{"usageMetadata":{"candidatesTokenCount":3}}`} {
+		h := &hopServer{bodies: []string{
+			`{"candidates":[{"content":{"parts":[{"text":"valuable text"}]},"finishReason":"CONTINUATION","continuationToken":"T1"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}`,
+			body,
+		}}
+		c := newHopClient(t, h, "gemini-4-carbon")
+		resp, err := c.Complete(t.Context(), userReq())
+		if err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		if resp.Content != "valuable text" || resp.StopReason != llm.StopMaxTokens {
+			t.Errorf("%s: content %q stop %q, want the hop-1 text and max_tokens", body, resp.Content, resp.StopReason)
+		}
+		if n := len(h.requests()); n != 2 {
+			t.Errorf("%s: %d requests, want 2 (no third hop without a token)", body, n)
+		}
+	}
+}
+
 // Tool calls in different hops keep distinct IDs, and a tool call still
 // turns the final STOP into tool_use.
 func TestLongDecodeCompleteToolCallsAcrossHops(t *testing.T) {

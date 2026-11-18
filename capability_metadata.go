@@ -269,7 +269,9 @@ func ValidateRequestCapabilities(cfg Config, req Request, stream bool) error {
 			return err
 		}
 	}
-	if profile.Protocol == "gemini" {
+	if profile.Protocol == "gemini" || profile.Protocol == "gemini_interactions" {
+		// Interactions too: a top-level "temperature" is a 400 "Unknown
+		// parameter" there (live, gemini-3.8-flash, 2026-11-18).
 		if err := geminiSamplingParamsError(profile.Model, req); err != nil {
 			return err
 		}

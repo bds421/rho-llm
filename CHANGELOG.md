@@ -74,6 +74,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Gemini long decode: an empty later hop lost the answer.** A continuation
+  hop with no candidate and no block reason (`{}`) dropped the text of every
+  earlier hop and returned an empty stop reason without an error. The earlier
+  text is now kept and the turn ends as `max_tokens` (incomplete). A blocked
+  hop still ends as a refusal. Found by tutorial 28.
+- **Sampling keys on `gemini-interactions`.** The `SamplingParams` refusal of
+  `temperature` / `top_p` / `top_k` covered only the `gemini` protocol; the
+  Interactions API answers them with a 400 "Unknown parameter" too (live,
+  `gemini-3.8-flash`). Found by tutorial 28.
 - **Trailing slash in `Config.BaseURL`.** `https://host/v1/` made request paths
   such as `/v1//chat/completions`, `/v1//responses`, `/v1//messages` and
   `/v1beta//<model>:generateContent`, which hosts answer with 404 (only the

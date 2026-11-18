@@ -263,6 +263,15 @@ func TestReasoningCapabilityMeansEffortIsEnforceable(t *testing.T) {
 // (live, gemini-2.5-flash-lite, 2026-11-18). Request.Temperature is refused for
 // models without sampling controls through CapabilityTemperature.
 func TestGeminiSamplingParamsRefused(t *testing.T) {
+	// The Interactions protocol answers a top-level "temperature" with a 400
+	// "Unknown parameter" as well (live, gemini-3.8-flash, 2026-11-18).
+	for _, key := range []string{"temperature", "top_p", "top_k", "topP", "topK"} {
+		cfg := Config{Provider: "gemini-interactions", Model: "gemini-3.8-flash", APIKey: "k"}
+		err := ValidateRequestCapabilities(cfg, Request{SamplingParams: map[string]any{key: 0.5}}, false)
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("gemini-interactions SamplingParams[%s]: err = %v, want a refusal naming the key", key, err)
+		}
+	}
 	for _, model := range []string{"gemini-4-hydrogen", "gemini-4-carbon", "gemini-3.8-flash"} {
 		cfg := Config{Provider: "gemini", Model: model, APIKey: "k"}
 		for _, key := range []string{"temperature", "top_p", "top_k", "topP", "topK"} {

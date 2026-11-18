@@ -185,13 +185,23 @@ func mergeHop(acc, hop *geminiResponse) *geminiResponse {
 		return hop
 	}
 	acc.UsageMetadata = acc.UsageMetadata.add(hop.UsageMetadata)
-	acc.PromptFeedback = hop.PromptFeedback
 	if len(hop.Candidates) == 0 {
-		// No candidate on a later hop (a blocked continuation): the turn
-		// ends with what that hop reported.
-		acc.Candidates = nil
+		if hop.blockReason() != "" {
+			// A blocked continuation: the turn ends as that hop's refusal.
+			acc.PromptFeedback = hop.PromptFeedback
+			acc.Candidates = nil
+			return acc
+		}
+		// A later hop with nothing in it: keep what the earlier hops wrote.
+		// The turn is incomplete, so it stays CONTINUATION (StopMaxTokens)
+		// with no token to follow; dropping the candidates lost the text
+		// without an error.
+		if len(acc.Candidates) > 0 {
+			acc.Candidates[0].ContinuationToken = ""
+		}
 		return acc
 	}
+	acc.PromptFeedback = hop.PromptFeedback
 	if len(acc.Candidates) == 0 {
 		acc.Candidates = hop.Candidates[:1]
 		return acc
