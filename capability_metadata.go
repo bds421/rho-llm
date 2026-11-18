@@ -269,6 +269,11 @@ func ValidateRequestCapabilities(cfg Config, req Request, stream bool) error {
 			return err
 		}
 	}
+	if profile.Protocol == "gemini" && !profile.Capabilities.Supports(CapabilityTemperature) {
+		if err := geminiSamplingParamsError(profile.Model, req); err != nil {
+			return err
+		}
+	}
 	if profile.Protocol == "anthropic" &&
 		effectiveReq.ThinkingLevel != ThinkingNone &&
 		req.Temperature != nil && *req.Temperature != 1.0 {
@@ -468,6 +473,24 @@ func AnthropicSamplingError(cfg Config, req Request) error {
 	for _, key := range []string{"temperature", "top_p", "top_k"} {
 		if _, ok := req.SamplingParams[key]; ok {
 			return errAnthropicSampling("SamplingParams[" + key + "]")
+		}
+	}
+	return nil
+}
+
+// geminiSamplingParamsError refuses temperature / top_p / top_k smuggled in
+// through SamplingParams for a Gemini model without sampling controls, the way
+// Request.Temperature is refused for it (CapabilityTemperature). Gemini 4
+// ignores these fields and Gemini 4 Hydrogen answers an out-of-range
+// temperature with a 400 (aistudio.google.com/docs/long-decode, troubleshooting:
+// "remove the sampling parameters").
+func geminiSamplingParamsError(model string, req Request) error {
+	for _, key := range []string{"temperature", "top_p", "top_k", "topP", "topK"} {
+		if _, ok := req.SamplingParams[key]; ok {
+			return fmt.Errorf(
+				"llm: model %q does not take sampling controls; remove SamplingParams[%q] (use ThinkingLevel instead)",
+				model, key,
+			)
 		}
 	}
 	return nil

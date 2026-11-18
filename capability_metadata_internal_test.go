@@ -252,3 +252,37 @@ func TestReasoningCapabilityMeansEffortIsEnforceable(t *testing.T) {
 		}
 	}
 }
+
+// Gemini 4 ignores sampling controls and Hydrogen answers an out-of-range
+// temperature with a 400. Request.Temperature is refused through
+// CapabilityTemperature; SamplingParams must not be a way around that.
+func TestGeminiSamplingParamsRefusedWithoutSamplingControls(t *testing.T) {
+	for _, model := range []string{"gemini-4-hydrogen", "gemini-4-carbon", "gemini-3.8-flash"} {
+		cfg := Config{Provider: "gemini", Model: model, APIKey: "k"}
+		for _, key := range []string{"temperature", "top_p", "top_k", "topP", "topK"} {
+			req := Request{SamplingParams: map[string]any{key: 0.5}}
+			err := ValidateRequestCapabilities(cfg, req, false)
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Errorf("%s SamplingParams[%s]: err = %v, want a refusal naming the key", model, key, err)
+			}
+		}
+		temp := 5.0
+		if err := ValidateRequestCapabilities(cfg, Request{Temperature: &temp}, false); err == nil {
+			t.Errorf("%s: Temperature accepted", model)
+		}
+		for _, sp := range []map[string]any{nil, {}, {"seed": 1}} {
+			if err := ValidateRequestCapabilities(cfg, Request{SamplingParams: sp}, true); err != nil {
+				t.Errorf("%s: SamplingParams %v refused: %v", model, sp, err)
+			}
+		}
+	}
+	// Models that still take sampling keep working.
+	old := Config{Provider: "gemini", Model: "gemini-2.5-flash", APIKey: "k"}
+	if err := ValidateRequestCapabilities(old, Request{SamplingParams: map[string]any{"top_k": 3}}, false); err != nil {
+		t.Errorf("gemini-2.5-flash refused top_k: %v", err)
+	}
+	// The per-request model is what counts.
+	if err := ValidateRequestCapabilities(old, Request{Model: "gemini-4-hydrogen", SamplingParams: map[string]any{"top_p": 1}}, false); err == nil {
+		t.Error("Request.Model override to gemini-4-hydrogen accepted top_p")
+	}
+}
