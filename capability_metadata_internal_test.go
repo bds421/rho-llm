@@ -252,3 +252,48 @@ func TestReasoningCapabilityMeansEffortIsEnforceable(t *testing.T) {
 		}
 	}
 }
+
+// SamplingParams is merged at the top level of the body, where Gemini has no
+// sampling fields: a top-level "temperature" is a 400 on every Gemini model
+// (live, gemini-2.5-flash-lite, 2026-11-18). Request.Temperature is refused for
+// models without sampling controls through CapabilityTemperature.
+func TestGeminiSamplingParamsRefused(t *testing.T) {
+	for _, model := range []string{"gemini-4-hydrogen", "gemini-4-carbon", "gemini-3.8-flash"} {
+		cfg := Config{Provider: "gemini", Model: model, APIKey: "k"}
+		for _, key := range []string{"temperature", "top_p", "top_k", "topP", "topK"} {
+			req := Request{SamplingParams: map[string]any{key: 0.5}}
+			err := ValidateRequestCapabilities(cfg, req, false)
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Errorf("%s SamplingParams[%s]: err = %v, want a refusal naming the key", model, key, err)
+			}
+		}
+		temp := 5.0
+		if err := ValidateRequestCapabilities(cfg, Request{Temperature: &temp}, false); err == nil {
+			t.Errorf("%s: Temperature accepted", model)
+		}
+		for _, sp := range []map[string]any{nil, {}, {"seed": 1}} {
+			if err := ValidateRequestCapabilities(cfg, Request{SamplingParams: sp}, true); err != nil {
+				t.Errorf("%s: SamplingParams %v refused: %v", model, sp, err)
+			}
+		}
+	}
+	// A model that takes a temperature gets it typed; the top-level key is
+	// still a 400 there, so it is refused too.
+	old := Config{Provider: "gemini", Model: "gemini-2.5-flash", APIKey: "k"}
+	if err := ValidateRequestCapabilities(old, Request{SamplingParams: map[string]any{"top_k": 3}}, false); err == nil {
+		t.Error("gemini-2.5-flash accepted a top-level top_k (a 400 on the wire)")
+	}
+	temp := 0.3
+	if err := ValidateRequestCapabilities(old, Request{Temperature: &temp, SamplingParams: map[string]any{"seed": 1}}, false); err != nil {
+		t.Errorf("gemini-2.5-flash refused typed Temperature with seed: %v", err)
+	}
+	// Other protocols keep their top-level sampling keys.
+	oa := Config{Provider: "openai", Model: "gpt-4.1", APIKey: "k"}
+	if err := ValidateRequestCapabilities(oa, Request{SamplingParams: map[string]any{"top_p": 0.9}}, false); err != nil {
+		t.Errorf("openai gpt-4.1 refused top_p: %v", err)
+	}
+	// The per-request model is what counts.
+	if err := ValidateRequestCapabilities(old, Request{Model: "gemini-4-hydrogen", SamplingParams: map[string]any{"top_p": 1}}, false); err == nil {
+		t.Error("Request.Model override to gemini-4-hydrogen accepted top_p")
+	}
+}

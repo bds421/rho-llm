@@ -222,7 +222,8 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 		// Long decode: see Complete. Each hop streams on; only the last one
 		// ends with EventDone. A stream that drops mid-hop fails as before
 		// (the events already yielded cannot be taken back, so resuming from
-		// a mid-stream checkpoint is not attempted).
+		// a mid-stream checkpoint is not attempted: that needs every event held back
+		// until the next checkpoint, up to 5,000 tokens of added latency).
 		st := &streamState{}
 		for hop := 1; ; hop++ {
 			token, more := c.streamHop(ctx, endpoint, apiReq, req.SamplingParams, st, hop < maxContinuationHops, yield)
@@ -982,7 +983,10 @@ func (c *Client) parseStreamHop(body io.Reader, st *streamState, canContinue boo
 // normalizeStopReason maps Gemini finish reasons to the unified set
 // (end_turn, tool_use, max_tokens, refusal, error) used by the library
 // interface. Content filters (safety, recitation, blocklist, personal data,
-// image filters) are refusals. A failed turn (MALFORMED_FUNCTION_CALL and the
+// image filters, ESCALATION: "an escalation rule filtered the request", and
+// PUP_LIMITED_DISABLED: generation stopped because the account is restricted
+// for a Prohibited Use Policy violation) are refusals: the model was barred
+// from answering, nothing failed in transit. A failed turn (MALFORMED_FUNCTION_CALL and the
 // other tool-call failures, OTHER, LANGUAGE, an unspecified reason) is
 // StopError: before, the raw string passed through as if it were a normal
 // stop, and a caller's tool loop ended on a turn that had failed.
@@ -998,7 +1002,8 @@ func normalizeStopReason(reason string) string {
 		// out: the turn is truncated, not failed.
 		return llm.StopMaxTokens
 	case "SAFETY", "PROHIBITED_CONTENT", "RECITATION", "BLOCKLIST", "SPII",
-		"IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION":
+		"IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION",
+		"ESCALATION", "PUP_LIMITED_DISABLED":
 		return llm.StopRefusal
 	case "":
 		return ""
