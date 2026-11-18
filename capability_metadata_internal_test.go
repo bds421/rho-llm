@@ -20,7 +20,8 @@ func TestDefaultCloudCatalogCapabilitiesMatchDocumentedMultimodalSupport(t *test
 		model    string
 		want     []Capability
 	}{
-		{"xai", "grok-4.5", []Capability{CapabilityChat, CapabilityVision, CapabilityDocumentInput, CapabilityStructuredOutput}},
+		{"xai", "grok-4.5", []Capability{CapabilityChat, CapabilityVision, CapabilityStructuredOutput}},
+		{"mistral", "mistral-large-4-0", []Capability{CapabilityChat, CapabilityVision, CapabilityDocumentInput, CapabilityStructuredOutput}},
 		{"meta", "muse-spark-1.2", []Capability{CapabilityChat, CapabilityVision, CapabilityDocumentInput, CapabilityStructuredOutput}},
 		// GPT-5.x auto-selects openai_responses, which encodes vision/structured/batch
 		// but not PDF (document fails closed at the protocol envelope — by design).
@@ -36,6 +37,10 @@ func TestDefaultCloudCatalogCapabilitiesMatchDocumentedMultimodalSupport(t *test
 		if err := RequireCapabilities(cfg, tc.want...); err != nil {
 			t.Fatalf("%s/%s: %v", tc.provider, tc.model, err)
 		}
+	}
+	// xAI Chat Completions takes no files (live 2026-11-18): a PDF fails closed.
+	if err := RequireCapabilities(Config{Provider: "xai", Model: "grok-4.7"}, CapabilityDocumentInput); err == nil {
+		t.Fatal("xai claims document input; its Chat Completions rejects files")
 	}
 	// Local hosts stay chat-focused so undeclared vision fails closed.
 	if err := RequireCapabilities(Config{Provider: "ollama", Model: "qwen3:8b"}, CapabilityVision); err == nil {

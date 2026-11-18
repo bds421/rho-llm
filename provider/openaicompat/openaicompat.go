@@ -406,13 +406,15 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 					if llm.IsTextDocument(part) {
 						return openaiRequest{}, fmt.Errorf("%s: text documents are Anthropic-only; send the text as a text part", c.providerName)
 					}
+					if compat.documents == documentUnsupported {
+						return openaiRequest{}, fmt.Errorf("%s: PDF documents are not supported on Chat Completions (the host takes files only on its Responses API); send the text or page images instead", c.providerName)
+					}
 					docParts = append(docParts, part)
 				}
 			}
 
 			// If images or documents are present, build a multipart content array.
-			// Documents (PDFs) are passed as image_url data URIs — vision models
-			// such as Grok read them the same way the legacy decoder did.
+			// Documents (PDFs) go in the host's own part (compat.documents).
 			if len(imageParts) > 0 || len(docParts) > 0 {
 				var contentArray []any
 				if len(textParts) > 0 {
@@ -428,12 +430,8 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 						"image_url": map[string]string{"url": dataURI},
 					})
 				}
-				for _, doc := range docParts {
-					dataURI := fmt.Sprintf("data:%s;base64,%s", doc.Document.MediaType, doc.Document.Data)
-					contentArray = append(contentArray, map[string]any{
-						"type":      "image_url",
-						"image_url": map[string]string{"url": dataURI},
-					})
+				for i, doc := range docParts {
+					contentArray = append(contentArray, documentPart(compat.documents, doc, i))
 				}
 				apiReq.Messages = append(apiReq.Messages, openaiMessage{
 					Role:    "user",

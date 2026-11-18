@@ -66,7 +66,9 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
 
 ## Reasoning, caching & conversation state
 - 🟡 **P6 — Responses API reasoning replay — M** (`include: reasoning.encrypted_content`,
-  item ids); also xAI on the Responses API.
+  item ids); also xAI on the Responses API, which is where xAI takes PDFs (`input_file` with
+  `file_data`, live 2026-11-18); its Chat Completions refuses files, so `xai` has no document
+  input until then.
 - 🟡 **P7 — Prompt caching on OpenAI hosts — S/M.** `prompt_cache_key`, Responses
   `session-id` affinity header, retention; optional automatic cache markers.
 - 🟡 **P8 — Mid-conversation effort/system/tool changes that keep the cache — L.** In-place

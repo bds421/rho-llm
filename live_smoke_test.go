@@ -833,3 +833,70 @@ func TestLiveNew_OpenAIResponsesStreamToolCallOnce(t *testing.T) {
 	}
 	t.Logf("tool call input: %v", calls[0].Input)
 }
+
+// livePDF is a one-page PDF whose only text is line.
+func livePDF(line string) string {
+	content := fmt.Sprintf("BT /F1 24 Tf 72 700 Td (%s) Tj ET", line)
+	objs := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	}
+	var b strings.Builder
+	b.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objs))
+	for i, o := range objs {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
+	return base64.StdEncoding.EncodeToString([]byte(b.String()))
+}
+
+// A PDF on openai_compat goes in the host's own part: every host rejected the
+// image_url data URI the adapter used to send (live 2026-11-18). xAI's Chat
+// Completions takes no files, so it is refused before the request.
+func TestLiveNew_OpenAICompatPDF(t *testing.T) {
+	doc := llm.ContentPart{Type: llm.ContentDocument, Title: "secret.pdf",
+		Document: &llm.DocumentSource{Type: llm.DocumentSourceBase64, MediaType: "application/pdf", Data: livePDF("The secret word is PELICAN.")}}
+	req := llm.Request{MaxTokens: 800, Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{
+		{Type: llm.ContentText, Text: "What is the secret word in the document? Answer with the word only."}, doc}}}}
+	for _, tc := range []struct{ provider, model, key string }{
+		{"mistral", "mistral-medium-latest", envKey("MISTRAL_API_KEY", "MISTRAL_API_KEYS")},
+		{"mistral", "mistral-large-4-0", envKey("MISTRAL_API_KEY", "MISTRAL_API_KEYS")},
+		{"openai", "gpt-4.1", envKey("OPENAI_API_KEY", "OPENAI_API_KEYS")},
+		{"xai", "grok-4.7", envKey("XAI_API_KEY", "XAI_API_KEYS")},
+	} {
+		t.Run(tc.provider+"/"+tc.model, func(t *testing.T) {
+			requireLiveAPI(t, tc.key, tc.provider+" key not set")
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			c, err := llm.NewClient(llm.Config{Provider: tc.provider, Model: tc.model, APIKey: tc.key, DisableRetries: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			resp, err := c.Complete(ctx, req)
+			if tc.provider == "xai" {
+				if err == nil {
+					t.Fatalf("xai accepted a PDF on Chat Completions: %q", resp.Content)
+				}
+				t.Logf("refused: %v", err)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.ToUpper(resp.Content), "PELICAN") {
+				t.Errorf("content %q, want PELICAN", resp.Content)
+			}
+		})
+	}
+}

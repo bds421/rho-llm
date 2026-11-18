@@ -1,6 +1,7 @@
 package openaicompat
 
 import (
+	"fmt"
 	"strings"
 
 	llm "github.com/bds421/rho-llm"
@@ -39,6 +40,21 @@ const (
 // order they are read, and the only names reasoning is replayed under.
 var reasoningFields = []string{"reasoning_content", "reasoning"}
 
+// documentFormat is how a host takes a PDF in a Chat Completions message.
+type documentFormat int
+
+const (
+	// documentFile: {"type":"file","file":{"filename","file_data":<data URL>}},
+	// the OpenAI Chat Completions shape (also OpenRouter). The default.
+	documentFile documentFormat = iota
+	// documentURL: {"type":"document_url","document_url":<data URL>} (Mistral).
+	documentURL
+	// documentUnsupported: the host's Chat Completions takes no files; the PDF
+	// is refused before the request (xAI: "File content is not supported on
+	// /v1/chat/completions. Please use /v1/responses instead.").
+	documentUnsupported
+)
+
 // hostCompat is the per-host data the adapter consults.
 type hostCompat struct {
 	thinking thinkingFormat
@@ -50,6 +66,10 @@ type hostCompat struct {
 	// reasoning_content, "" when it has none. DeepSeek answers a 400 when a
 	// tool conversation does not pass reasoning_content back.
 	emptyReasoningOnAssistant bool
+	// documents: how a PDF part goes out. Every host rejects a PDF sent as an
+	// image_url data URI (live 2026-11-18: OpenAI 400 invalid_image_format,
+	// xAI 400 invalid_image, Mistral 422).
+	documents documentFormat
 }
 
 // compatByProvider maps a preset (and its aliases) to its compat data.
@@ -82,6 +102,9 @@ var compatByProvider = map[string]hostCompat{
 	// that maps onto ThinkingLevel here; the level is refused, not ignored.
 	// MiniMax documents taking reasoning_content back.
 	"minimax": {replayReasoning: true},
+	"mistral": {documents: documentURL},
+	"xai":     {documents: documentUnsupported},
+	"grok":    {documents: documentUnsupported},
 }
 
 // compatByHost recognises a custom provider name by its BaseURL.
@@ -100,6 +123,8 @@ var compatByHost = []struct {
 	{"fireworks.ai", "fireworks"},
 	{"api.minimax.", "minimax"},
 	{"api.openai.com", "openai"},
+	{"api.mistral.ai", "mistral"},
+	{"api.x.ai", "xai"},
 }
 
 // detectCompat returns the compat data for a provider name, falling back to
@@ -176,5 +201,21 @@ func replayReasoning(msg *openaiMessage, parts []llm.ContentPart, empty bool) {
 	if empty && msg.ReasoningContent == nil {
 		blank := ""
 		msg.ReasoningContent = &blank
+	}
+}
+
+// documentPart encodes the i-th PDF of a message in the host's format.
+func documentPart(format documentFormat, doc llm.ContentPart, i int) map[string]any {
+	dataURI := fmt.Sprintf("data:%s;base64,%s", doc.Document.MediaType, doc.Document.Data)
+	if format == documentURL {
+		return map[string]any{"type": "document_url", "document_url": dataURI}
+	}
+	filename := doc.Title
+	if filename == "" {
+		filename = fmt.Sprintf("document-%d.pdf", i+1)
+	}
+	return map[string]any{
+		"type": "file",
+		"file": map[string]string{"filename": filename, "file_data": dataURI},
 	}
 }

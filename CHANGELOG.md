@@ -74,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **PDFs on OpenAI-compatible hosts.** The adapter sent every PDF as an
+  `image_url` data URI (`data:application/pdf;base64,…`), which every host
+  rejects (live 2026-11-18: xAI 400 `invalid_image`, Mistral 422, OpenAI 400
+  `invalid_image_format`); the offline test asserted that shape. A PDF now goes
+  in the host's own part, kept as data in `compat.go`: `file` (`filename`,
+  `file_data`) for OpenAI, OpenRouter and unknown hosts, `document_url` for
+  Mistral. xAI's Chat Completions takes no files ("Please use /v1/responses
+  instead"), so `xai` no longer claims document input and a PDF is refused
+  before the request. Checked live: Mistral (`mistral-medium-latest`,
+  `mistral-large-4-0`) and OpenAI (`gpt-4.1`) read the PDF.
 - **Responses streaming** (R4). A `response.failed` event without a nested
   response ended the stream as a clean completion; it is now an error. A
   function call delivered only in `response.output_item.done` or in the

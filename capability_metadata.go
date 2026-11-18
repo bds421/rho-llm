@@ -374,12 +374,16 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 		// Gemini chat models accept audio natively, so they transcribe via generateContent.
 		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch, CapabilityTranscription)
 	case "openai":
-		// Chat Completions / Responses encode vision + structured output; PDF rides as
-		// an image_url data URI on openai_compat (document capability is model-side).
+		// Chat Completions / Responses encode vision + structured output; a PDF is a
+		// "file" part on openai_compat (document capability is model-side).
 		// Batch is first-party OpenAI only.
 		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch)
-	case "xai", "meta":
-		// Multimodal cloud APIs on the openai_compat surface (PDF as data URI).
+	case "xai":
+		// xAI Chat Completions takes images but no files ("Please use /v1/responses
+		// instead", live 2026-11-18), so no document input on openai_compat.
+		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision)
+	case "meta":
+		// Multimodal cloud API on the openai_compat surface.
 		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput)
 	case "groq", "mistral", "openrouter", "together", "fireworks", "deepinfra", "nvidia",
 		"cerebras", "deepseek", "cohere", "dashscope", "zai", "minimax", "moonshot", "perplexity", "perplexity-agent":
