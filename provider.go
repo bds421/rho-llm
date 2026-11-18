@@ -4,7 +4,7 @@ package llm
 type ProviderPreset struct {
 	BaseURL    string // Default API base URL
 	AuthHeader string // Auth header prefix ("Bearer", "", etc.)
-	Protocol   string // Wire protocol: "anthropic", "gemini", "openai_compat"
+	Protocol   string // Wire protocol: "anthropic", "gemini", "gemini_interactions", "openai_compat", "openai_responses"
 	// SupportsBatch advertises that the provider implements the OpenAI Files + Batches
 	// REST API at BaseURL (NewBatchClient gates on it). Only true for first-party
 	// OpenAI today — most openai_compat resellers do NOT expose /v1/batches.
@@ -19,6 +19,10 @@ var presets = map[string]ProviderPreset{
 	"claude":    {BaseURL: "https://api.anthropic.com/v1", Protocol: "anthropic", SupportsBatch: true},
 	"gemini":    {BaseURL: "https://generativelanguage.googleapis.com/v1beta/models", Protocol: "gemini", SupportsBatch: true},
 	"google":    {BaseURL: "https://generativelanguage.googleapis.com/v1beta/models", Protocol: "gemini", SupportsBatch: true},
+
+	// Gemini Interactions API (opt-in; "gemini" stays on generateContent).
+	// BaseURL is the API root: the adapter appends /interactions.
+	"gemini-interactions": {BaseURL: "https://generativelanguage.googleapis.com/v1beta", Protocol: "gemini_interactions"},
 
 	// OpenAI Responses API (explicit provider selection)
 	"openai_responses": {BaseURL: "https://api.openai.com/v1", AuthHeader: "Bearer", Protocol: "openai_responses", SupportsBatch: true},

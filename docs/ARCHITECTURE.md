@@ -254,6 +254,7 @@ Four wire protocols are supported:
 |---|---|---|
 | `anthropic` | `AnthropicClient` | Native SSE streaming, `x-api-key` header |
 | `gemini` | `GeminiClient` | Native REST + SSE, `x-goog-api-key` header |
+| `gemini_interactions` | `geminiinteractions.Client` | Opt-in (`gemini-interactions` preset): Gemini Interactions API, see section 11 |
 | `openai_compat` | `OpenAICompatClient` | Standard `/chat/completions` with SSE streaming |
 | `openai_responses` | `OpenAIResponsesClient` | OpenAI `/responses` for GPT-5 reasoning-effort control (auto-selected for `ResponsesAPI` models) |
 
@@ -763,6 +764,53 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`, and — because `promptTokenCount` already includes it — subtracted from `promptTokenCount` to give `InputTokens` (v0.9.4; clamped so neither goes negative).
 - Per-model request rules the registry does not carry live in `provider/gemini/traits.go` (`traitsFor`): no `minimal` thinking level (3.8 Flash, Gemini 4: sent as `low`), `xhigh` (Hydrogen), long decode and no explicit caching (Gemini 4, matched by the `gemini-4-` prefix so an unregistered Gemini 4 ID gets them too).
 - Long decode (Gemini 4): a hop ending in `finishReason: CONTINUATION` with a `continuationToken` is followed by the same request plus the token at the top level (contents unchanged). `Complete` merges the hops' parts and sums their usage (`mergeHop`); `Stream` carries tool-call indexes and usage across hops in a `streamState` and yields a single `EventDone` after the last hop. At most 64 hops; a leftover `CONTINUATION` maps to `StopMaxTokens`. Thinking padding of `maxOutputTokens` never lowers a long-decode model's value to its per-request `MaxTokens`.
+
+### Gemini Interactions (`provider/geminiinteractions/`)
+
+An opt-in fifth wire protocol, `gemini_interactions`, selected by the `gemini-interactions`
+preset (the `gemini`/`google` presets stay on generateContent). Google calls generateContent
+"legacy" and the Interactions API its replacement. Wire facts were read from
+aistudio.google.com/docs/interactions and the API reference and confirmed live on 2026-11-18.
+
+- Endpoint `POST {base}/interactions` (base `https://generativelanguage.googleapis.com/v1beta`),
+  `x-goog-api-key` header, `stream: true` for SSE.
+- Request: `model`, `input` (an array of steps: `user_input` / `model_output` with `content`
+  blocks `text`/`image`/`document` `{data, mime_type}`; `thought {signature}`;
+  `function_call {id, name, arguments}`; `function_result {call_id, name, result, is_error}`),
+  `system_instruction` (string), `tools` (`{type: function, name, description, parameters}` with
+  full JSON Schema), `generation_config` (`temperature`, `max_output_tokens`, `stop_sequences`,
+  `thinking_level`, `thinking_summaries: auto`, `tool_choice`), `store`.
+- Tool choice: `"any"` / `"none"`; one named tool is
+  `{"allowed_tools":{"mode":"any","tools":[name]}}`.
+- Response: `status` (`completed`, `requires_action` = a call is waiting, `incomplete` = hit
+  `max_output_tokens`; `failed`/`cancelled` mapped to `StopError` without having been
+  provoked), `steps` (`thought {signature, summary[]}`, `function_call`, `model_output`),
+  `usage` (`total_input_tokens`, `total_cached_tokens`, `total_output_tokens`,
+  `total_thought_tokens`; input + output + thought = total). Thought tokens are reported
+  separately like generateContent, so `ThinkingTokens` is separate from `OutputTokens`.
+- Stream events: `interaction.created`, `interaction.status_update`, `step.start {index, step}`,
+  `step.delta {index, delta}` (`text`, `thought_summary`, `thought_signature`,
+  `arguments_delta`), `step.stop`, `interaction.completed {interaction{status, usage}}`, `[DONE]`.
+  A function call's arguments are accumulated per step index and decoded at `step.stop`. A stream
+  without `interaction.completed` ends in `io.ErrUnexpectedEOF` (pool-retryable).
+- Statelessness: `store:false` is always sent unless `SamplingParams["store"] = true` (the
+  adapter takes that key out of the passthrough; a non-bool value is an error).
+  `previous_interaction_id`, `background` and agents are not used. This is the F2 decision for
+  this protocol; the `gemini` adapter is unchanged.
+- Thinking replay: the signed thought is `Response.ThinkingSignature` and replays as a `thought`
+  step. A tool-call turn without a signature (made by another provider) gets the documented
+  placeholder `skip_thought_signature_validator` (live: accepted) because Gemini 3 answers 400
+  to a `function_call` without a preceding thought. With several thought steps in one turn only
+  the last signature is kept.
+- `thinking_level`: `minimal` is sent as `low` on Gemini 3.8/3.7 Flash and Gemini 4, `xhigh`/`max`
+  as `high` except on Gemini 4 Hydrogen (same per-model rules as `provider/gemini/traits.go`,
+  duplicated, not shared). `max_output_tokens` is padded for thinking models because thought
+  tokens count against it (live: a 60-token cap ended `incomplete` after 54 thought tokens).
+- Not supported (refused before any request): `ResponseFormat`, `Effort`, `ThinkingBudget`,
+  `CachedContent`. Batch and explicit caching do not exist for this API yet.
+- Unverified: whether `total_input_tokens` includes `total_cached_tokens` (treated as
+  generateContent does, clamped); the shape of an in-band stream error event; `failed` /
+  `cancelled` status payloads.
 
 ### OpenAI-Compatible (`provider/openaicompat/`)
 
