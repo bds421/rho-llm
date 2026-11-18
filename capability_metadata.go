@@ -370,7 +370,7 @@ func defaultChatCapabilities(info ModelInfo) CapabilitySet {
 		// Multimodal cloud APIs on the openai_compat surface (PDF as data URI).
 		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput)
 	case "groq", "mistral", "openrouter", "together", "fireworks", "deepinfra", "nvidia",
-		"cerebras", "deepseek", "cohere", "dashscope", "zai", "minimax", "moonshot", "perplexity":
+		"cerebras", "deepseek", "cohere", "dashscope", "zai", "minimax", "moonshot", "perplexity", "perplexity-agent":
 		// Cloud openai_compat hosts: the adapter can encode vision/PDF/structured
 		// output; hosts that reject a given model still fail at the wire.
 		set |= Capabilities(CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput)

@@ -67,7 +67,8 @@ v0.13.0 sends Anthropic API version `2026-10-21` by default
 | Together AI | OpenAI-compat | Bearer | api.together.ai/v1 |
 | Fireworks | OpenAI-compat | Bearer | api.fireworks.ai/inference/v1 |
 | NVIDIA NIM | OpenAI-compat | Bearer | integrate.api.nvidia.com/v1 |
-| Perplexity | OpenAI-compat | Bearer | api.perplexity.ai |
+| Perplexity | OpenAI-compat (Sonar) | Bearer | api.perplexity.ai |
+| Perplexity Agent API (`perplexity-agent`, opt-in) | OpenAI Responses | Bearer | api.perplexity.ai/v1 |
 | DeepInfra | OpenAI-compat | Bearer | api.deepinfra.com/v1/openai |
 | Z.ai/GLM | OpenAI-compat | Bearer | api.z.ai/api/paas/v4 |
 | MiniMax | OpenAI-compat | Bearer | api.minimax.io/v1 |
@@ -76,11 +77,23 @@ v0.13.0 sends Anthropic API version `2026-10-21` by default
 | vLLM | OpenAI-compat | None | localhost:8000/v1 |
 | LM Studio | OpenAI-compat | None | localhost:1234/v1 |
 
-> **Counting:** 23 providers across 4 wire protocols, reachable through 35 preset
+> **Counting:** 23 providers across 4 wire protocols, reachable through 36 preset
 > names — the 23 canonical names in the table, `openai_responses` (the OpenAI row
 > spans two protocols: `openai_compat` and the auto-selected `openai_responses` for
 > GPT-5 reasoning models), the aliases `claude`/`google`/`grok`/`qwen`/`z-ai`/`glm`/`kimi`,
-> and the mainland-China endpoints `dashscope-cn`/`qwen-cn`/`moonshot-cn`/`kimi-cn`.
+> the mainland-China endpoints `dashscope-cn`/`qwen-cn`/`moonshot-cn`/`kimi-cn`,
+> and the opt-in `perplexity-agent`.
+> **Perplexity:** the `perplexity` preset is unchanged (Sonar on `/chat/completions`).
+> Sonar Chat Completions support ended 2026-09-27, but synchronous and streaming requests
+> keep working, reformulated as Agent API requests (rolling out by model); the Sonar
+> prices in the registry are unverified for that path. The Agent API (`POST /v1/agent`,
+> alias `/v1/responses`) is opt-in through `perplexity-agent`, which speaks the Responses
+> wire format via `provider/openairesponses` with a Perplexity dialect (system prompt as
+> `instructions`, `max` effort kept). Its model IDs carry the vendor prefix
+> (`perplexity/sonar`, `anthropic/claude-sonnet-5-5`, `google/gemini-4-hydrogen`) and form
+> their own catalog; pass `effort`, `max_steps`, `tools` through `SamplingParams`. Cache
+> reads (`input_tokens_details.cached_tokens`) are priced; search results and citations
+> are not mapped to neutral types. Written from the docs, not checked live.
 > Curated **model metadata** (pricing + capabilities) backs
 > cost estimation, discovery, and fail-closed capability checks. Unlisted model IDs
 > need `RegisterModel` (or `Config.ModelCapabilities`) before dispatch — see

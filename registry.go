@@ -301,12 +301,37 @@ var modelRegistry = map[string]ModelInfo{
 	"kimi-k3":        {ID: "kimi-k3", Provider: "moonshot", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheWritePricePer1M: 3.00, CacheWrite1hPricePer1M: 6.00, CacheReadPricePer1M: 0.30, Thinking: true, Label: "Kimi K3"},
 	"kimi-k2.7-code": {ID: "kimi-k2.7-code", Provider: "moonshot", MaxTokens: 262144, ContextWindow: 262144, InputPricePer1M: 0.95, OutputPricePer1M: 4.00, CacheReadPricePer1M: 0.19, Thinking: true, Label: "Kimi K2.7 Code"},
 
-	// Perplexity — Sonar API (from docs.perplexity.ai/getting-started/pricing, 2026-06-08).
-	// Representative subset; the registry only affects cost estimation + discovery — any model ID can be passed directly.
+	// Perplexity Sonar (Chat Completions, preset "perplexity"). Sonar Chat Completions
+	// support ended 2026-09-27, but synchronous and streaming requests keep working,
+	// reformulated as Agent API requests (docs.perplexity.ai migrate-from-sonar/overview,
+	// 2026-11-18). These prices date from docs.perplexity.ai/getting-started/pricing,
+	// 2026-06-08 and are UNVERIFIED for the reformulated path (the Agent API lists
+	// only perplexity/sonar, $0.25/$2.50). Representative subset; the registry only
+	// affects cost estimation + discovery - any model ID can be passed directly.
 	"sonar":               {ID: "sonar", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 1.00, OutputPricePer1M: 1.00, Label: "Sonar"},
 	"sonar-pro":           {ID: "sonar-pro", Provider: "perplexity", ContextWindow: 200000, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, Label: "Sonar Pro"},
 	"sonar-reasoning-pro": {ID: "sonar-reasoning-pro", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "Sonar Reasoning Pro"},
 	"sonar-deep-research": {ID: "sonar-deep-research", Provider: "perplexity", ContextWindow: 128000, InputPricePer1M: 2.00, OutputPricePer1M: 8.00, Thinking: true, Label: "Sonar Deep Research"},
+
+	// Perplexity Agent API models, preset "perplexity-agent" (docs.perplexity.ai/docs/agent-api/models, 2026-11-18;
+	// context and max output from docs.perplexity.ai/docs/orchestrator/models where listed,
+	// 0 = not published). Only flat-priced rows are registered: models with context-tiered
+	// rates (gpt-6*, gpt-5.6*, grok-4.x, claude-haiku-5-5) have no single price here — use
+	// Config.ModelCapabilities and your own price table for those. Prices are USD per 1M
+	// tokens and exclude the per-call tool fees (web_search etc.). Nothing here was
+	// checked against a live key.
+	"perplexity/sonar":                        {ID: "perplexity/sonar", Provider: "perplexity-agent", InputPricePer1M: 0.25, OutputPricePer1M: 2.50, CacheReadPricePer1M: 0.0625, Label: "Sonar"},
+	"perplexity/kimi-k3":                      {ID: "perplexity/kimi-k3", Provider: "perplexity-agent", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheReadPricePer1M: 0.30, SupportsThinking: true, Label: "Kimi K3 (Perplexity)"},
+	"perplexity/glm-5.3":                      {ID: "perplexity/glm-5.3", Provider: "perplexity-agent", MaxTokens: 131072, ContextWindow: 1000000, InputPricePer1M: 1.40, OutputPricePer1M: 4.40, CacheReadPricePer1M: 0.26, SupportsThinking: true, Label: "GLM 5.3 (Perplexity)"},
+	"perplexity/glm-5.3-flash":                {ID: "perplexity/glm-5.3-flash", Provider: "perplexity-agent", InputPricePer1M: 0.15, OutputPricePer1M: 0.50, CacheReadPricePer1M: 0.03, SupportsThinking: true, Label: "GLM 5.3 Flash (Perplexity)"},
+	"perplexity/deepseek-v4-pro-0813":         {ID: "perplexity/deepseek-v4-pro-0813", Provider: "perplexity-agent", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 1.32, OutputPricePer1M: 3.96, CacheReadPricePer1M: 0.044, SupportsThinking: true, Label: "DeepSeek V4 Pro (Perplexity)"},
+	"perplexity/nemotron-3.5-super-120b-a12b": {ID: "perplexity/nemotron-3.5-super-120b-a12b", Provider: "perplexity-agent", MaxTokens: 131072, ContextWindow: 1048576, InputPricePer1M: 0.20, OutputPricePer1M: 0.50, CacheReadPricePer1M: 0.04, SupportsThinking: true, Label: "Nemotron 3.5 Super (Perplexity)"},
+	"anthropic/claude-fable-5-2":              {ID: "anthropic/claude-fable-5-2", Provider: "perplexity-agent", MaxTokens: 128000, InputPricePer1M: 8.00, OutputPricePer1M: 40.00, CacheWritePricePer1M: 10.00, CacheReadPricePer1M: 0.20, SupportsThinking: true, Label: "Fable 5.2 (Perplexity)"},
+	"anthropic/claude-opus-5-5":               {ID: "anthropic/claude-opus-5-5", Provider: "perplexity-agent", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 4.00, OutputPricePer1M: 20.00, CacheWritePricePer1M: 5.00, CacheReadPricePer1M: 0.20, SupportsThinking: true, Label: "Opus 5.5 (Perplexity)"},
+	"anthropic/claude-sonnet-5-5":             {ID: "anthropic/claude-sonnet-5-5", Provider: "perplexity-agent", MaxTokens: 128000, ContextWindow: 1000000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheWritePricePer1M: 2.50, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Sonnet 5.5 (Perplexity)"},
+	"google/gemini-4-argon":                   {ID: "google/gemini-4-argon", Provider: "perplexity-agent", InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Gemini 4 Argon (Perplexity)"},
+	"google/gemini-4-carbon":                  {ID: "google/gemini-4-carbon", Provider: "perplexity-agent", InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, SupportsThinking: true, Label: "Gemini 4 Carbon (Perplexity)"},
+	"google/gemini-4-hydrogen":                {ID: "google/gemini-4-hydrogen", Provider: "perplexity-agent", InputPricePer1M: 1.50, OutputPricePer1M: 7.50, CacheReadPricePer1M: 0.075, SupportsThinking: true, Label: "Gemini 4 Hydrogen (Perplexity)"},
 
 	// Fireworks — serverless (from docs.fireworks.ai/serverless/pricing, 2026-11-10; IDs live-probed).
 	// Open-weight families (GLM/Z.ai, MiniMax, Kimi) tracked under the host you'd call; prices cross-checked vs the provider + Together.

@@ -321,7 +321,7 @@ func TestGetDefaultModelUnknown(t *testing.T) {
 // A multi-vendor or local preset got a Claude model ID as its default, which
 // that host rejects; openai_responses had none at all (B33).
 func TestGetDefaultModelForPresetsWithoutOne(t *testing.T) {
-	for _, p := range []string{"together", "openrouter", "fireworks", "deepinfra", "nvidia", "cerebras", "perplexity", "vllm", "lmstudio"} {
+	for _, p := range []string{"together", "openrouter", "fireworks", "deepinfra", "nvidia", "cerebras", "perplexity", "perplexity-agent", "vllm", "lmstudio"} {
 		if got := llm.GetDefaultModel(p); got != "" {
 			t.Errorf("GetDefaultModel(%q) = %q, want \"\" (no default on a multi-vendor or local host)", p, got)
 		}
