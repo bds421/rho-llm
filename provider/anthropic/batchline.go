@@ -18,6 +18,9 @@ func BatchTranslator(cfg llm.Config) (*Client, error) {
 // Anthropic Message Batch request entry, reusing the live Complete encoder
 // (stream forced false).
 func (c *Client) BuildMessageBatchParams(req llm.Request) (json.RawMessage, error) {
+	if req.Thread != nil {
+		return nil, fmt.Errorf("anthropic: message threads are not available in a Message Batch")
+	}
 	apiReq, err := c.buildRequest(req, false)
 	if err != nil {
 		return nil, err

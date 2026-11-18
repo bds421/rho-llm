@@ -184,8 +184,9 @@ type UsageIteration struct {
 	CacheCreation1hTokens int `json:"cache_creation_1h_input_tokens,omitempty"`
 }
 
-// UnsupportedServerTools returns an error when req sets ServerTools or a
-// ContainerID (the container those tools run in). Adapters
+// UnsupportedServerTools returns an error when req sets ServerTools, a
+// ContainerID (the container those tools run in) or a Thread (an Anthropic
+// message thread). Adapters
 // without server tools call it so a request never silently loses a tool the
 // caller depends on (and pays for).
 func UnsupportedServerTools(provider string, req Request) error {
@@ -194,6 +195,9 @@ func UnsupportedServerTools(provider string, req Request) error {
 	}
 	if req.ContainerID != "" {
 		return fmt.Errorf("llm: provider %q does not support ContainerID (an Anthropic server-tool container)", provider)
+	}
+	if req.Thread != nil {
+		return fmt.Errorf("llm: provider %q does not support message threads (Anthropic only)", provider)
 	}
 	return nil
 }

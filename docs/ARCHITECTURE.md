@@ -752,6 +752,7 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
   lack `CapabilityTemperature` (`anthropicWithoutSamplingControls`).
 - Tool use: native anthropic format with `type: tool_use` content blocks
 - Context caching: `cache_control: {type: "ephemeral"}` on content blocks, system blocks, and tool definitions. Cache tokens reported in `usage` for both Complete and Stream responses.
+- Message threads (beta `MessageThreadsBeta`): `Request.Thread` becomes the `thread` parameter (`{"type":"create"}` or `{"type":"continue","previous_message_id":…}`) and the beta header. A continuation sends only the new `Messages`; the adapter keeps `system` and `tools` off the wire (a 400 even as null) while still building the fixed fields that derive from them (`tool_choice`, `thinking`, `output_config`), refuses a `RoleSystem` message in the delta, and sends `"messages": []` to resume a paused turn. `thinking` and the beta set are *fixed* fields of a thread, so every threaded request carries `thinking.block_binding` (where adaptive thinking takes it), not only the ones that replay a signed block. The response `id` (also on the stream's `EventDone`) names the next tip. Not available in batches. See "Message threads" under section 13.
 
 ### Gemini (`provider/gemini/`)
 
@@ -949,6 +950,34 @@ to one provider.
 `Usage` sums **cost per response** using each response's own model (`EstimateCost`), so a
 conversation that spans multiple providers/models still totals correctly — accumulating raw
 tokens and pricing once at the end would be wrong when models differ.
+
+### Message threads (`sessionthread.go`, `threaderrors.go`)
+
+`WithMessageThreads()` lets a `Session` use Anthropic message threads (beta; the API holds the
+conversation for 5 minutes after the last request). It is opt-in, applies to the native
+`anthropic` provider only, and lives entirely in the `Session`: the `Conversation` stays the
+source of truth and its serialized form gains no field. After each threaded turn the session
+records a `threadState`: the response ID (the thread's tip), a fingerprint of every request
+field a thread fixes at creation (system, tools, model, thinking, tool choice, output format,
+max tokens, sampling params; the container is excluded), a hash of the normalized messages sent,
+and a hash of the raw transcript through the reply. The next turn continues the thread only if
+all of that is re-proved: fingerprint equal, raw prefix hash equal, normalized prefix hash
+equal, the next normalized message is the assistant reply, no `RoleSystem` message in the delta,
+and less than 4m30s since the last turn. Then it sends `Thread{PreviousMessageID}` with only the
+delta; otherwise it creates a new thread with the full conversation.
+
+Fallbacks (`turnPlan.fallback`, shared by `Send` and `Stream`; a stream replays only when the
+error arrives before any event): a continuation that fails with a thread error or any 400/404
+is replayed once as a full create (`thread_not_found` for expiry, eviction or an unstored
+turn; `thread_already_continued` / `thread_continue_in_flight` for a retried or abandoned
+turn; `thread_fingerprint_mismatch` as a safety net). A create that fails with a thread error
+(`thread_unsupported_request`: HIPAA, inference hooks, a feature threads lack) turns threads
+off for the session and the request goes out plain. Other errors (auth, rate limit, a real 400
+on the create) are returned untouched. A refusal, a response written by a fallback model
+(`usage.iterations` `fallback_message`) or a response without an ID end the thread; a provider
+switch clears it. Replaying after expiry reuses the full-history request, so thinking blocks go
+back under `thinking.block_binding`; a system or tools change starts a new thread rather than
+trying the old one. Verified live 2026-11-18 against `claude-haiku-5-5`.
 
 ### Persistence (`store.go`)
 

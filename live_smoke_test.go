@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"net"
 	"net/http"
 	"net/url"
@@ -707,4 +708,88 @@ func TestLiveNew_GeminiInteractions(t *testing.T) {
 		t.Errorf("stream: stop %q text %q done %+v", done.StopReason, text, done)
 	}
 	t.Logf("gemini-interactions: %q in=%d out=%d think=%d", text, done.InputTokens, done.OutputTokens, done.ThinkingTokens)
+}
+
+// threadSpy records each request a Session sends, to see what travels.
+type threadSpy struct {
+	llm.Client
+	reqs []llm.Request
+}
+
+func (s *threadSpy) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	s.reqs = append(s.reqs, req)
+	return s.Client.Complete(ctx, req)
+}
+
+func (s *threadSpy) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
+	s.reqs = append(s.reqs, req)
+	return s.Client.Stream(ctx, req)
+}
+
+// Message threads (beta message-threads-2026-08-12): a Session turn continues
+// the thread and sends only the new messages, over Complete and Stream, with
+// system, tools and adaptive thinking fixed at creation. A continuation from
+// an unknown message ID answers 404 thread_not_found. Live 2026-11-18.
+func TestLiveNew_AnthropicMessageThreads(t *testing.T) {
+	key := envKey("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEYS")
+	requireLiveAPI(t, key, "ANTHROPIC_API_KEY not set")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	client, err := llm.NewClient(llm.Config{Provider: "anthropic", Model: "claude-haiku-5-5", APIKey: key, MaxTokens: 600, DisableRetries: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	spy := &threadSpy{Client: client}
+
+	sess := llm.NewSession(spy,
+		llm.WithMessageThreads(),
+		llm.WithSystem("You are terse."),
+		llm.WithTools(llm.Tool{Name: "noop", Description: "Does nothing.", InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}}),
+		llm.WithBaseRequest(llm.Request{ThinkingLevel: llm.ThinkingLow}),
+	)
+	if _, err := sess.Send(ctx, "Remember the number 7421. Reply with just ok."); err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	resp, err := sess.Send(ctx, "Which number did I ask you to remember? Reply with the number only.")
+	if err != nil {
+		t.Fatalf("turn 2: %v", err)
+	}
+	if !strings.Contains(resp.Content, "7421") {
+		t.Errorf("turn 2 lost the conversation: %q", resp.Content)
+	}
+	var streamed strings.Builder
+	for ev, err := range sess.Stream(ctx, "Add 1 to that number. Reply with the number only.") {
+		if err != nil {
+			t.Fatalf("turn 3 stream: %v", err)
+		}
+		if ev.Type == llm.EventContent {
+			streamed.WriteString(ev.Text)
+		}
+	}
+	if !strings.Contains(streamed.String(), "7422") {
+		t.Errorf("turn 3 lost the conversation: %q", streamed.String())
+	}
+
+	if len(spy.reqs) != 3 {
+		t.Fatalf("requests = %d, want 3 (no replay expected)", len(spy.reqs))
+	}
+	if th := spy.reqs[0].Thread; th == nil || th.PreviousMessageID != "" {
+		t.Errorf("turn 1 should create a thread, got %+v", th)
+	}
+	for i := 1; i < 3; i++ {
+		r := spy.reqs[i]
+		if r.Thread == nil || r.Thread.PreviousMessageID == "" || len(r.Messages) != 1 {
+			t.Errorf("turn %d should continue with 1 message, got thread %+v, %d messages", i+1, r.Thread, len(r.Messages))
+		}
+	}
+
+	_, err = client.Complete(ctx, llm.Request{
+		Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")},
+		Thread:   &llm.Thread{PreviousMessageID: "msg_doesnotexist0000000000"},
+	})
+	if got := llm.ThreadErrorCode(err); got != llm.ThreadNotFound {
+		t.Errorf("unknown thread: code %q (err %v), want %q", got, err, llm.ThreadNotFound)
+	}
 }

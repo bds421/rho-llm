@@ -588,6 +588,18 @@ On a handoff, `NormalizeForModel` (applied automatically by `Session`; it and `N
 
 > **Tool loops:** after a `Send` that returns `resp.ToolCalls`, run your tools and continue with `sess.SendMessages(ctx, llm.NewToolResultMessage(id, result, isError))`.
 
+### Message threads (Anthropic beta)
+
+Anthropic can keep a conversation on the server for a few minutes (beta `message-threads-2026-08-12`, threads expire five minutes after their last request), so a turn sends only the new messages and long agent loops get a smaller request and a lower time to first token. Opt in per `Session`:
+
+```go
+sess := llm.NewSession(client, llm.WithMessageThreads(), llm.WithSystem("..."))
+sess.Send(ctx, "first")  // creates a thread: full request
+sess.Send(ctx, "second") // continues it: only the new message travels
+```
+
+Nothing else changes: the `Session` still holds the whole transcript, and `Conversation` serialization is untouched (thread state is never saved; a restored conversation starts a new thread). A turn continues the thread only while everything the server holds is provably what the transcript says (same model, system prompt, tools and generation settings, an unchanged transcript prefix, under five minutes since the last turn); otherwise it sends the full conversation as a new thread. If the API answers that a thread cannot be continued (`thread_not_found`, `thread_already_continued`, `thread_continue_in_flight`, or any other 400/404 on a continuation) the turn is replayed once in full, transparently; if it refuses threads for the request or organization (`thread_unsupported_request`) the session turns threads off and sends ordinary requests. Refusals and responses written by a fallback model end the thread. Limits: native `anthropic` provider only (inert elsewhere), not available in Message Batches or with ZDR/HIPAA organizations, at most 4 `cache_control` breakpoints per request, and a multi-key pool that rotates keys costs one replay (a thread belongs to the key that made it). Direct `Client` users can set `Request.Thread` (`&llm.Thread{}` to create, `&llm.Thread{PreviousMessageID: resp.ID}` to continue with only the new `Messages`; the adapter leaves `System` and `Tools` off a continuation) and classify errors with `llm.ThreadErrorCode`.
+
 ## Context Caching
 
 Context caching reduces cost and latency by reusing previously processed input. Anthropic and Gemini support caching with different models.

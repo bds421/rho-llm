@@ -53,6 +53,7 @@ func (a *StreamAccumulator) Done() bool { return a.done }
 func (a *StreamAccumulator) Response() *Response {
 	f := a.final
 	r := &Response{
+		ID:                    f.ID,
 		Model:                 f.Model,
 		Content:               a.text.String(),
 		Thinking:              a.thinking.String(),
