@@ -89,7 +89,15 @@ finished task lives in the changelog, not the todo list.
   2. Bump the version stamp at the top of `docs/ARCHITECTURE.md`.
   3. Commit with a conventional subject ending in `(vX.Y.Z)`; create an **annotated** tag `vX.Y.Z`
      with a `vX.Y.Z — summary` message (matches existing tags).
-  4. Push `main` + tags to the intended remote(s).
+  4. **DEV step — adapt the tutorial before pushing.** Keep the release commit and tag **local**,
+     then bring `../rho-llm-tutorial` up to it on a branch: bump every module's `require` to
+     `vX.Y.Z`, point them at this tree with a gitignored workspace (`go work init && go work use -r .
+     && go work use ../rho-llm`, plus `replace github.com/bds421/rho-llm vX.Y.Z => ../rho-llm` in
+     `go.work`, because the unpublished version is not on the proxy yet), add tutorial material and
+     offline + gated live tests for every new feature, and run its full suite (`make build-all
+     vet-all test-all`, then the live targets). Commit the tutorial locally too.
+  5. Push both together: rho-llm `main` + tag first, then the tutorial (remove `go.work`, run
+     `make tidy-all` against the now-published version, rebuild, commit, tag, push).
 
 ## Research & subagents  (IMPORTANT)
 
