@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -167,7 +168,7 @@ func TestLiveNew_OpenAIBatchStillWorks(t *testing.T) {
 	requireLiveAPI(t, key, "OPENAI_API_KEY not set")
 
 	cfg := llm.Config{
-		Provider: "openai", Model: "gpt-4.1-nano", APIKey: key,
+		Provider: "openai", Model: "gpt-6-luna", APIKey: key,
 		MaxTokens: 16, Timeout: 60 * time.Second, DisableRetries: true,
 	}
 	bc, err := llm.NewBatchClient(cfg)
@@ -182,14 +183,16 @@ func TestLiveNew_OpenAIBatchStillWorks(t *testing.T) {
 	handle, err := bc.Submit(ctx, []llm.BatchItem{{
 		ItemID: "smoke-o1",
 		Request: &llm.Request{
-			Model:     "gpt-4.1-nano",
+			Model:     "gpt-6-luna",
 			MaxTokens: 16,
 			Messages:  []llm.Message{llm.NewTextMessage(llm.RoleUser, "Reply with one word: ok")},
 		},
 	}}, llm.BatchOptions{MaxTurnaround: 24 * time.Hour})
 	if err != nil {
-		// Some accounts restrict batch — report clearly.
-		if strings.Contains(err.Error(), "batch") || strings.Contains(err.Error(), "403") {
+		// Some accounts restrict batch (403). Every error here says
+		// "openaibatch", so matching "batch" skipped real failures too.
+		var apiErr *llm.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
 			t.Skipf("OpenAI batch not available on this key: %v", err)
 		}
 		t.Fatalf("Submit: %v", err)
