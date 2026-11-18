@@ -790,6 +790,11 @@ type Request struct {
 	ServerTools []ServerTool `json:"server_tools,omitempty"`
 	// ContainerID reuses a provider container (Anthropic "container").
 	ContainerID string `json:"container_id,omitempty"`
+	// Thread runs the request on an Anthropic message thread (beta
+	// anthropic.MessageThreadsBeta): the API keeps the conversation, so a continuation sends
+	// only the new Messages. Nil, the default, is an ordinary request. Session
+	// sets it with WithMessageThreads; adapters other than Anthropic refuse it.
+	Thread *Thread `json:"thread,omitempty"`
 
 	// Caching
 	SystemCacheControl bool   `json:"system_cache_control,omitempty"` // Anthropic: cache the system prompt
@@ -823,6 +828,17 @@ type Request struct {
 	// Effort. On Anthropic API version 2026-10-21 "temperature", "top_p" and
 	// "top_k" are refused.
 	SamplingParams map[string]any `json:"sampling_params,omitempty"`
+}
+
+// Thread selects an Anthropic message thread for a Request. A request with
+// an empty PreviousMessageID creates a thread: it carries the full
+// conversation, System and Tools, and the response ID names the thread's tip.
+// With PreviousMessageID set (to that ID) it continues the thread: Messages
+// holds only what is new, and System and Tools stay unset because the thread
+// keeps the create request's. Each response ID continues once, and a thread
+// expires five minutes after its last request.
+type Thread struct {
+	PreviousMessageID string `json:"previous_message_id,omitempty"`
 }
 
 // ResponseFormat selects structured output for a Request.
@@ -956,6 +972,9 @@ type StreamEvent struct {
 	Iterations    []UsageIteration `json:"iterations,omitempty"`
 	Parts         []ContentPart    `json:"parts,omitempty"`
 	ContainerID   string           `json:"container_id,omitempty"`
+	// ID is the provider's message ID (Anthropic message_start), as
+	// Response.ID.
+	ID string `json:"id,omitempty"`
 
 	// EventServerTool: the server tool call or result.
 	Part *ContentPart `json:"part,omitempty"`

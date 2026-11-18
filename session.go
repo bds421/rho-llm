@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"sync"
+	"time"
 )
 
 // Session is an ergonomic, concurrency-safe driver around a Conversation. It
@@ -29,6 +30,12 @@ type Session struct {
 	conv    *Conversation
 	client  Client
 	base    Request
+
+	// Message threads (WithMessageThreads); guarded by stateMu.
+	threads   bool
+	threadOff bool             // the server refused threads: send plain requests
+	thread    *threadState     // what the server holds after the last turn
+	now       func() time.Time // test clock; nil = time.Now
 }
 
 // SessionOption configures a Session at construction.
@@ -125,6 +132,7 @@ func (s *Session) SwitchProvider(client Client) {
 	defer s.stateMu.Unlock()
 	s.client = client
 	s.base.Model = ""
+	s.thread = nil // a thread belongs to the client that made it
 }
 
 // Append adds messages to the conversation without generating — e.g. to inject a
@@ -167,11 +175,11 @@ func (s *Session) send(ctx context.Context, msgs []Message, continuation bool) (
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 
-	req, client, provider, err := s.prepareTurn(msgs, continuation)
+	req, client, provider, plan, err := s.prepareTurn(msgs, continuation)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Complete(ctx, req)
+	resp, err := completeTurn(ctx, client, req, plan)
 	if err != nil {
 		return nil, err // nothing was appended — the transcript is untouched
 	}
@@ -187,8 +195,29 @@ func (s *Session) send(ctx context.Context, msgs []Message, continuation bool) (
 		// stamps req.Model). Without this, EstimateCost("") silently returns $0.
 		resp.Model = req.Model
 	}
-	s.commitTurn(msgs, provider, resp)
+	s.commitTurn(msgs, provider, resp, plan)
 	return resp, nil
+}
+
+// completeTurn sends the turn. Without a thread plan it is one Complete call;
+// with one it continues the thread, and replays the conversation as a new
+// thread or plain request when the server cannot continue (turnPlan.fallback).
+func completeTurn(ctx context.Context, client Client, req Request, plan *turnPlan) (*Response, error) {
+	if plan == nil {
+		return client.Complete(ctx, req)
+	}
+	cur := plan.first()
+	for {
+		resp, err := client.Complete(ctx, cur)
+		if err == nil {
+			return resp, nil
+		}
+		next, ok := plan.fallback(err)
+		if !ok {
+			return nil, err
+		}
+		cur = next
+	}
 }
 
 // Stream is the streaming counterpart of Send. It yields events as they arrive;
@@ -217,45 +246,65 @@ func (s *Session) stream(ctx context.Context, msgs []Message, continuation bool)
 		s.turnMu.Lock()
 		defer s.turnMu.Unlock()
 
-		req, client, provider, err := s.prepareTurn(msgs, continuation)
+		req, client, provider, plan, err := s.prepareTurn(msgs, continuation)
 		if err != nil {
 			yield(StreamEvent{}, err)
 			return
 		}
 
-		var acc StreamAccumulator
-		for ev, err := range client.Stream(ctx, req) {
-			if err != nil {
-				// Pass the event on: after a provider reported usage it carries
-				// what the broken turn cost. The turn itself is not recorded.
-				yield(ev, err)
-				return
-			}
-			acc.Add(ev)
-			if !yield(ev, nil) {
-				// The caller broke. On the terminal event the turn is
-				// complete and is recorded; before it, the conversation is
-				// left unchanged (B19).
-				if acc.Done() {
-					s.commitStreamed(msgs, provider, req.Model, &acc)
+		cur := req
+		if plan != nil {
+			cur = plan.first()
+		}
+		for {
+			var acc StreamAccumulator
+			started, retry := false, false
+			for ev, err := range client.Stream(ctx, cur) {
+				if err != nil {
+					// A thread the server cannot continue answers before any
+					// event: replay the conversation instead of failing.
+					if !started {
+						if next, ok := plan.fallback(err); ok {
+							cur, retry = next, true
+							break
+						}
+					}
+					// Pass the event on: after a provider reported usage it carries
+					// what the broken turn cost. The turn itself is not recorded.
+					yield(ev, err)
+					return
 				}
-				return
+				started = true
+				acc.Add(ev)
+				if !yield(ev, nil) {
+					// The caller broke. On the terminal event the turn is
+					// complete and is recorded; before it, the conversation is
+					// left unchanged (B19).
+					if acc.Done() {
+						s.commitStreamed(msgs, provider, req.Model, &acc, plan)
+					}
+					return
+				}
 			}
+			if retry {
+				continue
+			}
+			if !acc.Done() {
+				return // stream ended without a clean completion; don't record it
+			}
+			s.commitStreamed(msgs, provider, req.Model, &acc, plan)
+			return
 		}
-		if !acc.Done() {
-			return // stream ended without a clean completion; don't record it
-		}
-		s.commitStreamed(msgs, provider, req.Model, &acc)
 	}
 }
 
 // commitStreamed records a completed streamed turn. The caller must hold turnMu.
-func (s *Session) commitStreamed(msgs []Message, provider, model string, acc *StreamAccumulator) {
+func (s *Session) commitStreamed(msgs []Message, provider, model string, acc *StreamAccumulator, plan *turnPlan) {
 	resp := acc.Response()
 	if resp.Model == "" {
 		resp.Model = model
 	}
-	s.commitTurn(msgs, provider, resp)
+	s.commitTurn(msgs, provider, resp, plan)
 }
 
 // prepareTurn builds the next Request from a snapshot of the conversation plus
@@ -265,13 +314,13 @@ func (s *Session) commitStreamed(msgs []Message, provider, model string, acc *St
 // A continuation sends no new input: the transcript must end with a paused
 // assistant turn, whose container the request reuses unless the base request
 // names one. The caller must hold turnMu (but NOT stateMu).
-func (s *Session) prepareTurn(msgs []Message, continuation bool) (Request, Client, string, error) {
+func (s *Session) prepareTurn(msgs []Message, continuation bool) (Request, Client, string, *turnPlan, error) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
 	paused, container := pausedTurn(s.conv.Messages)
 	if continuation && !paused {
-		return Request{}, nil, "", ErrNotPaused
+		return Request{}, nil, "", nil, ErrNotPaused
 	}
 
 	client := s.client
@@ -288,14 +337,15 @@ func (s *Session) prepareTurn(msgs []Message, continuation bool) (Request, Clien
 	if continuation {
 		keepContainer(&req, container)
 	}
-	return req, client, provider, nil
+	return req, client, provider, s.planThread(req, req.Messages, provider, continuation), nil
 }
 
 // commitTurn atomically records a completed turn: the input messages and the
 // assistant reply (with provenance + usage). The caller must hold turnMu.
-func (s *Session) commitTurn(msgs []Message, provider string, resp *Response) {
+func (s *Session) commitTurn(msgs []Message, provider string, resp *Response, plan *turnPlan) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	s.conv.Append(msgs...)
 	s.conv.AddResponse(provider, resp)
+	s.recordThread(plan, resp)
 }

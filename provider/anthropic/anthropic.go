@@ -127,6 +127,14 @@ type anthropicRequest struct {
 	OutputConfig  *anthropicOutputConfig `json:"output_config,omitempty"`
 	StopSequences []string               `json:"stop_sequences,omitempty"`
 	Container     string                 `json:"container,omitempty"`
+	Thread        *anthropicThread       `json:"thread,omitempty"`
+}
+
+// anthropicThread is the thread parameter (beta MessageThreadsBeta): type
+// "create" starts a thread, "continue" appends to the one a response ID names.
+type anthropicThread struct {
+	Type              string `json:"type"`
+	PreviousMessageID string `json:"previous_message_id,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -178,6 +186,10 @@ type anthropicBlockBinding struct {
 // requires; the field without it is a 400. The batch client sends it too.
 const ThinkingBindingBeta = "thinking-binding-controls-2026-08-01"
 
+// MessageThreadsBeta is the anthropic-beta value the thread parameter
+// requires. It goes out on every request that carries one.
+const MessageThreadsBeta = "message-threads-2026-08-12"
+
 type anthropicOutputConfig struct {
 	Effort string                 `json:"effort,omitempty"`
 	Format *anthropicOutputFormat `json:"format,omitempty"`
@@ -217,6 +229,9 @@ func (c *Client) setBetaHeader(httpReq *http.Request, apiReq anthropicRequest) {
 	betas := BetaFeatures(c.config.BetaFeatures, budgetThinking)
 	if apiReq.Thinking != nil && apiReq.Thinking.BlockBinding != nil && !slices.Contains(betas, ThinkingBindingBeta) {
 		betas = append(betas, ThinkingBindingBeta)
+	}
+	if apiReq.Thread != nil && !slices.Contains(betas, MessageThreadsBeta) {
+		betas = append(betas, MessageThreadsBeta)
 	}
 	if len(betas) > 0 {
 		httpReq.Header.Set("anthropic-beta", strings.Join(betas, ","))
@@ -424,6 +439,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 
 	// Build system prompt. Collect all system text first (from req.System and RoleSystem messages).
 	var systemTexts []string
+	messageSystem := false // a RoleSystem message carried text
 	if req.System != "" {
 		systemTexts = append(systemTexts, req.System)
 	}
@@ -436,6 +452,7 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 			for _, part := range msg.Content {
 				if part.Type == llm.ContentText && part.Text != "" {
 					systemTexts = append(systemTexts, part.Text)
+					messageSystem = true
 				}
 			}
 			continue
@@ -686,6 +703,11 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		apiReq.ToolChoice = toolChoiceWire(req.ToolChoice)
 	}
 	apiReq.Container = req.ContainerID
+	if req.Thread != nil {
+		if err := applyThread(&apiReq, req.Thread, messageSystem); err != nil {
+			return anthropicRequest{}, err
+		}
+	}
 
 	// Configure stop sequences
 	if len(req.StopSequences) > 0 {
@@ -787,12 +809,38 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 		}
 	}
 
-	if replayedThinking {
+	// A thread's thinking parameter is one of its fixed fields, so every
+	// request of a thread carries the same one: block_binding goes on all of
+	// them, not only on the request that happens to replay a signed block.
+	if replayedThinking || req.Thread != nil {
 		if err := applyThinkingBinding(&apiReq, c.config.EffectiveThinkingBinding(), adaptive && profile.off == thinkingOffOmit); err != nil {
 			return anthropicRequest{}, err
 		}
 	}
 	return apiReq, nil
+}
+
+// applyThread sets the thread parameter. A continue request sends neither
+// system nor tools (a 400 even as null: the thread keeps the create request's),
+// so both are cleared from the wire body; the other fixed fields (tool_choice,
+// thinking, output_config) are built from the same Request as on create. New
+// system text in the delta cannot be sent, and is refused instead of changing
+// the thread's prompt or dropping the instruction.
+func applyThread(apiReq *anthropicRequest, th *llm.Thread, hasSystem bool) error {
+	if th.PreviousMessageID == "" {
+		apiReq.Thread = &anthropicThread{Type: "create"}
+		return nil
+	}
+	if hasSystem {
+		return fmt.Errorf("anthropic: a thread continuation cannot carry a system prompt; start a new thread to change it")
+	}
+	apiReq.Thread = &anthropicThread{Type: "continue", PreviousMessageID: th.PreviousMessageID}
+	apiReq.System = nil
+	apiReq.Tools = nil
+	if apiReq.Messages == nil {
+		apiReq.Messages = []anthropicMessage{} // a paused turn resumes with "messages": []
+	}
+	return nil
 }
 
 // applyThinkingBinding attaches thinking.block_binding to a request that
@@ -899,6 +947,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	var startUsage anthropicUsage
 	var started bool
 	var model string
+	var messageID string
 	var containerID string
 	var inputTransformations []llm.InputTransformation
 	var thinkingSignature string
@@ -916,6 +965,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		yield(llm.StreamEvent{
 			Type:                  llm.EventError,
 			Error:                 err.Error(),
+			ID:                    messageID,
 			Model:                 model,
 			InputTokens:           inputTokens,
 			OutputTokens:          startUsage.OutputTokens,
@@ -987,6 +1037,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			} `json:"delta"`
 			ContentBlock json.RawMessage `json:"content_block"`
 			Message      struct {
+				ID         string         `json:"id"`
 				Model      string         `json:"model"`
 				StopReason string         `json:"stop_reason"`
 				Usage      anthropicUsage `json:"usage"`
@@ -1130,6 +1181,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			// would mask the completed turn.
 			yield(llm.StreamEvent{
 				Type:                  llm.EventDone,
+				ID:                    messageID,
 				Model:                 model,
 				StopReason:            normalizeStopReason(event.Delta.StopReason),
 				RawStopReason:         event.Delta.StopReason,
@@ -1163,6 +1215,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			startUsage = event.Message.Usage
 			started = true
 			model = event.Message.Model
+			messageID = event.Message.ID
 			if t := parseInputTransformations(event.Message.InputTransformations); t != nil {
 				// Reported on message_start. (After a mid-stream server-side
 				// fallback the docs say it comes again in the final
