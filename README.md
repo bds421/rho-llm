@@ -634,6 +634,10 @@ if err != nil {
 fmt.Printf("Cached tokens: %d\n", resp.CacheReadTokens)
 ```
 
+Gemini 4 models (`gemini-4-*`) have no explicit caching: a request with
+`CachedContent` is refused before it is sent. They cache repeated prompt prefixes
+implicitly (95% off cached input), reported in `CacheReadTokens`.
+
 `resp.InputTokens` is always the **uncached** input: for Gemini (and the
 OpenAI-style adapters, from `cached_tokens`) the cached share is subtracted from
 the provider's total prompt count, matching Anthropic's disjoint
@@ -1267,7 +1271,7 @@ if err != nil {
 | APIKey | string | "" | API key (empty OK for local providers) |
 | MaxTokens | int | 8192 | Max output tokens (zero is floored to the default; see the note below on Gemini thinking models) |
 | Temperature | *float64 | nil | Sampling temperature (nil = provider default, omitted from wire) |
-| ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingMinimal/Low/Medium/High/XHigh/Max. Providers without a level get their deepest one: `ThinkingMax` → OpenAI `xhigh`, Gemini `high` |
+| ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingMinimal/Low/Medium/High/XHigh/Max. Providers without a level get their deepest one: `ThinkingMax` → OpenAI `xhigh`, Gemini `high` (`xhigh` on Gemini 4 Hydrogen). Gemini 3.8 Flash and Gemini 4 reject `minimal`, so `ThinkingMinimal` is sent as `low` there |
 | Timeout | Duration | 120s | Non-stream request timeout; for streams, the header wait and max silent gap between bytes (see [Streaming and `Config.Timeout`](#streaming-and-configtimeout)) |
 | BaseURL | string | "" | Override provider endpoint |
 | ProxyURL | string | "" | Explicit reviewed HTTP(S) forward proxy; overrides ambient proxy variables |
@@ -1340,6 +1344,8 @@ model = llm.ResolveModelAlias("flash")   // -> "gemini-3.8-flash"
 | Alias | Resolves to |
 |-------|-------------|
 | `gpt`, `gpt6.1`, `gpt-6.1` | `gpt-6.1-sol` |
+| `gpt6.2`, `gpt-6.2` | `gpt-6.2-sol` |
+| `gpt6.2-astra` | `gpt-6.2-astra` |
 | `gpt6`, `gpt-6` | `gpt-6-sol` |
 | `gpt6-luna` | `gpt-6-luna` |
 | `gpt6-astra` | `gpt-6-astra` |
@@ -1432,8 +1438,8 @@ they fail with the retired-model error and its replacement (see below).
 > that must be echoed in the corresponding `tool_result`. The adapter handles this
 > automatically; no changes to calling code are required.
 
-`gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash` and
-`gemini-3.5-flash-lite` deliberately do not advertise
+`gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.8-flash`,
+`gemini-3.7-flash`, `gemini-3.6-flash` and `gemini-3.5-flash-lite` deliberately do not advertise
 the sampling-temperature capability: Google deprecates and ignores
 `temperature`, `top_p`, and `top_k` for these models and states that future
 generations reject them.
@@ -1464,6 +1470,19 @@ thinking before any visible text is produced, so the Gemini adapter pads
 logs a warning naming the original and padded values. The visible answer can
 therefore be longer than the `MaxTokens` you set on such a model; other providers
 and non-thinking Gemini models honour it exactly.
+
+**Long decode on Gemini 4.** One Gemini 4 request returns at most 32,768 output
+tokens (Carbon and Argon, non-streaming) or 65,536 (streaming, and Hydrogen).
+`MaxTokens` is the total for thinking and output across the whole turn, up to the
+1,048,576-token window minus the input. When a turn needs more than one request,
+the API ends it with `finishReason: CONTINUATION` and a `continuationToken`; the
+adapter sends the same request again with the token, joins the parts and sums the
+usage, so `Complete` and `Stream` return one turn as usual (a stream yields one
+`EventDone`, after the last hop). A turn still unfinished after 64 hops ends with
+`StopMaxTokens` and `RawStopReason` `CONTINUATION`. A stream that drops in a later
+hop fails like any dropped stream; it is not resumed from a checkpoint. Google
+recommends a `MaxTokens` above 65,536 for long tasks, since a low value such as
+8,192 can be spent on thinking alone.
 
 **Retired models.** IDs the provider has sunset are removed from the registry, so a
 request naming one fails at dispatch with an actionable error rather than a generic

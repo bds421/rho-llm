@@ -157,14 +157,7 @@ func TestParseResponseThinkingParts(t *testing.T) {
 	c := &Client{config: llm.Config{Model: "gemini-2.5-flash"}, providerName: "gemini"}
 
 	apiResp := &geminiResponse{
-		Candidates: []struct {
-			Content       geminiContent `json:"content"`
-			FinishReason  string        `json:"finishReason"`
-			SafetyRatings []struct {
-				Category    string `json:"category"`
-				Probability string `json:"probability"`
-			} `json:"safetyRatings"`
-		}{
+		Candidates: []geminiCandidate{
 			{
 				Content: geminiContent{
 					Parts: []geminiPart{

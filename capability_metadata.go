@@ -436,6 +436,8 @@ var anthropicWithoutSamplingControls = map[string]struct{}{
 // models onward, so every Gemini model registered after gemini-3.5-flash-lite
 // belongs here unless Google documents otherwise.
 var geminiWithoutSamplingControls = map[string]struct{}{
+	"gemini-4-carbon":       {},
+	"gemini-4-hydrogen":     {},
 	"gemini-4-argon":        {},
 	"gemini-3.5-flash-lite": {},
 	"gemini-3.6-flash":      {},

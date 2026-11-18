@@ -108,7 +108,34 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 		return nil, err
 	}
 
-	body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
+	// Long decode (Gemini 4): a turn that needs more than one request's
+	// output ends with finishReason CONTINUATION and a continuationToken. The
+	// next hop is the same request plus that token, with no partial output
+	// added to contents; the hops' parts and usage add up to one turn.
+	var merged *geminiResponse
+	for hop := 1; ; hop++ {
+		apiResp, err := c.completeHop(ctx, endpoint, apiReq, req.SamplingParams)
+		if err != nil {
+			return nil, err
+		}
+		merged = mergeHop(merged, apiResp)
+		token := apiResp.continuation()
+		if token == "" || hop >= maxContinuationHops {
+			break
+		}
+		apiReq.ContinuationToken = token
+	}
+	return c.parseResponse(merged, req.Model), nil
+}
+
+// maxContinuationHops bounds a long-decode turn. The server stops the turn at
+// maxOutputTokens anyway (1,048,576 at most, 32,768 or more per hop); the
+// bound only guards against a server that keeps answering CONTINUATION.
+const maxContinuationHops = 64
+
+// completeHop sends one generateContent request.
+func (c *Client) completeHop(ctx context.Context, endpoint string, apiReq geminiRequest, sampling map[string]any) (*geminiResponse, error) {
+	body, err := llm.MergeSamplingParams(apiReq, sampling)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -138,8 +165,43 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (*llm.Response, 
 	if apiResp.Error != nil && len(apiResp.Candidates) == 0 {
 		return nil, c.apiError(apiResp.Error)
 	}
+	return &apiResp, nil
+}
 
-	return c.parseResponse(&apiResp, req.Model), nil
+// continuation returns the token for the next long-decode hop, or "" when
+// the turn is finished.
+func (r *geminiResponse) continuation() string {
+	if len(r.Candidates) == 0 || r.Candidates[0].FinishReason != finishContinuation {
+		return ""
+	}
+	return r.Candidates[0].ContinuationToken
+}
+
+// mergeHop folds one long-decode hop into the turn so far: parts are
+// appended, the finish reason and token are the latest hop's, and usage is
+// summed (each hop reports, and bills, its own counts).
+func mergeHop(acc, hop *geminiResponse) *geminiResponse {
+	if acc == nil {
+		return hop
+	}
+	acc.UsageMetadata = acc.UsageMetadata.add(hop.UsageMetadata)
+	acc.PromptFeedback = hop.PromptFeedback
+	if len(hop.Candidates) == 0 {
+		// No candidate on a later hop (a blocked continuation): the turn
+		// ends with what that hop reported.
+		acc.Candidates = nil
+		return acc
+	}
+	if len(acc.Candidates) == 0 {
+		acc.Candidates = hop.Candidates[:1]
+		return acc
+	}
+	cand := &acc.Candidates[0]
+	next := hop.Candidates[0]
+	cand.Content.Parts = append(cand.Content.Parts, next.Content.Parts...)
+	cand.FinishReason = next.FinishReason
+	cand.ContinuationToken = next.ContinuationToken
+	return acc
 }
 
 // Stream returns an iterator of streaming events.
@@ -157,35 +219,54 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.Stre
 			return
 		}
 
-		body, err := llm.MergeSamplingParams(apiReq, req.SamplingParams)
-		if err != nil {
-			yield(llm.StreamEvent{}, fmt.Errorf("failed to marshal request: %w", err))
-			return
+		// Long decode: see Complete. Each hop streams on; only the last one
+		// ends with EventDone. A stream that drops mid-hop fails as before
+		// (the events already yielded cannot be taken back, so resuming from
+		// a mid-stream checkpoint is not attempted).
+		st := &streamState{}
+		for hop := 1; ; hop++ {
+			token, more := c.streamHop(ctx, endpoint, apiReq, req.SamplingParams, st, hop < maxContinuationHops, yield)
+			if !more {
+				return
+			}
+			apiReq.ContinuationToken = token
 		}
-
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
-		if err != nil {
-			yield(llm.StreamEvent{}, fmt.Errorf("failed to create request: %w", err))
-			return
-		}
-
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("x-goog-api-key", c.config.APIKey)
-
-		resp, err := c.streamHTTPClient().Do(httpReq)
-		if err != nil {
-			yield(llm.StreamEvent{}, fmt.Errorf("request failed: %w", urlerr.Redact(err)))
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			yield(llm.StreamEvent{}, llm.ErrorFromResponse("gemini", resp, c.config))
-			return
-		}
-
-		c.parseStream(resp.Body, yield)
 	}
+}
+
+// streamHop sends one streamGenerateContent request and streams its events.
+// more reports that the hop ended in CONTINUATION and the turn goes on with
+// token.
+func (c *Client) streamHop(ctx context.Context, endpoint string, apiReq geminiRequest, sampling map[string]any,
+	st *streamState, canContinue bool, yield func(llm.StreamEvent, error) bool) (token string, more bool) {
+	body, err := llm.MergeSamplingParams(apiReq, sampling)
+	if err != nil {
+		yield(llm.StreamEvent{}, fmt.Errorf("failed to marshal request: %w", err))
+		return "", false
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		yield(llm.StreamEvent{}, fmt.Errorf("failed to create request: %w", err))
+		return "", false
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", c.config.APIKey)
+
+	resp, err := c.streamHTTPClient().Do(httpReq)
+	if err != nil {
+		yield(llm.StreamEvent{}, fmt.Errorf("request failed: %w", urlerr.Redact(err)))
+		return "", false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		yield(llm.StreamEvent{}, llm.ErrorFromResponse("gemini", resp, c.config))
+		return "", false
+	}
+
+	return c.parseStreamHop(resp.Body, st, canContinue, yield)
 }
 
 // Gemini API types
@@ -196,6 +277,9 @@ type geminiRequest struct {
 	Tools             []geminiTool            `json:"tools,omitempty"`
 	ToolConfig        *geminiToolConfig       `json:"toolConfig,omitempty"`
 	CachedContent     string                  `json:"cachedContent,omitempty"` // pre-created cache resource name
+	// ContinuationToken resumes a long-decode turn (Gemini 4); top level,
+	// per the REST example at aistudio.google.com/docs/long-decode.
+	ContinuationToken string `json:"continuationToken,omitempty"`
 }
 
 // geminiToolConfig carries Gemini's function-calling mode. Gemini spells tool
@@ -276,15 +360,20 @@ type geminiFunctionDeclaration struct {
 	ParametersJSONSchema map[string]any `json:"parametersJsonSchema"`
 }
 
+type geminiCandidate struct {
+	Content      geminiContent `json:"content"`
+	FinishReason string        `json:"finishReason"`
+	// ContinuationToken comes with finishReason CONTINUATION (and as a
+	// checkpoint on some stream chunks); see Complete.
+	ContinuationToken string `json:"continuationToken,omitempty"`
+	SafetyRatings     []struct {
+		Category    string `json:"category"`
+		Probability string `json:"probability"`
+	} `json:"safetyRatings"`
+}
+
 type geminiResponse struct {
-	Candidates []struct {
-		Content       geminiContent `json:"content"`
-		FinishReason  string        `json:"finishReason"`
-		SafetyRatings []struct {
-			Category    string `json:"category"`
-			Probability string `json:"probability"`
-		} `json:"safetyRatings"`
-	} `json:"candidates"`
+	Candidates []geminiCandidate `json:"candidates"`
 	// Pointer so "usage absent" (nil) is distinguishable from "zero tokens" —
 	// the TokensNotReported sentinel depends on it.
 	UsageMetadata *geminiUsageMetadata `json:"usageMetadata"`
@@ -345,6 +434,24 @@ type geminiUsageMetadata struct {
 // cached share is subtracted to get the uncached InputTokens. Negative wire
 // values count as 0, and a cached count above the prompt total is clamped to
 // it, so InputTokens is never negative and the two never sum past the prompt.
+// add sums two hops' usage. Nil means not reported; a sum with one
+// reported side is that side. Negative counts are clamped to 0.
+func (u *geminiUsageMetadata) add(v *geminiUsageMetadata) *geminiUsageMetadata {
+	if u == nil {
+		return v
+	}
+	if v == nil {
+		return u
+	}
+	return &geminiUsageMetadata{
+		PromptTokenCount:        max(u.PromptTokenCount, 0) + max(v.PromptTokenCount, 0),
+		CandidatesTokenCount:    max(u.CandidatesTokenCount, 0) + max(v.CandidatesTokenCount, 0),
+		TotalTokenCount:         max(u.TotalTokenCount, 0) + max(v.TotalTokenCount, 0),
+		ThoughtsTokenCount:      max(u.ThoughtsTokenCount, 0) + max(v.ThoughtsTokenCount, 0),
+		CachedContentTokenCount: max(u.CachedContentTokenCount, 0) + max(v.CachedContentTokenCount, 0),
+	}
+}
+
 func (u *geminiUsageMetadata) splitPrompt() (input, cacheRead int) {
 	prompt, cached := max(u.PromptTokenCount, 0), max(u.CachedContentTokenCount, 0)
 	cached = min(cached, prompt)
@@ -357,6 +464,15 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 	}
 	if err := llm.UnsupportedServerTools(c.Provider(), req); err != nil {
 		return geminiRequest{}, err
+	}
+	reqModel := req.Model
+	if reqModel == "" {
+		reqModel = c.config.Model
+	}
+	traits := traitsFor(reqModel)
+	if req.CachedContent != "" && traits.noExplicitCache {
+		return geminiRequest{}, fmt.Errorf("gemini: %s does not support explicit caching (CachedContent); "+
+			"it caches repeated prompt prefixes implicitly", reqModel)
 	}
 	apiReq := geminiRequest{
 		GenerationConfig: &geminiGenerationConfig{
@@ -529,10 +645,24 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 			case llm.ThinkingLow, llm.ThinkingMedium, llm.ThinkingHigh:
 				tc.ThinkingLevel = string(thinkingLevel)
 			case llm.ThinkingXHigh, llm.ThinkingMax:
-				// "high" is Gemini's deepest level. A 128K token budget instead
-				// was clamped to the model's 65,536 output limit, one above the
+				// "xhigh" exists on Gemini 4 Hydrogen only; elsewhere "high"
+				// is the deepest level. A 128K token budget instead was
+				// clamped to the model's 65,536 output limit, one above the
 				// API's thinkingBudget maximum, and rejected with a 400.
 				tc.ThinkingLevel = string(llm.ThinkingHigh)
+				if traits.xhighThinking {
+					tc.ThinkingLevel = string(llm.ThinkingXHigh)
+				}
+			case llm.ThinkingMinimal:
+				if traits.noMinimalThinking {
+					// Gemini 3.8 Flash and Gemini 4 answer "minimal" with an
+					// error and warn on thinkingBudget; "low" is their
+					// shallowest level.
+					tc.ThinkingLevel = string(llm.ThinkingLow)
+					break
+				}
+				budget := llm.ThinkingBudgetTokens(thinkingLevel, 0)
+				tc.ThinkingBudget = c.clampThinkingBudget(model, budget, info, hasInfo)
 			default:
 				// ThinkingMinimal — no matching Gemini string, fall back to a
 				// token budget.
@@ -552,7 +682,9 @@ func (c *Client) buildRequest(req llm.Request) (geminiRequest, error) {
 		cur := apiReq.GenerationConfig.MaxOutputTokens
 		if cur > 0 {
 			padded := cur + llm.ThinkingBudgetTokens(llm.ThinkingLow, 0)
-			if info.MaxTokens > 0 && padded > info.MaxTokens {
+			// MaxTokens is one request's output limit. A long-decode model
+			// continues past it, so the caller's total is never lowered.
+			if info.MaxTokens > 0 && padded > info.MaxTokens && !traits.longDecode {
 				padded = info.MaxTokens
 			}
 			slog.Debug("padding maxOutputTokens for native thinking model",
@@ -619,8 +751,8 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 	}
 	if u := apiResp.UsageMetadata; u != nil {
 		resp.InputTokens, resp.CacheReadTokens = u.splitPrompt()
-		resp.OutputTokens = u.CandidatesTokenCount
-		resp.ThinkingTokens = u.ThoughtsTokenCount
+		resp.OutputTokens = max(u.CandidatesTokenCount, 0)
+		resp.ThinkingTokens = max(u.ThoughtsTokenCount, 0)
 	}
 
 	// A blocked prompt: no candidates, a block reason. It is a refusal, not
@@ -674,23 +806,44 @@ func (c *Client) parseResponse(apiResp *geminiResponse, requestModel string) *ll
 	return resp
 }
 
+// streamState carries one streamed turn across its long-decode hops.
+type streamState struct {
+	callIndex int
+	// Gemini reports finishReason "STOP" even for a turn that requests a
+	// function call, so the terminal event must infer tool_use from whether
+	// any tool call was actually emitted. See parseResponse for the rationale.
+	sawToolCall bool
+	// usage is the summed usage of the finished hops (nil: none reported).
+	usage *geminiUsageMetadata
+}
+
+// parseStream parses a single-hop stream.
 func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) bool) {
+	c.parseStreamHop(body, &streamState{}, false, yield)
+}
+
+// parseStreamHop parses one hop of a streamed turn. When canContinue is set
+// and the hop ends in CONTINUATION with a token, it yields no EventDone and
+// returns the token with more = true.
+func (c *Client) parseStreamHop(body io.Reader, st *streamState, canContinue bool, yield func(llm.StreamEvent, error) bool) (token string, more bool) {
 	maxToolInput := c.config.EffectiveMaxToolInputBytes()
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(nil, c.config.EffectiveMaxSSELineBytes())
 
-	callIndex := 0
 	doneEmitted := false
-	// Gemini reports finishReason "STOP" even for a turn that requests a
-	// function call, so the terminal event must infer tool_use from whether
-	// any tool call was actually emitted. See parseResponse for the rationale.
-	sawToolCall := false
 
 	// Usage may arrive on any chunk (often only the final one carries it).
-	// Track the latest seen, initialized to "not reported" so a stream that
+	// Track this hop's latest; nil means "not reported", so a stream that
 	// never reports usage is distinguishable from a zero-token one.
-	inputTokens, outputTokens := llm.TokensNotReported, llm.TokensNotReported
-	var thinkingTokens, cacheReadTokens int
+	var hopUsage *geminiUsageMetadata
+	usage := func() (input, output, thinking, cacheRead int) {
+		u := st.usage.add(hopUsage)
+		if u == nil {
+			return llm.TokensNotReported, llm.TokensNotReported, 0, 0
+		}
+		input, cacheRead = u.splitPrompt()
+		return input, max(u.CandidatesTokenCount, 0), max(u.ThoughtsTokenCount, 0), cacheRead
+	}
 
 	for scanner.Scan() {
 		data, ok := llm.SSEData(scanner.Text())
@@ -701,25 +854,24 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		var event geminiResponse
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			if !yield(llm.StreamEvent{}, fmt.Errorf("malformed SSE event from gemini: %w", err)) {
-				return
+				return "", false
 			}
 			continue
 		}
 
 		if event.Error != nil {
 			yield(llm.StreamEvent{}, c.apiError(event.Error))
-			return
+			return "", false
 		}
 
-		if u := event.UsageMetadata; u != nil {
-			inputTokens, cacheReadTokens = u.splitPrompt()
-			outputTokens = u.CandidatesTokenCount
-			thinkingTokens = u.ThoughtsTokenCount
+		if event.UsageMetadata != nil {
+			hopUsage = event.UsageMetadata
 		}
 
 		// A blocked prompt ends the stream as a refusal; without this it ran
 		// to EOF and surfaced as a retryable truncation, re-sending the prompt.
 		if reason := event.blockReason(); reason != "" {
+			inputTokens, outputTokens, thinkingTokens, cacheReadTokens := usage()
 			yield(llm.StreamEvent{
 				Type:            llm.EventDone,
 				StopReason:      llm.StopRefusal,
@@ -729,7 +881,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				ThinkingTokens:  thinkingTokens,
 				CacheReadTokens: cacheReadTokens,
 			}, nil)
-			return
+			return "", false
 		}
 
 		if len(event.Candidates) > 0 {
@@ -739,11 +891,11 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				if part.Text != "" {
 					if part.Thought {
 						if !yield(llm.StreamEvent{Type: llm.EventThinking, Thinking: part.Text}, nil) {
-							return
+							return "", false
 						}
 					} else {
 						if !yield(llm.StreamEvent{Type: llm.EventContent, Text: part.Text}, nil) {
-							return
+							return "", false
 						}
 					}
 				}
@@ -751,26 +903,37 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
 					if len(argsJSON) > maxToolInput {
 						yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
-						return
+						return "", false
 					}
 					tc := &llm.ToolCall{
-						ID:    makeToolCallID(callIndex, part.FunctionCall.Name),
+						ID:    makeToolCallID(st.callIndex, part.FunctionCall.Name),
 						Name:  part.FunctionCall.Name,
 						Input: part.FunctionCall.Args,
 					}
-					callIndex++
+					st.callIndex++
 					// Gemini 3: thoughtSignature is at the Part level
 					if part.ThoughtSignature != "" {
 						tc.ThoughtSignature = part.ThoughtSignature
 					}
-					sawToolCall = true
+					st.sawToolCall = true
 					if !yield(llm.StreamEvent{
 						Type:     llm.EventToolUse,
 						ToolCall: tc,
 					}, nil) {
-						return
+						return "", false
 					}
 				}
+			}
+
+			if candidate.ContinuationToken != "" {
+				// The final chunk's token, or a mid-stream checkpoint.
+				token = candidate.ContinuationToken
+			}
+
+			if candidate.FinishReason == finishContinuation && canContinue && token != "" {
+				// Not the end of the turn: the next hop continues it.
+				st.usage = st.usage.add(hopUsage)
+				return token, true
 			}
 
 			if candidate.FinishReason != "" {
@@ -782,9 +945,10 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 				// Only a normal completion is reclassified: MAX_TOKENS and
 				// friends must survive, since a truncated turn is not a
 				// usable tool call.
-				if sawToolCall && stopReason == "end_turn" {
+				if st.sawToolCall && stopReason == "end_turn" {
 					stopReason = "tool_use"
 				}
+				inputTokens, outputTokens, thinkingTokens, cacheReadTokens := usage()
 				yield(llm.StreamEvent{
 					Type:            llm.EventDone,
 					StopReason:      stopReason,
@@ -794,7 +958,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					ThinkingTokens:  thinkingTokens,
 					CacheReadTokens: cacheReadTokens,
 				}, nil)
-				return
+				return "", false
 			}
 		}
 	}
@@ -803,7 +967,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	// successfully. A trailing read error after EventDone is noise.
 	if err := scanner.Err(); err != nil && !doneEmitted {
 		yield(llm.StreamEvent{}, fmt.Errorf("stream error: %w", err))
-		return
+		return "", false
 	}
 
 	// Clean EOF without a finishReason: the server truncated the turn. Yield
@@ -812,6 +976,7 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	if !doneEmitted {
 		yield(llm.StreamEvent{}, fmt.Errorf("gemini: stream ended without completion: %w", io.ErrUnexpectedEOF))
 	}
+	return "", false
 }
 
 // normalizeStopReason maps Gemini finish reasons to the unified set
@@ -828,7 +993,9 @@ func normalizeStopReason(reason string) string {
 		return llm.StopEndTurn
 	case "FUNCTION_CALLING":
 		return llm.StopToolUse
-	case "MAX_TOKENS":
+	case "MAX_TOKENS", finishContinuation:
+		// CONTINUATION reaches the caller only when maxContinuationHops ran
+		// out: the turn is truncated, not failed.
 		return llm.StopMaxTokens
 	case "SAFETY", "PROHIBITED_CONTENT", "RECITATION", "BLOCKLIST", "SPII",
 		"IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION":

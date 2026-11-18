@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-18
+
+### Added
+
+- **Gemini 4 long decode.** One Gemini 4 request returns at most 32,768
+  (Carbon/Argon non-streaming) or 65,536 output tokens; a longer turn ends with
+  the new `finishReason: CONTINUATION` and a `continuationToken`. The Gemini
+  adapter now sends the same request again with the token (top-level
+  `continuationToken`, contents unchanged), joins the hops' parts and sums
+  their usage, in `Complete` and `Stream` alike: a stream yields one
+  `EventDone`, after the last hop. At most 64 hops; a leftover `CONTINUATION`
+  is `StopMaxTokens`, where before it fell through to `StopError`. A stream
+  that drops in a later hop fails as before. Checked against
+  aistudio.google.com/docs/long-decode (2026-11-18); a live call confirmed
+  Carbon accepts `maxOutputTokens` 40,000 on a single non-streaming request,
+  despite the page saying it is a 400.
+- **Gemini 4 thinking levels.** `ThinkingXHigh` / `ThinkingMax` send `xhigh` on
+  `gemini-4-hydrogen` (its new deepest level) and `high` elsewhere.
+  `ThinkingMinimal` is sent as `low` on `gemini-3.8-flash` (and 3.7 Flash,
+  routed to it) and every Gemini 4 model, which answer `minimal` with a 400
+  (live, 2026-11-18); other models keep the token budget.
+- **Registry:** `gemini-4-carbon` ($2 / $10, cache read $0.10, doubling to
+  $4 / $20 / $0.20 on 2026-12-01) and `gemini-4-hydrogen` ($1.50 / $7.50, cache
+  read $0.075), both without sampling controls; `gpt-6.2-sol` ($2 / $10, cache
+  read $0.10) and `gpt-6.2-astra` ($8 / $40, cache read $0.40), Responses API,
+  922K input / 128K output, aliases `gpt6.2` / `gpt-6.2` / `gpt6.2-astra`.
+  From the providers' model and pricing pages and their live `GET /models`
+  (2026-11-18); `gpt-6.2-sol` checked live.
+
+### Changed
+
+- **Gemini 4 refuses `CachedContent`.** Explicit caching returns an error on
+  every Gemini 4 model, so a request naming a cache is refused before it is
+  sent, with an error naming the model; Gemini 4 caches repeated prefixes
+  implicitly.
+- **Gemini thinking padding** no longer lowers a Gemini 4 caller's
+  `MaxTokens` to the per-request limit: long decode continues past it, so a
+  `MaxTokens` of 262,144 was cut to 32,768.
+- **Retired:** `MiniMax-M2.5` (and its alias `minimax-m2.5`) →
+  `MiniMax-M3.1-Flash`, on its 2026-11-18 retirement date.
+
+### Fixed
+
+- **Gemini negative usage counts.** A negative `candidatesTokenCount` or
+  `thoughtsTokenCount` passed through to `OutputTokens` / `ThinkingTokens`;
+  both are now clamped to 0, like the prompt counts.
+
 ## [0.18.0] - 2026-11-12
 
 ### Added

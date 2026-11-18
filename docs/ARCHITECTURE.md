@@ -1,6 +1,6 @@
 # rho/llm — Architecture
 
-> **Status:** Reflects the current implementation as of November 2026 (v0.18.0).
+> **Status:** Reflects the current implementation as of November 2026 (v0.19.0).
 
 ---
 
@@ -676,9 +676,9 @@ Different LLM providers implement chain-of-thought reasoning in fundamentally di
 | Provider | Models |
 |---|---|
 | Anthropic | claude-fable-5-2, claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5, claude-fable-5, claude-opus-5, claude-sonnet-5, claude-opus-4-{8,7,6,5}, claude-sonnet-4-{6,5}, claude-haiku-4-5 |
-| OpenAI | gpt-6.1-{sol,terra}, gpt-6-{astra,sol,luna}, gpt-5.6-{sol,terra,luna}, gpt-5.5(-pro), gpt-5.4(-pro,-mini,-nano), gpt-5.3-codex, gpt-5.2(-pro), gpt-5.1, gpt-5(-pro,-mini,-nano), gpt-4.1(-mini), o3, o3-pro |
+| OpenAI | gpt-6.2-{sol,astra}, gpt-6.1-{sol,terra}, gpt-6-{astra,sol,luna}, gpt-5.6-{sol,terra,luna}, gpt-5.5(-pro), gpt-5.4(-pro,-mini,-nano), gpt-5.3-codex, gpt-5.2(-pro), gpt-5.1, gpt-5(-pro,-mini,-nano), gpt-4.1(-mini), o3, o3-pro |
 | xAI | grok-4.7, grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-{reasoning,non-reasoning}, grok-4.20-multi-agent-0309, grok-build-0.1 (the grok-4.20-beta* slugs are aliases; grok-3(-mini)/grok-4-0709/grok-4(-1)-fast-*/grok-code-fast-1 are retired) |
-| Gemini | gemini-4-argon, gemini-3.8-flash, gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-{flash,flash-lite}, gemini-3.1-flash-lite, gemini-3.1-pro-preview(-customtools), gemini-3-flash-preview, gemini-2.5-{pro,flash,flash-lite} |
+| Gemini | gemini-4-{carbon,hydrogen,argon}, gemini-3.8-flash, gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-{flash,flash-lite}, gemini-3.1-flash-lite, gemini-3.1-pro-preview(-customtools), gemini-3-flash-preview, gemini-2.5-{pro,flash,flash-lite} |
 
 The full list (19 providers with curated rows, including Groq, Mistral, DeepSeek,
 Cohere, Z.ai, MiniMax, Moonshot, DashScope, Meta, Perplexity, Fireworks, Together,
@@ -761,6 +761,8 @@ client = llm.WithLoggingPrefix(client, "[MyService]")
 - Thinking: parts with `thought: true` are routed to `resp.Thinking` / `EventThinking` (not mixed into `Content`). `thoughtsTokenCount` from usage metadata is exposed as `resp.ThinkingTokens` / `event.ThinkingTokens`, separate from `OutputTokens` (which maps to `candidatesTokenCount` only). The openai_responses adapter does the same since v0.9.5 (`output_tokens_details.reasoning_tokens` → `ThinkingTokens`, subtracted from `OutputTokens`), so bill `OutputTokens + ThinkingTokens`. Anthropic and OpenAI-compat bundle thinking tokens into `OutputTokens`; for those providers `ThinkingTokens` is 0.
 - System prompt: mapped to `systemInstruction.parts[0].text`
 - Context caching: `cachedContent` field in request references a pre-created cache by name. `cachedContentTokenCount` from response usage is mapped to `CacheReadTokens`, and — because `promptTokenCount` already includes it — subtracted from `promptTokenCount` to give `InputTokens` (v0.9.4; clamped so neither goes negative).
+- Per-model request rules the registry does not carry live in `provider/gemini/traits.go` (`traitsFor`): no `minimal` thinking level (3.8 Flash, Gemini 4: sent as `low`), `xhigh` (Hydrogen), long decode and no explicit caching (Gemini 4, matched by the `gemini-4-` prefix so an unregistered Gemini 4 ID gets them too).
+- Long decode (Gemini 4): a hop ending in `finishReason: CONTINUATION` with a `continuationToken` is followed by the same request plus the token at the top level (contents unchanged). `Complete` merges the hops' parts and sums their usage (`mergeHop`); `Stream` carries tool-call indexes and usage across hops in a `streamState` and yields a single `EventDone` after the last hop. At most 64 hops; a leftover `CONTINUATION` maps to `StopMaxTokens`. Thinking padding of `maxOutputTokens` never lowers a long-decode model's value to its per-request `MaxTokens`.
 
 ### OpenAI-Compatible (`provider/openaicompat/`)
 
@@ -1016,7 +1018,7 @@ Anthropic and Gemini offer context caching with fundamentally different models:
 - `StreamEvent.CacheCreationTokens` / `CacheReadTokens` are extracted from `message_start` events
 
 **Gemini (reference only):**
-- `Request.CachedContent` sets `cachedContent` in the wire request, referencing a pre-created cache by name
+- `Request.CachedContent` sets `cachedContent` in the wire request, referencing a pre-created cache by name; refused for Gemini 4 models (`gemini-4-*`), which only cache implicitly
 - Cache lifecycle management (create/list/delete) is out of scope — callers manage it externally
 - `Response.CacheReadTokens` is populated from `usageMetadata.cachedContentTokenCount` (implicit cache hits too)
 

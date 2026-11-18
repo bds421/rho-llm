@@ -23,13 +23,15 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
 ---
 
 ## 📅 Dated — act on these dates (registry)
-- **2026-11-18** `MiniMax-M2.5` retires (its FAQ table already says retired) → `retiredModels`
-  (→ `MiniMax-M3.1-Flash`).
 - **2026-11-30** `claude-sonnet-4-5` retires (→ `claude-sonnet-5-5`). Opus 4.8 fast mode removed.
 - **2026-12-01** `gemini-2.5-pro` → routed to `gemini-3.8-flash`, `gemini-2.5-flash` → routed to
-  `gemini-3.5-flash-lite`; `gpt-image-1.5`, `gpt-image-1-mini`; `gemini-4-argon` price doubles
-  ($4 / $20 / $0.20).
-- **2026-12-11** `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`, `o3`, `o3-pro` (→ `gpt-5.6-sol`).
+  `gemini-3.5-flash-lite` (both then get the Gemini 3 request rules: no prefilled model turn,
+  strict thought signatures, `minimal` rejected on 3.8 Flash); `gpt-image-1.5`, `gpt-image-1-mini`;
+  `gemini-4-argon` and `gemini-4-carbon` prices double ($4 / $20 / $0.20).
+- **2026-12-11** `gpt-5`, `o3` (→ `gpt-6.1-sol`), `gpt-5-mini` (→ `gpt-6.1-terra`), `gpt-5-nano`
+  (→ `gpt-6-luna`), `gpt-5-pro`, `o3-pro` (→ `gpt-6.1-sol` with `reasoning.mode: pro`), per
+  developers.openai.com/api/docs/deprecations (2026-11-18). The `gpt5` alias points at
+  `gpt-5.6-sol` today. `o3-pro` already left `GET /v1/models` (2026-11-18).
 - **Late Dec 2026** Kimi K2 series (`kimi-k2.7-code`, still the `moonshot-cn`/`kimi-cn`
   default: confirm K3.1 Pro on api.moonshot.cn before switching).
 - **2027-01-01** `gemini-3.8-flash`, `gemini-3.6-flash` prices double.
@@ -39,6 +41,7 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
 - **2027-03-15** `gemini-2.5-flash-image`. **2027-04-01** `gpt-5.1`, `gpt-5.3-codex`,
   `gpt-5.4-nano`. **2027-04-30** `mistral-large-2512`, Mistral Medium 3.5
   (`mistral-medium-latest`). **2027-05-07** `gemini-3.1-flash-lite`.
+- **2028-05-14** `gemini-embedding-001` (→ `gemini-embedding-2`).
 - Each retirement also needs a sweep of `../rho-llm-tutorial`.
 
 ---
@@ -53,6 +56,14 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   per-model effort value maps (Kimi K3 has no `medium`, GLM-5.3 only low/high/max).
 - **P4 — Anthropic message threads — M.** Beta `message-threads-2026-08-12`: send only new
   messages; full request when the prefix changed or the server can't continue.
+- **F4 — Gemini Interactions API — L.** `POST /v1beta/interactions` (live, 2026-11-18; Google now
+  calls `generateContent` "legacy"). Request `model`/`agent`, `input`, `previous_interaction_id`,
+  `tools`, `system_instruction`, `generation_config`, `store` (default true), `background`;
+  response `Interaction{id, steps[]}`. SSE format, usage fields and status values unread; no batch
+  or explicit caching yet. Thinking summaries via `thinking_summaries`.
+- **F5 — Gemini long decode, rest — S/M.** Resume a dropped stream from the last mid-stream
+  checkpoint token (needs buffering of events since the checkpoint); report
+  `initial_prompt_token_count`; resume after `MAX_TOKENS` with a higher `MaxTokens`.
 - **F1 — Chat fallback + per-attempt usage — M.** `OperationChat` usage events and a
   `NewFallbackClient` for chat reusing `tryEach`/`FailoverPolicy`.
 
@@ -70,6 +81,9 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   MiniMax >512K, Qwen >256K, Muse Ember >200K; Azure keeps OpenAI's tier.
 - 🟡 **R2 — OpenAI cache writes — S.** GPT-5.6+ bill writes at 1.25× input (30 min) and 2.5×
   (12h); rows have no write price.
+- 🟡 **F6 — Gemini request rules, rest — S.** New finish reasons (`MISSING_THOUGHT_SIGNATURE`,
+  `MALFORMED_RESPONSE`, `ESCALATION`, `PUP_LIMITED_DISABLED`) map to `StopError` by default —
+  decide per value. Hydrogen answers an out-of-range `temperature` with a 400.
 - 🟡 **F2 — Gemini `store` default — S.** `store=true` default for new paid projects since
   2026-10-26; decide whether to send `store:false`.
 - 🟢 Provider-reported cost; service-tier pricing [pi]. Deferred tool loading [pi].
@@ -107,11 +121,26 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   recommended since 2026-10-13) and the Qwen Token Plan CN provider.
 - 🟢 **R6 — Unconfirmed data.** OpenAI cache-read prices for `gpt-5.2`/`5.1`/`5`/`5-mini`/
   `5-nano`/`o3`; `gpt-image-2.5-*` prices; DashScope `qwen3-max`, `qwen3.5-omni-light`,
-  `text-embedding-v2` missing from the 2026-11-07 price page; `gemini-4-argon` max output (row
-  32,768, model page 65,536); Nemotron 3 Ultra context (1,048,576 per build.nvidia.com) and
+  `text-embedding-v2` missing from the 2026-11-07 price page; Nemotron 3 Ultra context (1,048,576 per build.nvidia.com) and
   seven Fireworks rows with context 0; max output of Muse Spark/Wonder and Mistral Large 4;
   Cohere `command-a-03-2025` price; Nano Banana limits (docs vs `GET /v1beta/models`
   disagree); Gemini 3.5/3.7 Flash are routed to 3.6/3.8 Flash (billing may differ).
+- 🟡 **R8 — Found 2026-11-18, not yet registered or acted on.**
+  - Gemini: `gemini-decision-1` (Decisions API, `createDecision`; `models/{m}:createDecision`
+    answers 404, path unknown), `antigravity-preview-*` (agent), `gemini-omni-1.2-flash`
+    (`omni-1.1-flash` routed to it 2026-12-03). Source URLs in registry comments still say
+    ai.google.dev; the docs moved to aistudio.google.com/docs (301).
+  - OpenAI: Responses API changes for `gpt-6.2-*` (reasoning kept across an edited prefix,
+    top-level `instructions` handling; migration guide unread), discounted background
+    completion windows (beta), `gpt-6-cyber` / `gpt-6.2-astra-law` (restricted). 12-hour
+    cache writes and >272K tiers are R1/R2.
+  - Anthropic: computer use needs `computer_toolset_20260801` (`computer_20251124` is a 400);
+    linked billing beta `user-profiles-billing-2026-10-01`; 5.2 thinking-prefix check is
+    enforced for all accounts (P1 covers it via `drop_block`).
+  - Others: DashScope `qwen4-max` (no price published), xAI `grok-imagine-image-2.0` /
+    `grok-imagine-video-1.5(-lite)`, DeepSeek `deepseek-flash` built-in tools and file input
+    (2026-11-13), Perplexity Agent API `effort` (was `preset`) and Decisions API (R4),
+    OpenRouter `openai/gpt-6.2-astra-pro`.
 - 🟢 **R7 — Live but unregistered.** Mistral `voxtral-*`, `mistral-ocr-*`, `codestral-embed`;
   Z.ai `glm-5.3-flashx`; `kimi-k3.1-pro-highspeed`; DeepInfra Kimi K3.1 Pro, DeepSeek V4 Pro;
   Qwen `qwen3.7-*`, `qwen3.8-omni-flash`; Claude Mythos 5.2 (verified orgs only).

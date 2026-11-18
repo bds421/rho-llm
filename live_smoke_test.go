@@ -572,3 +572,77 @@ func (w *wsConn) writeFrame(opcode byte, payload []byte) error {
 
 // Ensure json is used (session event logging helpers may need it later).
 var _ = json.Marshal
+
+// Gemini 4 thinking levels through the client: "minimal" goes out as "low"
+// (the API answers MINIMAL with a 400 on Carbon), "xhigh" as "xhigh" on
+// Hydrogen (streamed). Live 2026-11-18.
+func TestLiveNew_Gemini4ThinkingLevels(t *testing.T) {
+	key := envKey("GEMINI_API_KEY", "GEMINI_API_KEYS")
+	if key == "" {
+		key = os.Getenv("GOOGLE_API_KEY")
+	}
+	requireLiveAPI(t, key, "GEMINI_API_KEY/GOOGLE_API_KEY not set")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	msgs := []llm.Message{llm.NewTextMessage(llm.RoleUser, "Reply with the single word ok.")}
+
+	carbon, err := llm.NewClient(llm.Config{Provider: "gemini", Model: "gemini-4-carbon", APIKey: key, DisableRetries: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer carbon.Close()
+	resp, err := carbon.Complete(ctx, llm.Request{Messages: msgs, MaxTokens: 4000, ThinkingLevel: llm.ThinkingMinimal})
+	if err != nil {
+		t.Fatalf("carbon minimal: %v", err)
+	}
+	if resp.StopReason != llm.StopEndTurn || resp.Content == "" {
+		t.Errorf("carbon: stop %q content %q", resp.StopReason, resp.Content)
+	}
+
+	hydrogen, err := llm.NewClient(llm.Config{Provider: "gemini", Model: "gemini-4-hydrogen", APIKey: key, DisableRetries: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hydrogen.Close()
+	var text string
+	var done llm.StreamEvent
+	for ev, err := range hydrogen.Stream(ctx, llm.Request{Messages: msgs, MaxTokens: 4000, ThinkingLevel: llm.ThinkingXHigh}) {
+		if err != nil {
+			t.Fatalf("hydrogen xhigh stream: %v", err)
+		}
+		switch ev.Type {
+		case llm.EventContent:
+			text += ev.Text
+		case llm.EventDone:
+			done = ev
+		}
+	}
+	if done.StopReason != llm.StopEndTurn || text == "" || done.OutputTokens <= 0 {
+		t.Errorf("hydrogen: stop %q text %q done %+v", done.StopReason, text, done)
+	}
+}
+
+// GPT-6.2 Sol answers through the Responses API route. Live 2026-11-18.
+func TestLiveNew_OpenAIGPT62Sol(t *testing.T) {
+	key := envKey("OPENAI_API_KEY", "OPENAI_API_KEYS")
+	requireLiveAPI(t, key, "OPENAI_API_KEY not set")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	c, err := llm.NewClient(llm.Config{Provider: "openai", Model: "gpt-6.2-sol", APIKey: key, DisableRetries: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	resp, err := c.Complete(ctx, llm.Request{
+		Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "Reply with the single word ok.")},
+		MaxTokens:     2000,
+		ThinkingLevel: llm.ThinkingLow,
+	})
+	if err != nil {
+		t.Fatalf("gpt-6.2-sol: %v", err)
+	}
+	if resp.Content == "" || resp.StopReason != llm.StopEndTurn {
+		t.Errorf("gpt-6.2-sol: stop %q content %q", resp.StopReason, resp.Content)
+	}
+	t.Logf("gpt-6.2-sol: %q in=%d out=%d", resp.Content, resp.InputTokens, resp.OutputTokens)
+}

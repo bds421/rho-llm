@@ -101,6 +101,9 @@ var retiredModels = map[string]string{
 	"deepseek-ai/DeepSeek-V3":                               "deepseek-ai/DeepSeek-V4.1-Flash",
 	"meta-llama/Llama-3.3-70B-Instruct-Turbo":               "deepseek-ai/DeepSeek-V4.1-Flash",
 	"meta/llama-3.1-8b-instruct":                            "nvidia/llama-3.1-nemotron-70b-instruct",
+	// MiniMax retired M2.5 on 2026-11-18; platform.minimax.io/docs/guides/models-intro
+	// lists only MiniMax-M3.1-Flash and MiniMax-M3 (checked 2026-11-18).
+	"MiniMax-M2.5": "MiniMax-M3.1-Flash",
 }
 
 // RetiredModelReplacement reports whether model has been retired by its
@@ -160,11 +163,17 @@ var modelRegistry = map[string]ModelInfo{
 
 	// Gemini — from ai.google.dev/gemini-api/docs/pricing and /models (2026-10-31)
 	// Prices are standard tier (<=200K context). Long-context tier (>200K) roughly doubles.
-	// Introductory rates: gemini-4-argon doubles from 2026-12-01; gemini-3.8-flash and
-	// gemini-3.6-flash double from 2027-01-01.
+	// Introductory rates: gemini-4-argon and gemini-4-carbon double from 2026-12-01
+	// ($4 / $20 / $0.20); gemini-3.8-flash and gemini-3.6-flash double from 2027-01-01.
+	// Gemini 4 (aistudio.google.com/docs/whats-new-gemini-4-carbon and -hydrogen,
+	// GET /v1beta/models, 2026-11-18): MaxTokens is the per-request outputTokenLimit
+	// (32,768 Carbon/Argon, 65,536 Hydrogen); long decode continues past it up to
+	// the 1,048,576-token window, which input, thinking and output share.
 	// AudioInputPricePer1M from ai.google.dev/gemini-api/docs/pricing (fetched 2026-10-07,
 	// page "last updated 2026-10-07"): set only where the page lists the audio rate
 	// (an explicit "(audio)" price, or one price for all input modalities).
+	"gemini-4-carbon":                    {ID: "gemini-4-carbon", Provider: "gemini", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 4 Carbon"},
+	"gemini-4-hydrogen":                  {ID: "gemini-4-hydrogen", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 7.50, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 4 Hydrogen"},
 	"gemini-4-argon":                     {ID: "gemini-4-argon", Provider: "gemini", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 4 Argon"},
 	"gemini-3.8-flash":                   {ID: "gemini-3.8-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.8 Flash"},
 	"gemini-3.7-flash":                   {ID: "gemini-3.7-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.7 Flash"},
@@ -201,6 +210,9 @@ var modelRegistry = map[string]ModelInfo{
 	// requires the Responses API ("Chat Completions supports function calling
 	// only with reasoning_effort set to none"). Prompts over 272K cost 2× input,
 	// 1.5× output (not modeled).
+	// GPT-6.2 (developers.openai.com/api/docs/models/gpt-6.2-sol and -astra, 2026-11-18).
+	"gpt-6.2-astra": {ID: "gpt-6.2-astra", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 8.00, OutputPricePer1M: 40.00, CacheReadPricePer1M: 0.40, Thinking: true, ResponsesAPI: true, Label: "GPT-6.2 Astra"},
+	"gpt-6.2-sol":   {ID: "gpt-6.2-sol", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, Thinking: true, ResponsesAPI: true, Label: "GPT-6.2 Sol"},
 	"gpt-6-astra":   {ID: "gpt-6-astra", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 10.00, OutputPricePer1M: 50.00, CacheReadPricePer1M: 1.00, Thinking: true, ResponsesAPI: true, Label: "GPT-6 Astra"},
 	"gpt-6.1-sol":   {ID: "gpt-6.1-sol", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, Thinking: true, ResponsesAPI: true, Label: "GPT-6.1 Sol"},
 	"gpt-6.1-terra": {ID: "gpt-6.1-terra", Provider: "openai", MaxTokens: 128000, ContextWindow: 922000, InputPricePer1M: 1.00, OutputPricePer1M: 5.00, CacheReadPricePer1M: 0.05, Thinking: true, ResponsesAPI: true, Label: "GPT-6.1 Terra"},
@@ -280,7 +292,6 @@ var modelRegistry = map[string]ModelInfo{
 	// Open weights. Multimodal. MiniMax-M3 rates are the <=512K-input tier; above 512K they double.
 	"MiniMax-M3":         {ID: "MiniMax-M3", Provider: "minimax", ContextWindow: 1048576, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.06, Label: "MiniMax M3"},
 	"MiniMax-M3.1-Flash": {ID: "MiniMax-M3.1-Flash", Provider: "minimax", ContextWindow: 1000000, InputPricePer1M: 0.15, OutputPricePer1M: 0.60, CacheReadPricePer1M: 0.015, Thinking: true, Label: "MiniMax M3.1 Flash"},
-	"MiniMax-M2.5":       {ID: "MiniMax-M2.5", Provider: "minimax", ContextWindow: 1000000, InputPricePer1M: 0.30, OutputPricePer1M: 1.20, CacheReadPricePer1M: 0.06, Label: "MiniMax M2.5"},
 
 	// Moonshot / Kimi — OpenAI-compatible API at api.moonshot.ai (platform.kimi.ai/docs/pricing/chat, 2026-11-10).
 	// K3 models: thinking always on, 1M context, max_completion_tokens default 131072 (up to
@@ -543,6 +554,9 @@ var modelAliases = map[string]string{
 	"gpt":          "gpt-6.1-sol",
 	"gpt6":         "gpt-6-sol",
 	"gpt-6":        "gpt-6-sol",
+	"gpt6.2":       "gpt-6.2-sol",
+	"gpt-6.2":      "gpt-6.2-sol",
+	"gpt6.2-astra": "gpt-6.2-astra",
 	"gpt6.1":       "gpt-6.1-sol",
 	"gpt-6.1":      "gpt-6.1-sol",
 	"gpt6-luna":    "gpt-6-luna",

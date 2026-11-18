@@ -432,7 +432,7 @@ func TestCatalogDefaultsAndDiscoveryForPhaseCProviders(t *testing.T) {
 	}{
 		{"mistral", "mistral-small-2603", "ministral-14b-2512", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
 		{"zai", "glm-5.3", "glm-4.7", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
-		{"minimax", "MiniMax-M3", "MiniMax-M2.5", []llm.Capability{llm.CapabilityChat}},
+		{"minimax", "MiniMax-M3", "MiniMax-M3.1-Flash", []llm.Capability{llm.CapabilityChat}},
 		{"moonshot", "kimi-k3.1-pro", "kimi-k3", []llm.Capability{llm.CapabilityChat, llm.CapabilityVision}},
 		{"dashscope", "qwen3.6-plus", "qwen3.6-flash", []llm.Capability{llm.CapabilityChat}},
 		{"deepseek", "deepseek-flash", "deepseek-v4-pro", []llm.Capability{llm.CapabilityChat}},
@@ -549,6 +549,76 @@ func TestRetiredOn20261110(t *testing.T) {
 		_, err := llm.ResolveCapabilityProfile(llm.Config{Provider: provider, Model: "kimi-k2.5"})
 		if err == nil || !strings.Contains(err.Error(), "retired") || !strings.Contains(err.Error(), "kimi-k3.1-pro") {
 			t.Errorf("%s/kimi-k2.5: err = %v, want the retired error naming kimi-k3.1-pro", provider, err)
+		}
+	}
+}
+
+// MiniMax retired M2.5 on 2026-11-18. The alias must resolve to the retired
+// error too, not to a generic "no capability metadata" one.
+func TestRetiredOn20261118(t *testing.T) {
+	for _, id := range []string{"MiniMax-M2.5", "minimax-m2.5"} {
+		got, ok := llm.RetiredModelReplacement(id)
+		if !ok || got != "MiniMax-M3.1-Flash" {
+			t.Errorf("RetiredModelReplacement(%q) = %q, %v; want MiniMax-M3.1-Flash", id, got, ok)
+		}
+		_, err := llm.ResolveCapabilityProfile(llm.Config{Provider: "minimax", Model: id})
+		if err == nil || !strings.Contains(err.Error(), "retired") {
+			t.Errorf("minimax/%s: err = %v, want the retired error", id, err)
+		}
+	}
+	if _, listed := llm.GetModelInfo("MiniMax-M2.5"); listed {
+		t.Error("MiniMax-M2.5 is retired but still has a registry row")
+	}
+}
+
+// Models added on 2026-11-18: rows, prices (per 1M tokens) and aliases, each
+// from the provider's page (OpenAI model pages; Gemini what's-new pages and
+// GET /v1beta/models).
+func TestModelsAdded20261118(t *testing.T) {
+	const M = 1_000_000
+	cases := []struct {
+		model, provider              string
+		maxTokens                    int
+		in, out, cacheRead, wantCost float64
+	}{
+		{"gpt-6.2-sol", "openai", 128000, 2.00, 10.00, 0.10, 12.00},
+		{"gpt-6.2-astra", "openai", 128000, 8.00, 40.00, 0.40, 48.00},
+		{"gemini-4-carbon", "gemini", 32768, 2.00, 10.00, 0.10, 12.00},
+		{"gemini-4-hydrogen", "gemini", 65536, 1.50, 7.50, 0.075, 9.00},
+	}
+	for _, tc := range cases {
+		info, ok := llm.GetModelInfo(tc.model)
+		if !ok {
+			t.Errorf("%s is not registered", tc.model)
+			continue
+		}
+		if info.Provider != tc.provider || info.MaxTokens != tc.maxTokens ||
+			info.InputPricePer1M != tc.in || info.OutputPricePer1M != tc.out || info.CacheReadPricePer1M != tc.cacheRead {
+			t.Errorf("%s = %+v", tc.model, info)
+		}
+		if got := llm.EstimateCost(llm.CostInput{Model: tc.model, InputTokens: M, OutputTokens: M}); got != tc.wantCost {
+			t.Errorf("EstimateCost(%s, 1M, 1M) = %v, want %v", tc.model, got, tc.wantCost)
+		}
+		if err := llm.RequireCapabilities(llm.Config{Provider: tc.provider, Model: tc.model}, llm.CapabilityChat); err != nil {
+			t.Errorf("%s: %v", tc.model, err)
+		}
+	}
+	for _, id := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		if info, _ := llm.GetModelInfo(id); !info.ResponsesAPI {
+			t.Errorf("%s: tool calling needs the Responses API, ResponsesAPI = false", id)
+		}
+	}
+	// Gemini 4 ignores sampling controls, like the other models since July 2026.
+	temp := 0.5
+	for _, id := range []string{"gemini-4-carbon", "gemini-4-hydrogen"} {
+		cfg := llm.Config{Provider: "gemini", Model: id}
+		if err := llm.ValidateRequestCapabilities(cfg, llm.Request{Temperature: &temp}, false); err == nil {
+			t.Errorf("%s accepted Temperature; Gemini 4 ignores it", id)
+		}
+	}
+	for alias, want := range map[string]string{"gpt6.2": "gpt-6.2-sol", "gpt-6.2": "gpt-6.2-sol", "gpt6.2-astra": "gpt-6.2-astra"} {
+		if got := llm.ResolveModelAlias(alias); got != want {
+			t.Errorf("ResolveModelAlias(%q) = %q, want %q", alias, got, want)
 		}
 	}
 }
