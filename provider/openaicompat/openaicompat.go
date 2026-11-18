@@ -376,9 +376,13 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 		// Anthropic allows multiple tool_result parts in one user message; OpenAI requires
 		// each to be a separate message with role="tool".
 		if msg.Role == llm.RoleUser {
+			// Parts keep their order: a label before a document must stay
+			// before it, and a closing delimiter after it. ordered holds the
+			// multipart content; textParts is the plain-string form for a
+			// message with no image or document.
 			var textParts []string
-			var imageParts []llm.ContentPart
-			var docParts []llm.ContentPart
+			var ordered []any
+			hasMedia, docIndex := false, 0
 			hasToolResults := false
 
 			for _, part := range msg.Content {
@@ -393,12 +397,17 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 				case llm.ContentText:
 					if part.Text != "" {
 						textParts = append(textParts, part.Text)
+						ordered = append(ordered, map[string]any{"type": "text", "text": part.Text})
 					}
 				case llm.ContentImage:
 					if err := llm.ValidateImageSource(part); err != nil {
 						return openaiRequest{}, err
 					}
-					imageParts = append(imageParts, part)
+					hasMedia = true
+					ordered = append(ordered, map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]string{"url": fmt.Sprintf("data:%s;base64,%s", part.Source.MediaType, part.Source.Data)},
+					})
 				case llm.ContentDocument:
 					if err := llm.ValidateDocumentSource(part); err != nil {
 						return openaiRequest{}, err
@@ -409,33 +418,19 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (openaiRequest, erro
 					if compat.documents == documentUnsupported {
 						return openaiRequest{}, fmt.Errorf("%s: PDF documents are not supported on Chat Completions (the host takes files only on its Responses API); send the text or page images instead", c.providerName)
 					}
-					docParts = append(docParts, part)
+					hasMedia = true
+					// Documents (PDFs) go in the host's own part (compat.documents).
+					ordered = append(ordered, documentPart(compat.documents, part, docIndex))
+					docIndex++
 				}
 			}
 
-			// If images or documents are present, build a multipart content array.
-			// Documents (PDFs) go in the host's own part (compat.documents).
-			if len(imageParts) > 0 || len(docParts) > 0 {
-				var contentArray []any
-				if len(textParts) > 0 {
-					contentArray = append(contentArray, map[string]any{
-						"type": "text",
-						"text": strings.Join(textParts, "\n"),
-					})
-				}
-				for _, img := range imageParts {
-					dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
-					contentArray = append(contentArray, map[string]any{
-						"type":      "image_url",
-						"image_url": map[string]string{"url": dataURI},
-					})
-				}
-				for i, doc := range docParts {
-					contentArray = append(contentArray, documentPart(compat.documents, doc, i))
-				}
+			// With an image or document, the content is a multipart array in
+			// the original part order.
+			if hasMedia {
 				apiReq.Messages = append(apiReq.Messages, openaiMessage{
 					Role:    "user",
-					Content: contentArray,
+					Content: ordered,
 				})
 				continue
 			}

@@ -3,6 +3,7 @@ package llm_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -927,5 +928,84 @@ func TestTemperatureExplicitZero(t *testing.T) {
 
 	if !strings.Contains(string(captured), `"temperature"`) {
 		t.Errorf("explicit zero temperature should be present on wire\nwire: %s", string(captured))
+	}
+}
+
+// Content parts keep their order on the wire: a label before a document stays
+// before it, and the closing delimiter after it. openai_compat and Responses
+// used to send all text first (joined), then every image, then every document,
+// so a grader's <datei>…</datei> boundary landed before the file it closed.
+func TestMixedContentPartsKeepTheirOrderOnTheWire(t *testing.T) {
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	pdfA, pdfB := b64("%PDF-1.4 AAAAAAAA"), b64("%PDF-1.4 BBBBBBBB")
+	pngA, pngB := b64("\x89PNG\r\n\x1a\nIMAGE-ONE"), b64("\x89PNG\r\n\x1a\nIMAGE-TWO")
+	doc := func(data, title string) llm.ContentPart {
+		return llm.ContentPart{Type: llm.ContentDocument, Title: title,
+			Document: &llm.DocumentSource{Type: llm.DocumentSourceBase64, MediaType: "application/pdf", Data: data}}
+	}
+	img := func(data string) llm.ContentPart {
+		return llm.ContentPart{Type: llm.ContentImage, Source: &llm.ImageSource{Type: "base64", MediaType: "image/png", Data: data}}
+	}
+	text := func(s string) llm.ContentPart { return llm.ContentPart{Type: llm.ContentText, Text: s} }
+
+	docsMsg := llm.Message{Role: llm.RoleUser, Content: []llm.ContentPart{
+		text("OPEN-A"), doc(pdfA, "a.pdf"), text("CLOSE-A"), text("OPEN-B"), doc(pdfB, "b.pdf"), text("CLOSE-B-END"),
+	}}
+	imgsMsg := llm.Message{Role: llm.RoleUser, Content: []llm.ContentPart{
+		text("BEFORE-IMAGES"), img(pngA), text("BETWEEN-IMAGES"), img(pngB), text("AFTER-IMAGES"),
+	}}
+	docsOrder := []string{"OPEN-A", pdfA, "CLOSE-A", "OPEN-B", pdfB, "CLOSE-B-END"}
+	imgsOrder := []string{"BEFORE-IMAGES", pngA, "BETWEEN-IMAGES", pngB, "AFTER-IMAGES"}
+
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		http.Error(w, `{"error":{"message":"stop"}}`, http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		provider, model, base string
+		docs                  bool
+	}{
+		{"openai", "gpt-4.1", srv.URL + "/v1", true},              // openai_compat, "file" parts
+		{"mistral", "mistral-large-4-0", srv.URL + "/v1", true},   // openai_compat, "document_url"
+		{"xai", "grok-4.7", srv.URL + "/v1", false},               // openai_compat, images only
+		{"openai", "gpt-6-luna", srv.URL + "/v1", true},           // openai_responses
+		{"anthropic", "claude-haiku-5-5", srv.URL + "/v1", true},  // anthropic
+		{"gemini", "gemini-3.8-flash", srv.URL + "/v1beta", true}, // gemini
+		{"gemini-interactions", "gemini-3.8-flash", srv.URL + "/v1beta", true},
+	} {
+		c, err := llm.NewClient(llm.Config{Provider: tc.provider, Model: tc.model, APIKey: "k", BaseURL: tc.base, DisableRetries: true})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.provider, err)
+		}
+		cases := map[string][]string{"images": imgsOrder}
+		msgs := map[string]llm.Message{"images": imgsMsg}
+		if tc.docs {
+			cases["documents"], msgs["documents"] = docsOrder, docsMsg
+		}
+		for name, want := range cases {
+			body = nil
+			_, _ = c.Complete(context.Background(), llm.Request{Messages: []llm.Message{msgs[name]}, MaxTokens: 10})
+			if body == nil {
+				t.Errorf("%s/%s %s: no request sent", tc.provider, tc.model, name)
+				continue
+			}
+			last := -1
+			for _, marker := range want {
+				at := bytes.Index(body, []byte(marker))
+				if at < 0 {
+					t.Errorf("%s/%s %s: %q missing from the body", tc.provider, tc.model, name, marker)
+					break
+				}
+				if at < last {
+					t.Errorf("%s/%s %s: %q is out of order; body: %s", tc.provider, tc.model, name, marker, body)
+					break
+				}
+				last = at
+			}
+		}
+		c.Close()
 	}
 }

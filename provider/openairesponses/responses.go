@@ -898,9 +898,11 @@ func toolChoiceWire(tc *llm.ToolChoice) any {
 // buildUserMessage handles user messages: text, images, and tool results.
 // Tool results are emitted as function_call_output items (Responses API format).
 func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) error {
+	// Parts keep their order (a label before a document stays before it);
+	// textParts is the plain-string form for a message with no media.
 	var textParts []string
-	var imageParts []llm.ContentPart
-	var docParts []llm.ContentPart
+	var ordered []any
+	hasMedia, docIndex := false, 0
 
 	for _, part := range msg.Content {
 		switch part.Type {
@@ -914,12 +916,17 @@ func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) err
 		case llm.ContentText:
 			if part.Text != "" {
 				textParts = append(textParts, part.Text)
+				ordered = append(ordered, map[string]any{"type": "input_text", "text": part.Text})
 			}
 		case llm.ContentImage:
 			if err := llm.ValidateImageSource(part); err != nil {
 				return err
 			}
-			imageParts = append(imageParts, part)
+			hasMedia = true
+			ordered = append(ordered, map[string]any{
+				"type":      "input_image",
+				"image_url": fmt.Sprintf("data:%s;base64,%s", part.Source.MediaType, part.Source.Data),
+			})
 		case llm.ContentDocument:
 			// PDFs go as input_file items with the bytes as a data URL. The
 			// adapter refused them, so a session that had read a PDF on
@@ -930,40 +937,26 @@ func (c *Client) buildUserMessage(apiReq *responsesRequest, msg llm.Message) err
 			if llm.IsTextDocument(part) {
 				return fmt.Errorf("%s: text documents are Anthropic-only; send the text as a text part", c.providerName)
 			}
-			docParts = append(docParts, part)
+			hasMedia = true
+			docIndex++
+			filename := part.Title
+			if filename == "" {
+				filename = fmt.Sprintf("document-%d.pdf", docIndex)
+			}
+			ordered = append(ordered, map[string]any{
+				"type":      "input_file",
+				"filename":  filename,
+				"file_data": fmt.Sprintf("data:%s;base64,%s", part.Document.MediaType, part.Document.Data),
+			})
 		}
 	}
 
-	// Build multipart content for images and documents
-	if len(imageParts) > 0 || len(docParts) > 0 {
-		var contentArray []any
-		if len(textParts) > 0 {
-			contentArray = append(contentArray, map[string]any{
-				"type": "input_text",
-				"text": strings.Join(textParts, "\n"),
-			})
-		}
-		for _, img := range imageParts {
-			dataURI := fmt.Sprintf("data:%s;base64,%s", img.Source.MediaType, img.Source.Data)
-			contentArray = append(contentArray, map[string]any{
-				"type":      "input_image",
-				"image_url": dataURI,
-			})
-		}
-		for i, doc := range docParts {
-			filename := doc.Title
-			if filename == "" {
-				filename = fmt.Sprintf("document-%d.pdf", i+1)
-			}
-			contentArray = append(contentArray, map[string]any{
-				"type":      "input_file",
-				"filename":  filename,
-				"file_data": fmt.Sprintf("data:%s;base64,%s", doc.Document.MediaType, doc.Document.Data),
-			})
-		}
+	// With an image or document, the content is a multipart array in the
+	// original part order.
+	if hasMedia {
 		apiReq.Input = append(apiReq.Input, responsesInputMsg{
 			Role:    "user",
-			Content: contentArray,
+			Content: ordered,
 		})
 		return nil
 	}

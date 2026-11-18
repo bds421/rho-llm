@@ -903,3 +903,42 @@ func TestLiveNew_OpenAICompatPDF(t *testing.T) {
 		})
 	}
 }
+
+// Labelled documents keep their labels: two PDFs, each between its own
+// <file name=…> and </file>, and the model is asked about the second one. On
+// openai_compat and Responses the labels used to arrive before both files.
+func TestLiveNew_LabelledDocumentsKeepTheirOrder(t *testing.T) {
+	pdf := func(line string) llm.ContentPart {
+		return llm.ContentPart{Type: llm.ContentDocument,
+			Document: &llm.DocumentSource{Type: llm.DocumentSourceBase64, MediaType: "application/pdf", Data: livePDF(line)}}
+	}
+	text := func(s string) llm.ContentPart { return llm.ContentPart{Type: llm.ContentText, Text: s} }
+	req := llm.Request{MaxTokens: 800, Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentPart{
+		text("<file name=first.pdf>"), pdf("The secret word is PELICAN."), text("</file>"),
+		text("<file name=second.pdf>"), pdf("The secret word is WALRUS."), text("</file>"),
+		text("What is the secret word in second.pdf? Answer with the word only."),
+	}}}}
+	for _, tc := range []struct{ provider, model, key string }{
+		{"mistral", "mistral-medium-latest", envKey("MISTRAL_API_KEY", "MISTRAL_API_KEYS")},
+		{"openai", "gpt-4.1", envKey("OPENAI_API_KEY", "OPENAI_API_KEYS")},
+		{"openai", "gpt-6-luna", envKey("OPENAI_API_KEY", "OPENAI_API_KEYS")},
+	} {
+		t.Run(tc.provider+"/"+tc.model, func(t *testing.T) {
+			requireLiveAPI(t, tc.key, tc.provider+" key not set")
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			c, err := llm.NewClient(llm.Config{Provider: tc.provider, Model: tc.model, APIKey: tc.key, DisableRetries: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			resp, err := c.Complete(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.ToUpper(resp.Content); !strings.Contains(got, "WALRUS") || strings.Contains(got, "PELICAN") {
+				t.Errorf("content %q, want WALRUS only", resp.Content)
+			}
+		})
+	}
+}

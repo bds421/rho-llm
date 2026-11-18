@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Content part order on OpenAI-compatible hosts and the Responses API.** A
+  user message with images or PDFs went out as all its text first (joined into
+  one part), then every image, then every document. A label before a file and
+  a closing delimiter after it ended up ahead of the file, so a grader's
+  `<datei>…</datei>` boundary sat before the submission it closed. Parts now go
+  out in their original order, one entry each; text-only messages are
+  unchanged. Anthropic, Gemini and Interactions already kept the order (wire
+  test over all protocols). Checked live: Mistral, `gpt-4.1` and `gpt-6-luna`
+  answer from the right one of two labelled PDFs. Reported from the FH
+  grading project.
+
 ## [0.20.1] - 2026-11-23
 
 ### Fixed
