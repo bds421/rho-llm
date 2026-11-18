@@ -44,13 +44,19 @@ var presets = map[string]ProviderPreset{
 	"qwen-cn":      {BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	// DeepSeek chat is OpenAI-compatible at the host root (paths are /chat/completions).
 	// No first-party embeddings API — use another host for vectors.
-	"deepseek":   {BaseURL: "https://api.deepseek.com", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"cohere":     {BaseURL: "https://api.cohere.ai/compatibility/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"together":   {BaseURL: "https://api.together.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"fireworks":  {BaseURL: "https://api.fireworks.ai/inference/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"nvidia":     {BaseURL: "https://integrate.api.nvidia.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"deepseek":  {BaseURL: "https://api.deepseek.com", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"cohere":    {BaseURL: "https://api.cohere.ai/compatibility/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"together":  {BaseURL: "https://api.together.ai/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"fireworks": {BaseURL: "https://api.fireworks.ai/inference/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	"nvidia":    {BaseURL: "https://integrate.api.nvidia.com/v1", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	// Sonar Chat Completions: support ended 2026-09-27, but synchronous and streaming
+	// requests keep working (reformulated as Agent API requests, rolling out by model;
+	// docs.perplexity.ai migrate-from-sonar/overview, 2026-11-18).
 	"perplexity": {BaseURL: "https://api.perplexity.ai", AuthHeader: "Bearer", Protocol: "openai_compat"},
-	"deepinfra":  {BaseURL: "https://api.deepinfra.com/v1/openai", AuthHeader: "Bearer", Protocol: "openai_compat"},
+	// Perplexity Agent API (POST /v1/agent, alias /v1/responses), opt-in: the Responses
+	// wire format with Perplexity's dialect (provider/openairesponses/dialect.go).
+	"perplexity-agent": {BaseURL: "https://api.perplexity.ai/v1", AuthHeader: "Bearer", Protocol: "openai_responses"},
+	"deepinfra":        {BaseURL: "https://api.deepinfra.com/v1/openai", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	// Z.ai / GLM — OpenAI-compatible chat (+ tools/vision where the model admits it).
 	"zai":  {BaseURL: "https://api.z.ai/api/paas/v4", AuthHeader: "Bearer", Protocol: "openai_compat"},
 	"z-ai": {BaseURL: "https://api.z.ai/api/paas/v4", AuthHeader: "Bearer", Protocol: "openai_compat"},

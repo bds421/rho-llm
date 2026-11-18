@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-three providers (35 preset names including aliases and regional endpoints) across four distinct wire protocols (`anthropic`, `gemini`, `openai_compat`, `openai_responses`).
+`github.com/bds421/rho-llm` is a Go package providing a **unified, provider-agnostic LLM client interface** that covers twenty-three providers (37 preset names including aliases, regional endpoints and opt-in APIs) across five distinct wire protocols (`anthropic`, `gemini`, `gemini_interactions`, `openai_compat`, `openai_responses`).
 
 **Key capabilities:**
 - Single `Client` interface for all providers and protocols
@@ -76,7 +76,7 @@ github.com/bds421/rho-llm/
     ├── gemini/gemini.go             # Native Google Gemini API adapter (+ modality)
     ├── geminibatch/                 # Gemini Batch driver (completion + embeddings)
     ├── openaicompat/                # OpenAI-compatible chat + modality adapter
-    ├── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning)
+    ├── openairesponses/responses.go # OpenAI Responses API adapter (GPT-5 reasoning); dialect.go = Perplexity Agent API
     └── openaibatch/openaibatch.go   # OpenAI Batch API driver (async; Files + Batches REST)
 ```
 
@@ -826,6 +826,15 @@ aistudio.google.com/docs/interactions and the API reference and confirmed live o
 - Tool use: OpenAI function-calling format, translated to/from the shared `ToolCall` types. Multiple tool results in a single Anthropic-style message are expanded to separate `role: "tool"` messages as OpenAI requires.
 - Thinking: `reasoning_content` field (used by Ollama Qwen3, DeepSeek-R1, etc.) is parsed into `resp.Thinking` / `EventThinking`. Requesting thinking via `ThinkingLevel` is still rejected — the adapter can *parse* thinking from models that think by default, but cannot *request* it.
 - Works for: OpenAI, xAI/Grok, Groq, Cerebras, Mistral, OpenRouter, Ollama, vLLM, LM Studio, any custom proxy
+- The `perplexity` preset (Sonar) is this adapter, unchanged: Sonar Chat Completions support ended 2026-09-27 but synchronous and streaming requests keep working, reformulated as Agent API requests (docs.perplexity.ai migrate-from-sonar/overview, 2026-11-18). Its registry prices are unverified for that path.
+
+### OpenAI Responses and its dialects (`provider/openairesponses/`)
+
+- Endpoint: `BaseURL` + `/responses`; used for GPT-5/6 reasoning models on `openai` and for the opt-in `perplexity-agent` preset.
+- Per-host differences live as data in `dialect.go` (the zero dialect is OpenAI's and `openai_compat` never reaches it). The Perplexity dialect (`perplexity-agent`, or any Responses-protocol `BaseURL` on `api.perplexity.ai`) is the Agent API (`POST /v1/agent`, alias `POST /v1/responses`; docs.perplexity.ai/api-reference/agent-post): `Provider()` is `perplexity-agent`; a bare-host `BaseURL` gets `/v1` appended; `Request.System` goes to top-level `instructions`; `ThinkingMax` is sent as `reasoning.effort: "max"`. Perplexity-only request fields (`effort`, `max_steps`, `tools`, `language_preference`) ride `SamplingParams`.
+- Stream hardening that applies to every host: a `response.failed` event is an error even when it has no nested response (Perplexity sends `error` at the top level); a function call that arrives only in `response.output_item.done` or only in the terminal response (no `function_call_arguments.*` events) is delivered once, bounded by `MaxToolInputBytes`; unknown events (`response.reasoning.*`) are skipped.
+- Usage: `input_tokens_details.cached_tokens` (a subset of `input_tokens`, the OpenAI field the Agent API example also shows) is split into `CacheReadTokens` and priced at the row's cache-read rate. Not mapped: Agent API `search_results` output items and URL-citation annotations, `usage.cost`, background mode, `GET /v1/models`.
+- Registry: the flat-priced Agent API models are registered under `Provider: "perplexity-agent"` with vendor-prefixed IDs, a catalog separate from the Sonar rows (an Agent ID never resolves on `perplexity`, nor Sonar on `perplexity-agent`); context-tiered models are left out.
 
 ---
 

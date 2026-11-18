@@ -38,6 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match. Other adapters and Message Batches refuse `Thread`. Checked against
   platform.claude.com/docs/en/build-with-claude/message-threads and live on
   `claude-haiku-5-5` (2026-11-18).
+- **`perplexity-agent` preset, opt-in** (R4). The Perplexity Agent API
+  (`POST /v1/agent`, alias `/v1/responses`) at `https://api.perplexity.ai/v1`
+  over the Responses wire format. `provider/openairesponses` gains a per-host
+  dialect (`dialect.go`): `Provider()` is `perplexity-agent`, a bare-host
+  `BaseURL` gets `/v1`, the system prompt goes to `instructions`, `max`
+  reasoning effort is kept. Pass `effort`, `max_steps` and `tools` via
+  `SamplingParams`; cache reads (`input_tokens_details.cached_tokens`) are
+  priced. Registry rows for the flat-priced Agent API models under their own
+  `perplexity-agent` catalog (`perplexity/{sonar,kimi-k3,glm-5.3,glm-5.3-flash,
+  deepseek-v4-pro-0813,nemotron-3.5-super-120b-a12b}`,
+  `anthropic/claude-{fable-5-2,opus-5-5,sonnet-5-5}`,
+  `google/gemini-4-{argon,carbon,hydrogen}`), from
+  docs.perplexity.ai/docs/agent-api/models (2026-11-18); a catalog's model is
+  refused on the other preset. The `perplexity` preset (Sonar on
+  `/chat/completions`) is unchanged: Perplexity ended Sonar Chat Completions
+  support on 2026-09-27, but synchronous and streaming requests keep working.
+  Written from the docs; not checked against a live Perplexity key.
 
 ### Changed
 
@@ -55,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Responses streaming** (R4). A `response.failed` event without a nested
+  response ended the stream as a clean completion; it is now an error. A
+  function call delivered only in `response.output_item.done` or in the
+  terminal response is emitted exactly once (it was dropped). Checked live
+  that an OpenAI streamed tool call still arrives exactly once (`gpt-6-luna`).
 - **Gemini sampling keys in `SamplingParams`** (F6). `temperature`, `top_p`,
   `top_k` (and `topP` / `topK`) are merged at the top level of the body, where
   Gemini has no such field: every Gemini model answered with a 400 "Unknown

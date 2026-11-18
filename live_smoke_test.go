@@ -793,3 +793,43 @@ func TestLiveNew_AnthropicMessageThreads(t *testing.T) {
 		t.Errorf("unknown thread: code %q (err %v), want %q", got, err, llm.ThreadNotFound)
 	}
 }
+
+// The Responses stream changes for the Perplexity Agent API (R4) also run for
+// OpenAI: a streamed tool call must still arrive exactly once. Live 2026-11-18.
+func TestLiveNew_OpenAIResponsesStreamToolCallOnce(t *testing.T) {
+	key := envKey("OPENAI_API_KEY", "OPENAI_API_KEYS")
+	requireLiveAPI(t, key, "OPENAI_API_KEY not set")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	c, err := llm.NewClient(llm.Config{Provider: "openai", Model: "gpt-6-luna", APIKey: key, DisableRetries: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	req := llm.Request{
+		Messages:      []llm.Message{llm.NewTextMessage(llm.RoleUser, "What is the weather in Paris? Use the tool.")},
+		MaxTokens:     2000,
+		ThinkingLevel: llm.ThinkingLow,
+		Tools: []llm.Tool{{Name: "get_weather", Description: "Current weather for a city.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}, "required": []string{"city"},
+		}}},
+		ToolChoice: &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: "get_weather"},
+	}
+	var calls []*llm.ToolCall
+	var done llm.StreamEvent
+	for ev, err := range c.Stream(ctx, req) {
+		if err != nil {
+			t.Fatalf("stream: %v", err)
+		}
+		switch ev.Type {
+		case llm.EventToolUse:
+			calls = append(calls, ev.ToolCall)
+		case llm.EventDone:
+			done = ev
+		}
+	}
+	if len(calls) != 1 || calls[0].Name != "get_weather" || done.StopReason != llm.StopToolUse {
+		t.Fatalf("calls %+v stop %q, want exactly one get_weather call and tool_use", calls, done.StopReason)
+	}
+	t.Logf("tool call input: %v", calls[0].Input)
+}

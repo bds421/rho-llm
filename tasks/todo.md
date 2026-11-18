@@ -112,9 +112,6 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
   build with per-provider override files. Go equivalent: `go generate` → `registry_gen.go` +
   overrides; move the hand lists (`adaptiveThinkingModels`, `*WithoutSamplingControls`) into
   metadata; `ModelInfo.VerifiedAt` + staleness note.
-- 🟡 **R4 — Perplexity Agent API adapter — M.** Sonar Chat Completions ended 2026-09-27;
-  documented path is `POST /v1/sonar`, replacement `POST /v1/agent`; only published rate is
-  `perplexity/sonar` $0.25 / $2.50, so our `sonar*` rows are stale.
 - 🟢 **R5 — DashScope workspace endpoints** (`https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com`,
   recommended since 2026-10-13) and the Qwen Token Plan CN provider.
 - 🟢 **R6 — Unconfirmed data.** OpenAI cache-read prices for `gpt-5.2`/`5.1`/`5`/`5-mini`/
@@ -137,7 +134,9 @@ None open (B1–B37 shipped in v0.17.1, B15b and B31b in v0.17.2).
     enforced for all accounts (P1 covers it via `drop_block`).
   - Others: DashScope `qwen4-max` (no price published), xAI `grok-imagine-image-2.0` /
     `grok-imagine-video-1.5(-lite)`, DeepSeek `deepseek-flash` built-in tools and file input
-    (2026-11-13), Perplexity Agent API `effort` (was `preset`) and Decisions API (R4),
+    (2026-11-13), Perplexity Agent API live check (`perplexity-agent` is docs-only: no key),
+    citations / `search_results` / `usage.cost` not mapped, Sonar row prices unverified,
+    Decisions API,
     OpenRouter `openai/gpt-6.2-astra-pro`.
 - 🟢 **R7 — Live but unregistered.** Mistral `voxtral-*`, `mistral-ocr-*`, `codestral-embed`;
   Z.ai `glm-5.3-flashx`; `kimi-k3.1-pro-highspeed`; DeepInfra Kimi K3.1 Pro, DeepSeek V4 Pro;

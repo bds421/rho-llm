@@ -38,6 +38,7 @@ type Client struct {
 	baseURL      string
 	authHeader   string
 	providerName string
+	dialect      dialect
 }
 
 // New creates a new OpenAI Responses API client.
@@ -58,7 +59,12 @@ func New(cfg llm.Config) (*Client, error) {
 		}
 	}
 
+	d := dialectFor(cfg)
+	baseURL = d.fixBaseURL(baseURL)
 	providerName := cfg.ProviderName
+	if providerName == "" {
+		providerName = d.name
+	}
 	if providerName == "" {
 		providerName = "openai_responses"
 	}
@@ -74,6 +80,7 @@ func New(cfg llm.Config) (*Client, error) {
 		baseURL:      baseURL,
 		authHeader:   authHeader,
 		providerName: providerName,
+		dialect:      d,
 	}, nil
 }
 
@@ -245,7 +252,31 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 	}
 	var completed bool
 	var emittedToolCall bool // the stream emitted at least one function call
-	var sawRefusal bool      // the model declined (response.refusal.delta)
+	// Calls already yielded, by call_id and item id, so the fallbacks below
+	// (output_item.done, the terminal response) never repeat one.
+	emittedCalls := map[string]bool{}
+	// emitCall yields one function call; false when the caller stopped.
+	emitCall := func(itemID, callID, name, args string) bool {
+		input, err := toolinput.Decode(args)
+		if err != nil {
+			slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", name, "error", err)
+		}
+		if itemID != "" {
+			emittedCalls["item:"+itemID] = true
+		}
+		if callID != "" {
+			emittedCalls["call:"+callID] = true
+		}
+		emittedToolCall = true
+		return yield(llm.StreamEvent{
+			Type:     llm.EventToolUse,
+			ToolCall: &llm.ToolCall{ID: callID, Name: name, Input: input},
+		}, nil)
+	}
+	alreadyEmitted := func(itemID, callID string) bool {
+		return (itemID != "" && emittedCalls["item:"+itemID]) || (callID != "" && emittedCalls["call:"+callID])
+	}
+	var sawRefusal bool // the model declined (response.refusal.delta)
 
 	for scanner.Scan() {
 		data, ok := llm.SSEData(scanner.Text())
@@ -370,21 +401,30 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			if args == "" {
 				args = buffered
 			}
-			input, err := toolinput.Decode(args)
-			if err != nil {
-				slog.Debug("failed to parse tool input JSON", "provider", c.providerName, "tool", ev.Name, "error", err)
-			}
-			if !yield(llm.StreamEvent{
-				Type: llm.EventToolUse,
-				ToolCall: &llm.ToolCall{
-					ID:    ev.CallID,
-					Name:  ev.Name,
-					Input: input,
-				},
-			}, nil) {
+			if !emitCall(ev.ItemID, ev.CallID, ev.Name, args) {
 				return
 			}
-			emittedToolCall = true
+
+		case "response.output_item.done":
+			// Hosts that complete a function call without the arguments
+			// events (Perplexity's Agent API documents none) still deliver
+			// it whole here; calls already emitted are skipped.
+			var ev struct {
+				Item responsesOutputItem `json:"item"`
+			}
+			if err := json.Unmarshal([]byte(data), &ev); err != nil || ev.Item.Type != "function_call" {
+				continue
+			}
+			if alreadyEmitted(ev.Item.ID, ev.Item.CallID) {
+				continue
+			}
+			if len(ev.Item.Arguments) > maxToolInput {
+				yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
+				return
+			}
+			if !emitCall(ev.Item.ID, ev.Item.CallID, ev.Item.Name, ev.Item.Arguments) {
+				return
+			}
 
 		case "response.reasoning_summary_text.delta":
 			var ev struct {
@@ -405,6 +445,9 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 		case "response.completed", "response.incomplete", "response.failed":
 			var ev struct {
 				Response responsesResponse `json:"response"`
+				// Error is the top-level error of a response.failed event on
+				// hosts that do not nest it in the response (Perplexity).
+				Error *responsesError `json:"error"`
 			}
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				if !yield(llm.StreamEvent{}, fmt.Errorf("malformed completed event from %s: %w", c.providerName, err)) {
@@ -414,6 +457,15 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 			}
 			inputTokens, cacheReadTokens := ev.Response.Usage.splitInput()
 			outputTokens, thinkingTokens := ev.Response.Usage.splitOutput()
+			if envelope.Type == "response.failed" && ev.Response.Status != "failed" {
+				// A failed event is a failure whatever the status field
+				// says: without this a response-less event ended as a
+				// clean completion.
+				ev.Response.Status = "failed"
+				if ev.Response.Error == nil {
+					ev.Response.Error = ev.Error
+				}
+			}
 			if ev.Response.Status == "failed" {
 				// A failed response is an error, not a completion. The
 				// EventError carries the usage the provider reported.
@@ -426,6 +478,20 @@ func (c *Client) parseStream(body io.Reader, yield func(llm.StreamEvent, error) 
 					CacheReadTokens: cacheReadTokens,
 				}, c.apiError(ev.Response.Error))
 				return
+			}
+			// Calls only the final response carries (no arguments events, no
+			// item-done event) are delivered before the turn ends.
+			for _, item := range ev.Response.Output {
+				if item.Type != "function_call" || alreadyEmitted(item.ID, item.CallID) {
+					continue
+				}
+				if len(item.Arguments) > maxToolInput {
+					yield(llm.StreamEvent{}, fmt.Errorf("tool input exceeded %d bytes", maxToolInput))
+					return
+				}
+				if !emitCall(item.ID, item.CallID, item.Name, item.Arguments) {
+					return
+				}
 			}
 			stopReason, rawStopReason := responseStopReasons(&ev.Response)
 			if sawRefusal && stopReason == llm.StopEndTurn {
@@ -501,6 +567,9 @@ type responsesRequest struct {
 	ToolChoice      any                 `json:"tool_choice,omitempty"`
 	Store           bool                `json:"store"`
 	Stream          bool                `json:"stream,omitempty"`
+	// Instructions carries the system prompt on hosts whose dialect takes it
+	// there rather than as a system input item (dialect.systemAsInstructions).
+	Instructions string `json:"instructions,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -710,12 +779,17 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (responsesRequest, e
 	if summary == llm.ReasoningSummaryOmitted {
 		summary = llm.ReasoningSummaryNone
 	}
+	if c.dialect.keepMaxEffort && (thinkingLevel == llm.ThinkingMax || req.Effort == llm.EffortMax) {
+		effort = string(llm.ThinkingMax)
+	}
 	if effort != "" || summary != llm.ReasoningSummaryNone {
 		apiReq.Reasoning = &responsesReasoning{Effort: effort, Summary: string(summary)}
 	}
 
 	// Add system message
-	if req.System != "" {
+	if req.System != "" && c.dialect.systemAsInstructions {
+		apiReq.Instructions = req.System
+	} else if req.System != "" {
 		apiReq.Input = append(apiReq.Input, responsesInputMsg{
 			Role:    "system",
 			Content: req.System,

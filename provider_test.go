@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -714,5 +715,118 @@ func TestGeminiInteractionsThroughFactory(t *testing.T) {
 	_, err = c.Complete(context.Background(), llm.Request{Messages: msgs, ResponseFormat: &llm.ResponseFormat{Type: llm.ResponseFormatJSONObject}})
 	if err == nil || hits != 1 {
 		t.Errorf("structured output: err=%v hits=%d, want refusal before the request", err, hits)
+	}
+}
+
+// The Sonar preset is untouched: still Chat Completions on the bare host, with
+// its model rows and no Agent API model ID aliased onto it.
+func TestPerplexitySonarPresetUnchanged(t *testing.T) {
+	preset, ok := llm.PresetFor("perplexity")
+	if !ok || preset.BaseURL != "https://api.perplexity.ai" || preset.Protocol != "openai_compat" || preset.AuthHeader != "Bearer" {
+		t.Fatalf("perplexity preset = %+v", preset)
+	}
+	if got := llm.ResolveModelAlias("sonar"); got != "sonar" {
+		t.Errorf("sonar alias = %q: an Agent API ID must never be sent over /chat/completions", got)
+	}
+	for _, id := range []string{"sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"} {
+		if _, retired := llm.RetiredModelReplacement(id); retired {
+			t.Errorf("%s is retired; Sonar sync and stream requests still work", id)
+		}
+		if _, err := llm.ResolveCapabilityProfile(llm.Config{Provider: "perplexity", Model: id}); err != nil {
+			t.Errorf("%s: %v", id, err)
+		}
+	}
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c","model":"sonar","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+	c, err := llm.NewClient(llm.Config{Provider: "perplexity", Model: "sonar", APIKey: "k", BaseURL: srv.URL, MaxTokens: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Complete(context.Background(), llm.Request{System: "s", Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "x")}}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/chat/completions" || c.Provider() != "perplexity" {
+		t.Fatalf("path = %q provider = %q, want /chat/completions on perplexity", path, c.Provider())
+	}
+}
+
+// The opt-in perplexity-agent preset reaches the Agent API through the
+// Responses adapter. Wire shapes follow docs.perplexity.ai/api-reference/agent-post;
+// nothing was recorded live.
+func TestPerplexityAgentPresetEndToEnd(t *testing.T) {
+	preset, ok := llm.PresetFor("perplexity-agent")
+	if !ok || preset.BaseURL != "https://api.perplexity.ai/v1" || preset.Protocol != "openai_responses" {
+		t.Fatalf("perplexity-agent preset = %+v", preset)
+	}
+	if got := llm.GetDefaultModel("perplexity-agent"); got != "" {
+		t.Errorf("default model = %q, want none", got)
+	}
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","status":"completed","model":"perplexity/sonar",` +
+			`"output":[{"type":"message","content":[{"type":"output_text","text":"hi"}]}],` +
+			`"usage":{"input_tokens":1000000,"output_tokens":0,"total_tokens":1000000,"input_tokens_details":{"cached_tokens":400000}}}`))
+	}))
+	defer srv.Close()
+
+	c, err := llm.NewClient(llm.Config{Provider: "perplexity-agent", Model: "perplexity/sonar", APIKey: "k", BaseURL: srv.URL, MaxTokens: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	resp, err := c.Complete(context.Background(), llm.Request{System: "be brief", Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "hello")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/responses" || gotBody["model"] != "perplexity/sonar" || gotBody["instructions"] != "be brief" || resp.Content != "hi" || c.Provider() != "perplexity-agent" {
+		t.Fatalf("path=%q body=%v resp=%+v provider=%q", gotPath, gotBody, resp, c.Provider())
+	}
+	// cached_tokens (the OpenAI field the Agent API documents) prices cache reads:
+	// 600k at $0.25 + 400k at $0.0625 per 1M.
+	if resp.CacheReadTokens != 400000 || resp.InputTokens != 600000 {
+		t.Fatalf("usage = %d uncached / %d cache read", resp.InputTokens, resp.CacheReadTokens)
+	}
+	cost := llm.EstimateCost(llm.CostInput{Model: "perplexity/sonar", InputTokens: resp.InputTokens, CacheReadTokens: resp.CacheReadTokens})
+	if math.Abs(cost-(0.6*0.25+0.4*0.0625)) > 1e-9 {
+		t.Fatalf("cost = %v", cost)
+	}
+}
+
+// The Agent catalog is its own family: it never leaks into the Sonar preset
+// (an Agent model ID sent over /chat/completions) and vice versa, and a model
+// from the wrong catalog is refused at capability resolution.
+func TestPerplexityAgentRegistry(t *testing.T) {
+	agent := llm.ModelsByProvider("perplexity-agent")
+	if len(agent) < 10 {
+		t.Fatalf("only %d perplexity-agent rows", len(agent))
+	}
+	for _, m := range agent {
+		if m.Provider != "perplexity-agent" || m.InputPricePer1M <= 0 || m.OutputPricePer1M <= 0 || !strings.Contains(m.ID, "/") {
+			t.Errorf("row %+v: want a vendor-prefixed ID, a price and the agent provider", m)
+		}
+		if _, err := llm.ResolveCapabilityProfile(llm.Config{Provider: "perplexity-agent", Model: m.ID}); err != nil {
+			t.Errorf("%s: %v", m.ID, err)
+		}
+		if _, err := llm.ResolveCapabilityProfile(llm.Config{Provider: "perplexity", Model: m.ID}); err == nil {
+			t.Errorf("%s resolved on the Chat Completions preset", m.ID)
+		}
+	}
+	for _, m := range llm.ModelsByProvider("perplexity") {
+		if strings.Contains(m.ID, "/") {
+			t.Errorf("Agent API ID %s listed under perplexity", m.ID)
+		}
+	}
+	if _, err := llm.ResolveCapabilityProfile(llm.Config{Provider: "perplexity-agent", Model: "sonar-pro"}); err == nil {
+		t.Error("sonar-pro resolved on the Agent preset")
 	}
 }
