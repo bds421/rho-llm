@@ -667,3 +667,52 @@ func TestZaiPresetUsesDocumentedEndpoint(t *testing.T) {
 		t.Errorf("explicit BaseURL overridden: %q", got)
 	}
 }
+
+// The Gemini Interactions API is an opt-in protocol: its own preset, and the
+// default "gemini" and "google" presets stay on generateContent (F4).
+func TestGeminiInteractionsPresetIsOptIn(t *testing.T) {
+	for _, name := range []string{"gemini", "google"} {
+		if got := llm.ResolveProtocol(llm.Config{Provider: name, Model: "gemini-3.8-flash"}); got != "gemini" {
+			t.Errorf("%s resolves to %q, want gemini (generateContent)", name, got)
+		}
+	}
+	p, ok := llm.PresetFor("gemini-interactions")
+	if !ok || p.Protocol != "gemini_interactions" || p.SupportsBatch {
+		t.Fatalf("preset %+v ok=%v", p, ok)
+	}
+	if got := llm.ResolveProtocol(llm.Config{Provider: "gemini-interactions", Model: "gemini-3.8-flash"}); got != "gemini_interactions" {
+		t.Errorf("protocol %q", got)
+	}
+}
+
+// Through the factory: the registered driver answers, the model registry
+// recognizes the Gemini model under the new provider name, and a feature the
+// adapter lacks (structured output) is refused before any request is sent.
+func TestGeminiInteractionsThroughFactory(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if r.URL.Path != "/v1beta/interactions" || r.Header.Get("x-goog-api-key") != "k" {
+			t.Errorf("path %q key %q", r.URL.Path, r.Header.Get("x-goog-api-key"))
+		}
+		fmt.Fprint(w, `{"status":"completed","usage":{"total_input_tokens":4,"total_output_tokens":1},"steps":[{"type":"model_output","content":[{"type":"text","text":"Hi"}]}],"model":"gemini-3.8-flash"}`)
+	}))
+	defer srv.Close()
+	c, err := llm.NewClient(llm.Config{Provider: "gemini-interactions", Model: "flash", APIKey: "k", BaseURL: srv.URL + "/v1beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if c.Provider() != "gemini-interactions" {
+		t.Errorf("provider %q", c.Provider())
+	}
+	msgs := []llm.Message{llm.NewTextMessage(llm.RoleUser, "hi")}
+	resp, err := c.Complete(context.Background(), llm.Request{Messages: msgs, MaxTokens: 50})
+	if err != nil || resp.Content != "Hi" || resp.InputTokens != 4 {
+		t.Fatalf("%+v %v", resp, err)
+	}
+	_, err = c.Complete(context.Background(), llm.Request{Messages: msgs, ResponseFormat: &llm.ResponseFormat{Type: llm.ResponseFormatJSONObject}})
+	if err == nil || hits != 1 {
+		t.Errorf("structured output: err=%v hits=%d, want refusal before the request", err, hits)
+	}
+}

@@ -646,3 +646,65 @@ func TestLiveNew_OpenAIGPT62Sol(t *testing.T) {
 	}
 	t.Logf("gpt-6.2-sol: %q in=%d out=%d", resp.Content, resp.InputTokens, resp.OutputTokens)
 }
+
+// Gemini Interactions API (opt-in protocol): a tool turn with the signed
+// thought replayed, then a streamed answer. Live 2026-11-18.
+func TestLiveNew_GeminiInteractions(t *testing.T) {
+	key := envKey("GEMINI_API_KEY", "GEMINI_API_KEYS")
+	if key == "" {
+		key = os.Getenv("GOOGLE_API_KEY")
+	}
+	requireLiveAPI(t, key, "GEMINI_API_KEY/GOOGLE_API_KEY not set")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	c, err := llm.NewClient(llm.Config{Provider: "gemini-interactions", Model: "gemini-3.8-flash", APIKey: key, DisableRetries: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	tools := []llm.Tool{{
+		Name: "get_weather", Description: "Current weather for a city",
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}, "required": []string{"city"}},
+	}}
+	msgs := []llm.Message{llm.NewTextMessage(llm.RoleUser, "What is the weather in Paris? Use the tool.")}
+	resp, err := c.Complete(ctx, llm.Request{Messages: msgs, Tools: tools, MaxTokens: 500, ThinkingLevel: llm.ThinkingLow})
+	if err != nil {
+		t.Fatalf("tool turn: %v", err)
+	}
+	if resp.StopReason != llm.StopToolUse || len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "get_weather" {
+		t.Fatalf("tool turn: stop %q calls %+v", resp.StopReason, resp.ToolCalls)
+	}
+	if resp.ThinkingSignature == "" || resp.InputTokens <= 0 || resp.OutputTokens <= 0 {
+		t.Errorf("tool turn: signature %q usage in=%d out=%d", resp.ThinkingSignature, resp.InputTokens, resp.OutputTokens)
+	}
+
+	// Replay the assistant turn (signed thought + call) with its result, streamed.
+	call := resp.ToolCalls[0]
+	msgs = append(msgs,
+		llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+			{Type: llm.ContentThinking, ThinkingSignature: resp.ThinkingSignature},
+			{Type: llm.ContentToolUse, ToolUseID: call.ID, ToolName: call.Name, ToolInput: call.Input},
+		}},
+		llm.Message{Role: llm.RoleUser, Content: []llm.ContentPart{
+			{Type: llm.ContentToolResult, ToolResultID: call.ID, ToolResultContent: "sunny, 20C"},
+		}},
+	)
+	var text string
+	var done llm.StreamEvent
+	for ev, err := range c.Stream(ctx, llm.Request{Messages: msgs, Tools: tools, MaxTokens: 500, ThinkingLevel: llm.ThinkingLow}) {
+		if err != nil {
+			t.Fatalf("stream: %v", err)
+		}
+		switch ev.Type {
+		case llm.EventContent:
+			text += ev.Text
+		case llm.EventDone:
+			done = ev
+		}
+	}
+	if text == "" || done.StopReason != llm.StopEndTurn || done.OutputTokens <= 0 {
+		t.Errorf("stream: stop %q text %q done %+v", done.StopReason, text, done)
+	}
+	t.Logf("gemini-interactions: %q in=%d out=%d think=%d", text, done.InputTokens, done.OutputTokens, done.ThinkingTokens)
+}

@@ -131,6 +131,33 @@ cfg := llm.Config{
 }
 ```
 
+#### Gemini Interactions API (opt-in)
+
+Google calls `generateContent` "legacy" and points new work at the Interactions API
+(`POST /v1beta/interactions`). Select it with the `gemini-interactions` provider; the
+`gemini` and `google` presets keep using `generateContent`.
+
+```go
+cfg := llm.Config{Provider: "gemini-interactions", Model: "gemini-3.8-flash", APIKey: key}
+```
+
+It covers text, system prompt, images and PDFs, tools (`ToolChoice` included), thinking
+levels with thought summaries, streaming and usage. Not supported yet: structured output
+(`ResponseFormat`), `Effort`, `ThinkingBudget`, explicit caching, batch.
+
+- **Stateless by default.** Every call sends the whole transcript as input steps with
+  `store: false`, so Google keeps no copy (the API default is `store: true`; interactions are
+  retained 55 days on paid tiers). Opt in per request with
+  `Request.SamplingParams: map[string]any{"store": true}`. `previous_interaction_id` is not used.
+- **Thinking replays.** A signed thought comes back as `Response.ThinkingSignature` and goes
+  into the next request as a `thought` step (`Session` does this for you). A tool call made by
+  another provider carries no signature, so the adapter puts Google's placeholder signature in
+  front of it; Gemini 3 refuses a `function_call` step without one.
+- Thought tokens count against `max_output_tokens`; the adapter pads it for thinking models,
+  as the `gemini` adapter does.
+- Provenance is `gemini-interactions`: a handoff to or from the `gemini` provider degrades
+  thinking to text like any other cross-provider switch.
+
 #### Custom OpenAI-compatible endpoint
 
 Unknown providers (not in the presets list) **must** set `BaseURL`. Without it, `NewClient` returns an error to prevent typos from silently defaulting to an incorrect endpoint.
@@ -1562,6 +1589,7 @@ llm/
     all.go                               # Blank-imports all sub-packages
     anthropic/anthropic.go               # Anthropic Claude adapter
     gemini/gemini.go                     # Google Gemini adapter
+    geminiinteractions/                  # Gemini Interactions API adapter (opt-in, gemini-interactions)
     openaicompat/                         # Chat + modality OpenAI-compatible adapter
     openairesponses/responses.go         # OpenAI Responses API adapter (GPT-5 reasoning)
     openaibatch/openaibatch.go           # OpenAI Batch API driver (async; Files + Batches REST)

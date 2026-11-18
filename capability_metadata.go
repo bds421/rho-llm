@@ -304,6 +304,13 @@ func protocolCapabilityEnvelope(protocol string) CapabilitySet {
 			CapabilityVision, CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature,
 			CapabilityEmbeddings, CapabilityImageGeneration, CapabilityBatch, CapabilityTranscription,
 		)
+	case "gemini_interactions":
+		// Chat only: no structured output, embeddings, images, batch or
+		// transcription over this protocol yet.
+		return Capabilities(
+			CapabilityChat, CapabilityStream, CapabilityTools, CapabilityVision,
+			CapabilityDocumentInput, CapabilityReasoning, CapabilityTemperature,
+		)
 	case "openai_responses":
 		return Capabilities(CapabilityChat, CapabilityStream, CapabilityTools, CapabilityStructuredOutput, CapabilityVision, CapabilityDocumentInput, CapabilityBatch, CapabilityReasoning)
 	case "openai_compat":
@@ -325,7 +332,7 @@ func canonicalProvider(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "claude":
 		return "anthropic"
-	case "google":
+	case "google", "gemini-interactions":
 		return "gemini"
 	case "grok":
 		return "xai"
