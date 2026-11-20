@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Live coverage for every Gemini model.** `TestLiveNew_GeminiChatModelsAnswer`
+  sends one prompt to each Gemini chat model in the registry (15 today), so a
+  retired ID fails here first. `TestLiveNew_GeminiTranscription` transcribes a
+  short synthetic WAV (`testdata/speech.wav`) with `gemini-3.5-transcribe`, and
+  the embeddings smoke now also covers `gemini-embedding-2`. All five
+  untested image IDs were checked once by hand (2026-11-20, all return a PNG).
+
 ### Fixed
 
 - **Content part order on OpenAI-compatible hosts and the Responses API.** A

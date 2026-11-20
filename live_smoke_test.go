@@ -135,30 +135,33 @@ func TestLiveNew_GeminiEmbeddingsModality(t *testing.T) {
 	}
 	requireLiveAPI(t, key, "GEMINI_API_KEY/GOOGLE_API_KEY not set")
 
-	cfg := llm.Config{
-		Provider: "gemini", Model: "gemini-embedding-001", APIKey: key,
-		Timeout: 60 * time.Second, DisableRetries: true,
-	}
-	mc, err := llm.NewModalityClient(cfg)
-	if err != nil {
-		t.Fatalf("NewModalityClient: %v", err)
-	}
-	defer mc.Close()
+	for _, model := range []string{"gemini-embedding-001", "gemini-embedding-2"} {
+		t.Run(model, func(t *testing.T) {
+			mc, err := llm.NewModalityClient(llm.Config{
+				Provider: "gemini", Model: model, APIKey: key,
+				Timeout: 60 * time.Second, DisableRetries: true,
+			})
+			if err != nil {
+				t.Fatalf("NewModalityClient: %v", err)
+			}
+			defer mc.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
 
-	out, err := mc.GenerateEmbeddings(ctx, llm.EmbeddingRequest{
-		Model: "gemini-embedding-001",
-		Input: []string{"rho"}, // single short string — minimal tokens
-	})
-	if err != nil {
-		t.Fatalf("GenerateEmbeddings: %v", err)
+			out, err := mc.GenerateEmbeddings(ctx, llm.EmbeddingRequest{
+				Model: model,
+				Input: []string{"rho"}, // single short string — minimal tokens
+			})
+			if err != nil {
+				t.Fatalf("GenerateEmbeddings: %v", err)
+			}
+			if len(out.Embeddings) != 1 || len(out.Embeddings[0].Vector) < 8 {
+				t.Fatalf("unexpected embeddings: %+v", out)
+			}
+			t.Logf("%s dims=%d", model, len(out.Embeddings[0].Vector))
+		})
 	}
-	if len(out.Embeddings) != 1 || len(out.Embeddings[0].Vector) < 8 {
-		t.Fatalf("unexpected embeddings: %+v", out)
-	}
-	t.Logf("gemini embedding dims=%d", len(out.Embeddings[0].Vector))
 }
 
 func TestLiveNew_OpenAIBatchStillWorks(t *testing.T) {
@@ -941,4 +944,82 @@ func TestLiveNew_LabelledDocumentsKeepTheirOrder(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLiveNew_GeminiChatModelsAnswer sends one tiny prompt to every Gemini
+// chat model in the registry, so a retired or renamed ID shows up here
+// instead of in a consumer. Modality-only models (embeddings, images,
+// transcription) are skipped; they have their own smokes.
+func TestLiveNew_GeminiChatModelsAnswer(t *testing.T) {
+	key := envKey("GEMINI_API_KEY", "GEMINI_API_KEYS")
+	requireLiveAPI(t, key, "GEMINI_API_KEY not set")
+
+	var checked int
+	for _, m := range llm.ModelsByProvider("gemini") {
+		// Every Gemini chat model thinks; the modality-only entries do not.
+		if !m.Thinking && !m.SupportsThinking {
+			continue
+		}
+		checked++
+		t.Run(m.ID, func(t *testing.T) {
+			client, err := llm.NewClient(llm.Config{
+				Provider: "gemini", Model: m.ID, APIKey: key,
+				MaxTokens: 2048, Timeout: 120 * time.Second, DisableRetries: true,
+			})
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			defer client.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+			resp, err := client.Complete(ctx, llm.Request{
+				Messages: []llm.Message{llm.NewTextMessage(llm.RoleUser, "What is 17 + 25? Reply with the number only.")},
+			})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if !strings.Contains(resp.Content, "42") {
+				t.Fatalf("want 42, got %q (stop=%s)", resp.Content, resp.StopReason)
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("no Gemini chat models in the registry")
+	}
+}
+
+// TestLiveNew_GeminiTranscription transcribes a short synthetic WAV
+// (testdata/speech.wav, macOS `say`, 8 kHz mono) with the dedicated
+// transcription model.
+func TestLiveNew_GeminiTranscription(t *testing.T) {
+	key := envKey("GEMINI_API_KEY", "GEMINI_API_KEYS")
+	requireLiveAPI(t, key, "GEMINI_API_KEY not set")
+
+	audio, err := os.ReadFile("testdata/speech.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc, err := llm.NewModalityClient(llm.Config{
+		Provider: "gemini", Model: "gemini-3.5-transcribe", APIKey: key,
+		Timeout: 120 * time.Second, DisableRetries: true,
+	})
+	if err != nil {
+		t.Fatalf("NewModalityClient: %v", err)
+	}
+	defer mc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	text, err := mc.TranscribeAudio(ctx, llm.TranscriptionRequest{
+		Model: "gemini-3.5-transcribe", Audio: audio, MediaType: "audio/wav", Language: "en",
+	})
+	if err != nil {
+		t.Fatalf("TranscribeAudio: %v", err)
+	}
+	lower := strings.ToLower(text)
+	for _, w := range []string{"quick", "brown", "fox", "lazy", "dog"} {
+		if !strings.Contains(lower, w) {
+			t.Fatalf("transcript %q is missing %q", text, w)
+		}
+	}
+	t.Logf("transcript: %q", text)
 }
