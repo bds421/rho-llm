@@ -213,3 +213,48 @@ func TestThoughtSignatureFlags(t *testing.T) {
 		}
 	}
 }
+
+// The built-in tables agree with each other: every alias and every provider
+// default names a registered model or a retired one whose successor is
+// registered, no alias has the ID of a registered model, and every row is
+// filed under its own ID. RegisterModelAlias checks the like at run time;
+// this is the sweep over what ships.
+func TestBuiltInTablesResolveToRegisteredModels(t *testing.T) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	known := func(id string) bool {
+		for range len(retiredModels) + 1 {
+			if _, ok := modelRegistry[id]; ok {
+				return true
+			}
+			next, ok := retiredModels[id]
+			if !ok {
+				return false
+			}
+			id = next
+		}
+		return false
+	}
+	for alias, target := range modelAliases {
+		if !known(target) {
+			t.Errorf("alias %q names %q, which is neither registered nor retired with a registered successor", alias, target)
+		}
+		if _, ok := modelRegistry[alias]; ok {
+			t.Errorf("alias %q has the ID of a registered model", alias)
+		}
+	}
+	for provider, model := range defaultModels {
+		target := model
+		if full, ok := modelAliases[model]; ok {
+			target = full
+		}
+		if !known(target) {
+			t.Errorf("default of %q is %q, which is neither registered nor retired with a registered successor", provider, model)
+		}
+	}
+	for id, info := range modelRegistry {
+		if info.ID != id {
+			t.Errorf("row %q carries the ID %q", id, info.ID)
+		}
+	}
+}
