@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A cache marker on a tool result was dropped.** The Anthropic adapter wrote
+  `cache_control` on text, image and document parts but not on a
+  `ContentToolResult` part, without an error. A tool loop that marks its newest
+  message (a tool result from the second turn on) therefore cached only system
+  prompt and tools and paid for the growing conversation on every turn. The
+  marker now goes onto the `tool_result` block, with the same TTL rules.
+
 ## [0.20.0] - 2026-11-18
 
 ### Added

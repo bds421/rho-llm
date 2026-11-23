@@ -633,6 +633,15 @@ func (c *Client) buildRequest(req llm.Request, stream bool) (anthropicRequest, e
 				} else {
 					block["content"] = part.ToolResultContent
 				}
+				// A breakpoint on a tool result is how a tool loop caches its
+				// growing conversation: the newest message of each turn is one.
+				if part.CacheControl {
+					cc, err := cacheControl(part.CacheTTL)
+					if err != nil {
+						return anthropicRequest{}, err
+					}
+					block["cache_control"] = cc
+				}
 				apiMsg.Content = append(apiMsg.Content, block)
 			}
 		}

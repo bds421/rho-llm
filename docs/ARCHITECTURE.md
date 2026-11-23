@@ -1099,7 +1099,7 @@ Anthropic and Gemini offer context caching with fundamentally different models:
 | **Granularity** | Per content block, system block, or tool definition | All-or-nothing on a context prefix |
 
 **Anthropic (full support):**
-- `ContentPart.CacheControl = true` adds `cache_control: {type: "ephemeral"}` to that content block
+- `ContentPart.CacheControl = true` adds `cache_control: {type: "ephemeral"}` to that content block, a tool result included (the breakpoint a tool loop sets on its newest message)
 - `Request.SystemCacheControl = true` sends the system prompt as structured content blocks (array of `{type: "text", text: "...", cache_control: {type: "ephemeral"}}`) instead of a plain string. The `cache_control` is applied to the last block.
 - `Tool.CacheControl = true` adds `cache_control` to the tool definition JSON
 - `Response.CacheCreationTokens` / `CacheReadTokens` report cache usage from the `usage` object

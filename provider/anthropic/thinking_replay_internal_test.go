@@ -391,3 +391,43 @@ func TestInterleavedBetaOnlyWithBudgetThinking(t *testing.T) {
 		t.Errorf("user beta: anthropic-beta = %q", h)
 	}
 }
+
+// A tool loop caches its conversation by marking the newest message, which is
+// a tool result from the second turn on. The marker must reach the wire on
+// the tool_result block, plain or with parts.
+func TestCacheControlOnToolResultWire(t *testing.T) {
+	c := newTestClient()
+	req := llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.ContentPart{{Type: llm.ContentText, Text: "q"}}},
+		{Role: llm.RoleAssistant, Content: []llm.ContentPart{
+			{Type: llm.ContentToolUse, ToolUseID: "a", ToolName: "t"},
+			{Type: llm.ContentToolUse, ToolUseID: "b", ToolName: "t"},
+		}},
+		{Role: llm.RoleUser, Content: []llm.ContentPart{
+			{Type: llm.ContentToolResult, ToolResultID: "a", ToolResultContent: "plain", CacheControl: true, CacheTTL: llm.CacheTTL1h},
+			{Type: llm.ContentToolResult, ToolResultID: "b", CacheControl: true,
+				ToolResultParts: []llm.ContentPart{{Type: llm.ContentText, Text: "rich"}}},
+		}},
+	}}
+	apiReq, err := c.buildRequest(req, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(apiReq)
+	for _, want := range []string{
+		`{"cache_control":{"type":"ephemeral","ttl":"1h"},"content":"plain","is_error":false,"tool_use_id":"a","type":"tool_result"}`,
+		`{"cache_control":{"type":"ephemeral"},"content":[{"text":"rich","type":"text"}],"is_error":false,"tool_use_id":"b","type":"tool_result"}`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("body lacks %s\nbody: %s", want, body)
+		}
+	}
+	if strings.Count(string(body), `"cache_control"`) != 2 {
+		t.Errorf("want two markers, body: %s", body)
+	}
+
+	req.Messages[2].Content[0].CacheTTL = "2h"
+	if _, err := c.buildRequest(req, false); err == nil {
+		t.Error("bad TTL on a tool result accepted")
+	}
+}
