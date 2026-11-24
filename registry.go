@@ -452,7 +452,6 @@ var defaultModels = map[string]string{
 	"google":              "gemini-3.5-flash-lite",
 	"gemini-interactions": "gemini-3.5-flash-lite",
 	"openai":              "gpt-6.1-sol",
-	"gpt":                 "gpt-6.1-sol",
 	"meta":                "muse-spark-1.3",
 	"groq":                "openai/gpt-oss-120b",
 	"mistral":             "mistral-small-2603",

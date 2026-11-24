@@ -16,8 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the embeddings smoke now also covers `gemini-embedding-2`. All five
   untested image IDs were checked once by hand (2026-11-20, all return a PNG).
 
+- **Sweep over the built-in registry tables** (PR #7). Every alias and every
+  provider default must name a registered model (or a retired one with a
+  registered successor), no alias may carry a model's ID, and every row sits
+  under its own ID. The sweep now also checks that a default belongs to its own
+  provider family, so a default can no longer send a request to a host that
+  does not serve the model.
+
 ### Fixed
 
+- **`GetDefaultModel("gpt")` named an OpenAI model for a provider that does not
+  exist.** `gpt` is a model alias, not a provider preset (`NewClient` rejects
+  `Provider: "gpt"`), but `defaultModels` carried a `gpt` row from February.
+  The row is gone; `gpt` now falls back like any unknown name. The new
+  family check in the registry sweep found it. The `gpt` model alias is
+  unchanged.
 - **Content part order on OpenAI-compatible hosts and the Responses API.** A
   user message with images or PDFs went out as all its text first (joined into
   one part), then every image, then every document. A label before a file and

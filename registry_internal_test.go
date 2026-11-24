@@ -216,24 +216,29 @@ func TestThoughtSignatureFlags(t *testing.T) {
 
 // The built-in tables agree with each other: every alias and every provider
 // default names a registered model or a retired one whose successor is
-// registered, no alias has the ID of a registered model, and every row is
+// registered, each default belongs to its own provider family, no alias has the ID of a registered model, and every row is
 // filed under its own ID. RegisterModelAlias checks the like at run time;
 // this is the sweep over what ships.
 func TestBuiltInTablesResolveToRegisteredModels(t *testing.T) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
-	known := func(id string) bool {
+	// resolve follows retired IDs to the registered row they end at.
+	resolve := func(id string) (ModelInfo, bool) {
 		for range len(retiredModels) + 1 {
-			if _, ok := modelRegistry[id]; ok {
-				return true
+			if info, ok := modelRegistry[id]; ok {
+				return info, true
 			}
 			next, ok := retiredModels[id]
 			if !ok {
-				return false
+				return ModelInfo{}, false
 			}
 			id = next
 		}
-		return false
+		return ModelInfo{}, false
+	}
+	known := func(id string) bool {
+		_, ok := resolve(id)
+		return ok
 	}
 	for alias, target := range modelAliases {
 		if !known(target) {
@@ -248,8 +253,15 @@ func TestBuiltInTablesResolveToRegisteredModels(t *testing.T) {
 		if full, ok := modelAliases[model]; ok {
 			target = full
 		}
-		if !known(target) {
+		info, ok := resolve(target)
+		if !ok {
 			t.Errorf("default of %q is %q, which is neither registered nor retired with a registered successor", provider, model)
+			continue
+		}
+		// A default from another family would send the request to a host
+		// that does not serve the model.
+		if canonicalProvider(info.Provider) != canonicalProvider(provider) {
+			t.Errorf("default of %q is %q, a %q model", provider, model, info.Provider)
 		}
 	}
 	for id, info := range modelRegistry {
