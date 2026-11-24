@@ -1323,7 +1323,7 @@ if err != nil {
 | APIKey | string | "" | API key (empty OK for local providers) |
 | MaxTokens | int | 8192 | Max output tokens (zero is floored to the default; see the note below on Gemini thinking models) |
 | Temperature | *float64 | nil | Sampling temperature (nil = provider default, omitted from wire) |
-| ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingMinimal/Low/Medium/High/XHigh/Max. Providers without a level get their deepest one: `ThinkingMax` → OpenAI `xhigh`, Gemini `high` (`xhigh` on Gemini 4 Hydrogen). Gemini 3.8 Flash and Gemini 4 reject `minimal`, so `ThinkingMinimal` is sent as `low` there |
+| ThinkingLevel | ThinkingLevel | "" | Extended thinking: ThinkingMinimal/Low/Medium/High/XHigh/Max. Providers without a level get their deepest one: `ThinkingMax` → OpenAI `xhigh`, Gemini `high` (`xhigh` on Gemini 4 Hydrogen and Neon). Gemini 3.8 Flash and Gemini 4 reject `minimal`, so `ThinkingMinimal` is sent as `low` there |
 | Timeout | Duration | 120s | Non-stream request timeout; for streams, the header wait and max silent gap between bytes (see [Streaming and `Config.Timeout`](#streaming-and-configtimeout)) |
 | BaseURL | string | "" | Override provider endpoint |
 | ProxyURL | string | "" | Explicit reviewed HTTP(S) forward proxy; overrides ambient proxy variables |
@@ -1490,7 +1490,7 @@ they fail with the retired-model error and its replacement (see below).
 > that must be echoed in the corresponding `tool_result`. The adapter handles this
 > automatically; no changes to calling code are required.
 
-`gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.8-flash`,
+`gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-4-neon`, `gemini-3.8-flash`,
 `gemini-3.7-flash`, `gemini-3.6-flash` and `gemini-3.5-flash-lite` deliberately do not advertise
 the sampling-temperature capability: Google deprecates and ignores
 `temperature`, `top_p`, and `top_k` for these models and states that future

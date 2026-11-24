@@ -26,6 +26,8 @@ func TestThinkingLevelPerModel(t *testing.T) {
 		wantBudget bool
 	}{
 		{"gemini-4-hydrogen", llm.ThinkingXHigh, "xhigh", false},
+		{"gemini-4-neon", llm.ThinkingXHigh, "xhigh", false},
+		{"gemini-4-neon", llm.ThinkingMinimal, "low", false},
 		{"gemini-4-hydrogen", llm.ThinkingMax, "xhigh", false},
 		{"gemini-4-hydrogen", llm.ThinkingHigh, "high", false},
 		{"gemini-4-carbon", llm.ThinkingXHigh, "high", false},

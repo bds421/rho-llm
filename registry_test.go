@@ -585,6 +585,8 @@ func TestModelsAdded20261118(t *testing.T) {
 		{"gpt-6.2-astra", "openai", 128000, 8.00, 40.00, 0.40, 48.00},
 		{"gemini-4-carbon", "gemini", 32768, 2.00, 10.00, 0.10, 12.00},
 		{"gemini-4-hydrogen", "gemini", 65536, 1.50, 7.50, 0.075, 9.00},
+		// Added 2026-11-24 (blog.google + AI Studio pricing, GET /v1beta/models).
+		{"gemini-4-neon", "gemini", 65536, 3.00, 15.00, 0.15, 18.00},
 	}
 	for _, tc := range cases {
 		info, ok := llm.GetModelInfo(tc.model)
@@ -610,7 +612,7 @@ func TestModelsAdded20261118(t *testing.T) {
 	}
 	// Gemini 4 ignores sampling controls, like the other models since July 2026.
 	temp := 0.5
-	for _, id := range []string{"gemini-4-carbon", "gemini-4-hydrogen"} {
+	for _, id := range []string{"gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon"} {
 		cfg := llm.Config{Provider: "gemini", Model: id}
 		if err := llm.ValidateRequestCapabilities(cfg, llm.Request{Temperature: &temp}, false); err == nil {
 			t.Errorf("%s accepted Temperature; Gemini 4 ignores it", id)

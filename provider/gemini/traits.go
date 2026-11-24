@@ -18,7 +18,8 @@ type modelTraits struct {
 	// noMinimalThinking: thinkingLevel "minimal" is an error (3.8 Flash,
 	// which 3.7 Flash is routed to, and every Gemini 4 model).
 	noMinimalThinking bool
-	// xhighThinking: thinkingLevel "xhigh" exists (Gemini 4 Hydrogen).
+	// xhighThinking: thinkingLevel "xhigh" exists (Gemini 4 Hydrogen and
+	// Neon; blog.google "Introducing Gemini 4 Neon", 2026-11-18).
 	xhighThinking bool
 	// longDecode: a turn may continue past one request's output limit with
 	// finishReason CONTINUATION and a continuationToken (Gemini 4).
@@ -35,7 +36,7 @@ func traitsFor(model string) modelTraits {
 	gemini4 := strings.HasPrefix(id, "gemini-4-")
 	return modelTraits{
 		noMinimalThinking: gemini4 || id == "gemini-3.8-flash" || id == "gemini-3.7-flash",
-		xhighThinking:     id == "gemini-4-hydrogen",
+		xhighThinking:     id == "gemini-4-hydrogen" || id == "gemini-4-neon",
 		longDecode:        gemini4,
 		noExplicitCache:   gemini4,
 	}

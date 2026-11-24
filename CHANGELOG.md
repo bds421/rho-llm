@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gemini 4 Neon** (`gemini-4-neon`, GA 2026-11-18): $3 / $15 per 1M tokens,
+  cache read $0.15, 1M context, 65 536 output tokens per request (long decode
+  beyond). It takes `xhigh` thinking like Hydrogen, refuses `minimal` (sent as
+  `low`), takes no sampling controls and no explicit cache, like every
+  Gemini 4 model. Found by comparing `GET /v1beta/models` with the registry
+  (every other registered Gemini ID is still listed).
 - **Live coverage for every Gemini model.** `TestLiveNew_GeminiChatModelsAnswer`
   sends one prompt to each Gemini chat model in the registry (15 today), so a
   retired ID fails here first. `TestLiveNew_GeminiTranscription` transcribes a

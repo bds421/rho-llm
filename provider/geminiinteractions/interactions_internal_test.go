@@ -257,6 +257,7 @@ func TestThinkingLevelsAndToolChoice(t *testing.T) {
 		{"gemini-3.5-flash", llm.ThinkingMinimal, "minimal"},
 		{"gemini-3.8-flash", llm.ThinkingXHigh, "high"},
 		{"gemini-4-hydrogen", llm.ThinkingXHigh, "xhigh"},
+		{"gemini-4-neon", llm.ThinkingXHigh, "xhigh"},
 		{"gemini-4-hydrogen", llm.ThinkingMax, "xhigh"},
 		{"gemini-3.8-flash", llm.ThinkingMedium, "medium"},
 	}

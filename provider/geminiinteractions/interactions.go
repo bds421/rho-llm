@@ -860,7 +860,7 @@ func (c *Client) parseStream(body io.Reader, requestModel string, yield func(llm
 // 2026-11-18; "minimal" and "xhigh" both re-confirmed live on 3.8 Flash).
 type modelTraits struct {
 	noMinimalThinking bool // thinking_level "minimal" is a 400 (3.8/3.7 Flash, Gemini 4)
-	xhighThinking     bool // thinking_level "xhigh" exists (Gemini 4 Hydrogen)
+	xhighThinking     bool // thinking_level "xhigh" exists (Gemini 4 Hydrogen, Neon)
 	longDecode        bool // Gemini 4: a turn may exceed one request's output limit
 }
 
@@ -869,7 +869,7 @@ func traitsFor(model string) modelTraits {
 	gemini4 := strings.HasPrefix(id, "gemini-4-")
 	return modelTraits{
 		noMinimalThinking: gemini4 || id == "gemini-3.8-flash" || id == "gemini-3.7-flash",
-		xhighThinking:     id == "gemini-4-hydrogen",
+		xhighThinking:     id == "gemini-4-hydrogen" || id == "gemini-4-neon",
 		longDecode:        gemini4,
 	}
 }

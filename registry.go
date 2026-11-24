@@ -173,6 +173,7 @@ var modelRegistry = map[string]ModelInfo{
 	// page "last updated 2026-10-07"): set only where the page lists the audio rate
 	// (an explicit "(audio)" price, or one price for all input modalities).
 	"gemini-4-carbon":                    {ID: "gemini-4-carbon", Provider: "gemini", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 4 Carbon"},
+	"gemini-4-neon":                      {ID: "gemini-4-neon", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 3.00, OutputPricePer1M: 15.00, CacheReadPricePer1M: 0.15, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 4 Neon"},
 	"gemini-4-hydrogen":                  {ID: "gemini-4-hydrogen", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 1.50, OutputPricePer1M: 7.50, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 4 Hydrogen"},
 	"gemini-4-argon":                     {ID: "gemini-4-argon", Provider: "gemini", MaxTokens: 32768, ContextWindow: 1048576, InputPricePer1M: 2.00, OutputPricePer1M: 10.00, CacheReadPricePer1M: 0.10, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 4 Argon"},
 	"gemini-3.8-flash":                   {ID: "gemini-3.8-flash", Provider: "gemini", MaxTokens: 65536, ContextWindow: 1048576, InputPricePer1M: 0.75, OutputPricePer1M: 3.75, CacheReadPricePer1M: 0.075, SupportsThinking: true, ThoughtSignature: true, Label: "Gemini 3.8 Flash"},
